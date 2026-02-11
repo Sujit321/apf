@@ -1,13 +1,19 @@
 // ===== APF Resource Person Dashboard — App Logic =====
 
-// ===== Data Layer (localStorage) =====
+// ===== Data Layer (In-Memory Only — No Browser Storage) =====
 const DB = {
+    _store: {},
     get(key) {
-        try { return JSON.parse(localStorage.getItem(`apf_${key}`)) || []; }
+        const data = this._store[key];
+        if (!data) return [];
+        try { return JSON.parse(JSON.stringify(data)); }
         catch { return []; }
     },
     set(key, data) {
-        localStorage.setItem(`apf_${key}`, JSON.stringify(data));
+        this._store[key] = JSON.parse(JSON.stringify(data));
+    },
+    clear() {
+        this._store = {};
     },
     generateId() {
         return Date.now().toString(36) + (Math.random().toString(36) + '00000').substring(2, 7);
@@ -50,6 +56,571 @@ const PasswordManager = {
         localStorage.setItem(this.LOCK_TIME_KEY, String(mins));
     }
 };
+
+// ===== Encrypted File Storage (AES-256-GCM) =====
+const CryptoEngine = {
+    SALT_LENGTH: 16,
+    IV_LENGTH: 12,
+    ITERATIONS: 100000,
+    FILE_MAGIC: 'APF_ENC_V1',
+
+    async deriveKey(password, salt) {
+        const encoder = new TextEncoder();
+        const keyMaterial = await crypto.subtle.importKey(
+            'raw', encoder.encode(password), 'PBKDF2', false, ['deriveKey']
+        );
+        return crypto.subtle.deriveKey(
+            { name: 'PBKDF2', salt, iterations: this.ITERATIONS, hash: 'SHA-256' },
+            keyMaterial,
+            { name: 'AES-GCM', length: 256 },
+            false,
+            ['encrypt', 'decrypt']
+        );
+    },
+
+    async encrypt(password, data) {
+        const encoder = new TextEncoder();
+        const salt = crypto.getRandomValues(new Uint8Array(this.SALT_LENGTH));
+        const iv = crypto.getRandomValues(new Uint8Array(this.IV_LENGTH));
+        const key = await this.deriveKey(password, salt);
+        const plaintext = encoder.encode(JSON.stringify(data));
+        const ciphertext = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, plaintext);
+
+        // Format: MAGIC | salt | iv | ciphertext
+        const magic = encoder.encode(this.FILE_MAGIC);
+        const result = new Uint8Array(magic.length + salt.length + iv.length + ciphertext.byteLength);
+        result.set(magic, 0);
+        result.set(salt, magic.length);
+        result.set(iv, magic.length + salt.length);
+        result.set(new Uint8Array(ciphertext), magic.length + salt.length + iv.length);
+        return result;
+    },
+
+    async decrypt(password, buffer) {
+        const decoder = new TextDecoder();
+        const data = new Uint8Array(buffer);
+        const magicLen = this.FILE_MAGIC.length;
+
+        // Verify magic header
+        const magic = decoder.decode(data.slice(0, magicLen));
+        if (magic !== this.FILE_MAGIC) throw new Error('Not a valid APF encrypted file');
+
+        const salt = data.slice(magicLen, magicLen + this.SALT_LENGTH);
+        const iv = data.slice(magicLen + this.SALT_LENGTH, magicLen + this.SALT_LENGTH + this.IV_LENGTH);
+        const ciphertext = data.slice(magicLen + this.SALT_LENGTH + this.IV_LENGTH);
+
+        const key = await this.deriveKey(password, salt);
+        const plaintext = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, ciphertext);
+        return JSON.parse(decoder.decode(plaintext));
+    }
+};
+
+// ===== Encrypted Cache (stores AES-256 encrypted blob in browser) =====
+const EncryptedCache = {
+    CACHE_KEY: 'apf_encrypted_cache',
+    SAVE_TIME_KEY: 'apf_last_enc_save',
+
+    exists() {
+        return !!localStorage.getItem(this.CACHE_KEY);
+    },
+
+    async save(password) {
+        try {
+            const allData = { _meta: { app: 'APF Dashboard', version: 2, cachedAt: new Date().toISOString() } };
+            ENCRYPTED_DATA_KEYS.forEach(k => { allData[k] = DB.get(k); });
+            const encrypted = await CryptoEngine.encrypt(password, allData);
+            // Store as base64 string
+            const binary = String.fromCharCode(...encrypted);
+            localStorage.setItem(this.CACHE_KEY, btoa(binary));
+            const now = new Date().toISOString();
+            localStorage.setItem(this.SAVE_TIME_KEY, now);
+            lastEncSaveTime = now;
+            return true;
+        } catch (err) {
+            console.error('Cache save failed:', err);
+            return false;
+        }
+    },
+
+    async load(password) {
+        const b64 = localStorage.getItem(this.CACHE_KEY);
+        if (!b64) throw new Error('No cached data');
+        const binary = atob(b64);
+        const buffer = new Uint8Array(binary.length);
+        for (let i = 0; i < binary.length; i++) buffer[i] = binary.charCodeAt(i);
+        return CryptoEngine.decrypt(password, buffer.buffer);
+    },
+
+    clear() {
+        localStorage.removeItem(this.CACHE_KEY);
+        localStorage.removeItem(this.SAVE_TIME_KEY);
+    },
+
+    getLastSaveTime() {
+        return localStorage.getItem(this.SAVE_TIME_KEY);
+    }
+};
+
+// ===== File System Access API — Direct File Read/Write =====
+const FileLink = {
+    _handle: null,      // FileSystemFileHandle
+    _dbName: 'apf_filehandle_db',
+    _storeName: 'handles',
+
+    // Check if File System Access API is available
+    isSupported() {
+        return 'showSaveFilePicker' in window && 'showOpenFilePicker' in window;
+    },
+
+    // Open IndexedDB to persist the file handle across sessions
+    _openDB() {
+        return new Promise((resolve, reject) => {
+            const req = indexedDB.open(this._dbName, 1);
+            req.onupgradeneeded = () => req.result.createObjectStore(this._storeName);
+            req.onsuccess = () => resolve(req.result);
+            req.onerror = () => reject(req.error);
+        });
+    },
+
+    // Save handle to IndexedDB
+    async _persistHandle(handle) {
+        const db = await this._openDB();
+        return new Promise((resolve, reject) => {
+            const tx = db.transaction(this._storeName, 'readwrite');
+            tx.objectStore(this._storeName).put(handle, 'fileHandle');
+            tx.oncomplete = () => resolve();
+            tx.onerror = () => reject(tx.error);
+        });
+    },
+
+    // Load handle from IndexedDB
+    async _loadPersistedHandle() {
+        try {
+            const db = await this._openDB();
+            return new Promise((resolve, reject) => {
+                const tx = db.transaction(this._storeName, 'readonly');
+                const req = tx.objectStore(this._storeName).get('fileHandle');
+                req.onsuccess = () => resolve(req.result || null);
+                req.onerror = () => reject(req.error);
+            });
+        } catch { return null; }
+    },
+
+    // Clear persisted handle
+    async _clearPersistedHandle() {
+        try {
+            const db = await this._openDB();
+            return new Promise((resolve) => {
+                const tx = db.transaction(this._storeName, 'readwrite');
+                tx.objectStore(this._storeName).delete('fileHandle');
+                tx.oncomplete = () => resolve();
+                tx.onerror = () => resolve();
+            });
+        } catch {}
+    },
+
+    // Check if we have an active linked file
+    isLinked() {
+        return !!this._handle;
+    },
+
+    // Get linked file name
+    getFileName() {
+        return this._handle ? this._handle.name : null;
+    },
+
+    // Link a new file (create or pick existing)
+    async linkNewFile() {
+        if (!this.isSupported()) return false;
+        try {
+            const handle = await window.showSaveFilePicker({
+                suggestedName: `APF_Data_${new Date().toISOString().split('T')[0]}.apf`,
+                types: [{ description: 'APF Encrypted Data', accept: { 'application/octet-stream': ['.apf'] } }]
+            });
+            this._handle = handle;
+            await this._persistHandle(handle);
+            return true;
+        } catch (err) {
+            if (err.name !== 'AbortError') console.error('Link new file failed:', err);
+            return false;
+        }
+    },
+
+    // Link an existing file
+    async linkExistingFile() {
+        if (!this.isSupported()) return null;
+        try {
+            const [handle] = await window.showOpenFilePicker({
+                types: [{ description: 'APF Encrypted Data', accept: { 'application/octet-stream': ['.apf'] } }]
+            });
+            this._handle = handle;
+            await this._persistHandle(handle);
+            return handle;
+        } catch (err) {
+            if (err.name !== 'AbortError') console.error('Link existing file failed:', err);
+            return null;
+        }
+    },
+
+    // Unlink file
+    async unlink() {
+        this._handle = null;
+        await this._clearPersistedHandle();
+    },
+
+    // Verify permission (may prompt user)
+    async verifyPermission(readWrite = true) {
+        if (!this._handle) return false;
+        const mode = readWrite ? 'readwrite' : 'read';
+        if ((await this._handle.queryPermission({ mode })) === 'granted') return true;
+        if ((await this._handle.requestPermission({ mode })) === 'granted') return true;
+        return false;
+    },
+
+    // Write encrypted data directly to the linked file
+    async writeToFile(password) {
+        if (!this._handle) return false;
+        try {
+            if (!(await this.verifyPermission(true))) return false;
+            const allData = { _meta: { app: 'APF Dashboard', version: 2, savedAt: new Date().toISOString() } };
+            ENCRYPTED_DATA_KEYS.forEach(k => { allData[k] = DB.get(k); });
+            const encrypted = await CryptoEngine.encrypt(password, allData);
+            const writable = await this._handle.createWritable();
+            await writable.write(encrypted);
+            await writable.close();
+            const now = new Date().toISOString();
+            localStorage.setItem(EncryptedCache.SAVE_TIME_KEY, now);
+            lastEncSaveTime = now;
+            return true;
+        } catch (err) {
+            console.error('File write failed:', err);
+            return false;
+        }
+    },
+
+    // Read and decrypt data from the linked file
+    async readFromFile(password) {
+        if (!this._handle) return null;
+        try {
+            if (!(await this.verifyPermission(false))) return null;
+            const file = await this._handle.getFile();
+            const buffer = await file.arrayBuffer();
+            return await CryptoEngine.decrypt(password, buffer);
+        } catch (err) {
+            console.error('File read failed:', err);
+            return null;
+        }
+    },
+
+    // Try to restore the persisted handle from a previous session
+    async restoreHandle() {
+        const handle = await this._loadPersistedHandle();
+        if (handle) { this._handle = handle; return true; }
+        return false;
+    }
+};
+
+// Session password (kept in memory for auto-cache)
+let _sessionPassword = null;
+
+// Session persistence across page refresh (sessionStorage — cleared on tab close)
+const SessionPersist = {
+    _KEY: 'apf_session_token',
+    save(password) {
+        try { sessionStorage.setItem(this._KEY, btoa(password)); } catch {}
+    },
+    restore() {
+        try {
+            const t = sessionStorage.getItem(this._KEY);
+            return t ? atob(t) : null;
+        } catch { return null; }
+    },
+    clear() {
+        try { sessionStorage.removeItem(this._KEY); } catch {}
+    }
+};
+
+// Unsaved changes tracking
+let hasUnsavedChanges = false;
+let lastEncSaveTime = null;
+const ENCRYPTED_DATA_KEYS = ['visits', 'trainings', 'observations', 'resources', 'notes', 'ideas', 'reflections', 'contacts', 'plannerTasks', 'goalTargets', 'followupStatus'];
+
+function markUnsavedChanges() {
+    hasUnsavedChanges = true;
+    const badge = document.getElementById('encUnsavedBadge');
+    if (badge) badge.style.display = '';
+    // Auto-save debounced
+    scheduleAutoSave();
+}
+
+function clearUnsavedChanges() {
+    hasUnsavedChanges = false;
+    const badge = document.getElementById('encUnsavedBadge');
+    if (badge) badge.style.display = 'none';
+}
+
+// Debounced auto-save: writes to linked file + browser cache after 2s of inactivity
+let _autoSaveTimer = null;
+let _autoSaveBusy = false;
+
+async function performAutoSave() {
+    if (!_sessionPassword || _autoSaveBusy) return;
+    _autoSaveBusy = true;
+    try {
+        // 1. Write directly to linked .apf file (if linked)
+        if (FileLink.isLinked()) {
+            await FileLink.writeToFile(_sessionPassword);
+        }
+        // 2. Also save to browser cache as fallback
+        await EncryptedCache.save(_sessionPassword);
+        clearUnsavedChanges();
+        updateEncryptedFileStatus();
+    } catch (err) {
+        console.error('Auto-save failed:', err);
+    }
+    _autoSaveBusy = false;
+}
+
+function scheduleAutoSave() {
+    if (!_sessionPassword) return;
+    if (_autoSaveTimer) clearTimeout(_autoSaveTimer);
+    _autoSaveTimer = setTimeout(performAutoSave, 2000);
+}
+
+// Periodic auto-save every 30 seconds (safety net)
+let _periodicSaveInterval = null;
+function startPeriodicSave() {
+    if (_periodicSaveInterval) clearInterval(_periodicSaveInterval);
+    _periodicSaveInterval = setInterval(() => {
+        if (hasUnsavedChanges && _sessionPassword) {
+            performAutoSave();
+        }
+    }, 30000);
+}
+function stopPeriodicSave() {
+    if (_periodicSaveInterval) { clearInterval(_periodicSaveInterval); _periodicSaveInterval = null; }
+}
+
+// Wrap DB.set to track changes
+const _originalDBSet = DB.set.bind(DB);
+DB.set = function(key, data) {
+    _originalDBSet(key, data);
+    if (ENCRYPTED_DATA_KEYS.includes(key)) {
+        markUnsavedChanges();
+    }
+};
+
+async function getEncryptionPassword() {
+    // Use session password if available
+    if (_sessionPassword) return _sessionPassword;
+    return new Promise((resolve) => {
+        const pwd = prompt('Enter your password to encrypt/decrypt the file:');
+        resolve(pwd);
+    });
+}
+
+async function saveEncryptedFile() {
+    if (!PasswordManager.isPasswordSet()) {
+        showToast('Please set a password first (below) to encrypt files', 'error');
+        return;
+    }
+
+    const pwd = await getEncryptionPassword();
+    if (!pwd) return;
+
+    // Verify password
+    const hash = await PasswordManager.hashPassword(pwd);
+    if (hash !== PasswordManager.getStoredHash()) {
+        showToast('Incorrect password', 'error');
+        return;
+    }
+
+    try {
+        showToast('Encrypting data...', 'info');
+        const allData = { _meta: { app: 'APF Dashboard', version: 2, exportedAt: new Date().toISOString() } };
+        ENCRYPTED_DATA_KEYS.forEach(k => { allData[k] = DB.get(k); });
+
+        // If linked file exists, write there too
+        if (FileLink.isLinked()) {
+            await FileLink.writeToFile(pwd);
+        }
+
+        // Download a copy
+        const encrypted = await CryptoEngine.encrypt(pwd, allData);
+        const blob = new Blob([encrypted], { type: 'application/octet-stream' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        const d = new Date();
+        a.href = url;
+        a.download = `APF_Data_${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}.apf`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+
+        lastEncSaveTime = new Date().toISOString();
+        await EncryptedCache.save(pwd);
+        clearUnsavedChanges();
+        updateEncryptedFileStatus();
+        showToast('Encrypted file saved! 🔐');
+    } catch (err) {
+        console.error('Encryption failed:', err);
+        showToast('Encryption failed: ' + err.message, 'error');
+    }
+}
+
+async function loadEncryptedFile(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+
+    if (!file.name.endsWith('.apf')) {
+        showToast('Please select an .apf encrypted file', 'error');
+        event.target.value = '';
+        return;
+    }
+
+    if (!confirm('⚠️ LOAD ENCRYPTED FILE\n\nThis will REPLACE all current data with the data from the encrypted file.\n\nContinue?')) {
+        event.target.value = '';
+        return;
+    }
+
+    const pwd = await getEncryptionPassword();
+    if (!pwd) { event.target.value = ''; return; }
+
+    try {
+        showToast('Decrypting file...', 'info');
+        const buffer = await file.arrayBuffer();
+        const data = await CryptoEngine.decrypt(pwd, buffer);
+
+        if (!data._meta || data._meta.app !== 'APF Dashboard') {
+            showToast('Invalid file — not an APF Dashboard backup', 'error');
+            event.target.value = '';
+            return;
+        }
+
+        // Load all data into in-memory store
+        DB.clear();
+        ENCRYPTED_DATA_KEYS.forEach(k => {
+            if (data[k] !== undefined && Array.isArray(data[k])) {
+                _originalDBSet(k, data[k]);
+            }
+        });
+
+        // Also set the password from the file's password
+        if (!PasswordManager.isPasswordSet()) {
+            const hash = await PasswordManager.hashPassword(pwd);
+            PasswordManager.setHash(hash);
+        }
+
+        lastEncSaveTime = new Date().toISOString();
+        // Sync to linked file + browser cache
+        if (FileLink.isLinked()) await FileLink.writeToFile(pwd);
+        await EncryptedCache.save(pwd);
+        clearUnsavedChanges();
+        updateEncryptedFileStatus();
+        showToast('Data restored from encrypted file! 🔓', 'success');
+        setTimeout(() => navigateTo('dashboard'), 500);
+    } catch (err) {
+        console.error('Decryption failed:', err);
+        if (err.message.includes('Not a valid')) {
+            showToast('Not a valid APF encrypted file', 'error');
+        } else {
+            showToast('Decryption failed — wrong password or corrupted file', 'error');
+        }
+    }
+    event.target.value = '';
+}
+
+function updateEncryptedFileStatus() {
+    const el = document.getElementById('encryptedFileStatus');
+    if (!el) return;
+
+    const lastSave = lastEncSaveTime || EncryptedCache.getLastSaveTime();
+    const hasPwd = PasswordManager.isPasswordSet();
+    const linked = FileLink.isLinked();
+    const fname = FileLink.getFileName();
+
+    if (!hasPwd) {
+        el.innerHTML = '<div class="enc-status-row warning"><i class="fas fa-exclamation-triangle"></i> Set a password first to enable encrypted storage</div>';
+    } else {
+        let html = '';
+        // File link status
+        if (linked) {
+            html += `<div class="enc-status-row linked">
+                <i class="fas fa-link"></i>
+                <span>Linked to <strong>${escapeHtml(fname)}</strong> — auto-reading &amp; writing</span>
+                <button class="btn btn-outline" onclick="unlinkFile()" style="padding:5px 12px;font-size:11px;border-radius:8px;"><i class="fas fa-unlink"></i> Unlink</button>
+            </div>`;
+        } else if (FileLink.isSupported()) {
+            html += `<div class="enc-status-row unlinked">
+                <i class="fas fa-unlink"></i>
+                <span>No file linked — link one for auto read/write</span>
+                <button class="btn btn-outline" onclick="linkFile()" style="padding:5px 12px;font-size:11px;border-radius:8px;"><i class="fas fa-link"></i> Link File</button>
+            </div>`;
+        }
+        // Last save time
+        if (lastSave) {
+            const d = new Date(lastSave);
+            const timeStr = d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+            html += `<div class="enc-status-row saved"><i class="fas fa-check-circle"></i> Last auto-saved: ${escapeHtml(timeStr)}${hasUnsavedChanges ? ' <span class="unsaved-badge">Saving...</span>' : ''}</div>`;
+        } else {
+            html += '<div class="enc-status-row no-save"><i class="fas fa-info-circle"></i> No data saved yet — make changes and they\'ll auto-save</div>';
+        }
+        el.innerHTML = html;
+    }
+}
+
+// Link / Unlink file actions
+async function linkFile() {
+    if (!PasswordManager.isPasswordSet()) {
+        showToast('Set a password first', 'error');
+        return;
+    }
+    const choice = confirm('Do you want to:\n\nOK = Create a NEW .apf file\nCancel = Open an EXISTING .apf file');
+    let success = false;
+    if (choice) {
+        success = await FileLink.linkNewFile();
+        if (success && _sessionPassword) {
+            await FileLink.writeToFile(_sessionPassword);
+            showToast(`File created & linked: ${FileLink.getFileName()} 📂`);
+        }
+    } else {
+        const handle = await FileLink.linkExistingFile();
+        if (handle) {
+            success = true;
+            // Read data from the linked file
+            try {
+                const data = await FileLink.readFromFile(_sessionPassword);
+                if (data && data._meta && data._meta.app === 'APF Dashboard') {
+                    if (confirm('Load data from this file? (This will replace current data)')) {
+                        DB.clear();
+                        ENCRYPTED_DATA_KEYS.forEach(k => {
+                            if (data[k] !== undefined && Array.isArray(data[k])) {
+                                _originalDBSet(k, data[k]);
+                            }
+                        });
+                        lastEncSaveTime = new Date().toISOString();
+                        clearUnsavedChanges();
+                        navigateTo('dashboard');
+                    }
+                }
+                showToast(`File linked: ${FileLink.getFileName()} 📂`);
+            } catch {
+                showToast('File linked but could not read — wrong password?', 'error');
+            }
+        }
+    }
+    if (success) {
+        updateEncryptedFileStatus();
+        startPeriodicSave();
+    }
+}
+
+async function unlinkFile() {
+    await FileLink.unlink();
+    updateEncryptedFileStatus();
+    showToast('File unlinked. Auto-save still goes to browser cache.', 'info');
+}
 
 let autoLockTimer = null;
 let isAppUnlocked = false;
@@ -133,14 +704,80 @@ async function handlePasswordSubmit(e) {
         }
         const hash = await PasswordManager.hashPassword(password);
         PasswordManager.setHash(hash);
+        _sessionPassword = password;
+        SessionPersist.save(password);
         hideLockScreen();
         showToast('Password set! Your dashboard is now protected 🔒');
-        initApp();
+        showWelcomeScreen();
     } else {
         const hash = await PasswordManager.hashPassword(password);
         if (hash === PasswordManager.getStoredHash()) {
+            _sessionPassword = password;
+            SessionPersist.save(password);
             hideLockScreen();
-            initApp();
+            // If app already running (just locked), go back directly
+            if (appInitialized) {
+                isAppUnlocked = true;
+                initApp();
+                startPeriodicSave();
+            } else {
+                // Try: 1) Linked file → 2) Browser cache → 3) Welcome screen
+                let loaded = false;
+
+                // Try linked .apf file first
+                if (FileLink.isLinked()) {
+                    try {
+                        const data = await FileLink.readFromFile(password);
+                        if (data && data._meta && data._meta.app === 'APF Dashboard') {
+                            DB.clear();
+                            ENCRYPTED_DATA_KEYS.forEach(k => {
+                                if (data[k] !== undefined && Array.isArray(data[k])) {
+                                    _originalDBSet(k, data[k]);
+                                }
+                            });
+                            lastEncSaveTime = EncryptedCache.getLastSaveTime();
+                            clearUnsavedChanges();
+                            isAppUnlocked = true;
+                            initApp();
+                            startPeriodicSave();
+                            const fname = FileLink.getFileName();
+                            showToast(`Data loaded from ${fname || 'linked file'} 📂`, 'success');
+                            loaded = true;
+                        }
+                    } catch (err) {
+                        console.error('Linked file read failed:', err);
+                    }
+                }
+
+                // Try browser cache
+                if (!loaded && EncryptedCache.exists()) {
+                    try {
+                        const data = await EncryptedCache.load(password);
+                        if (data._meta && data._meta.app === 'APF Dashboard') {
+                            DB.clear();
+                            ENCRYPTED_DATA_KEYS.forEach(k => {
+                                if (data[k] !== undefined && Array.isArray(data[k])) {
+                                    _originalDBSet(k, data[k]);
+                                }
+                            });
+                            lastEncSaveTime = EncryptedCache.getLastSaveTime();
+                            clearUnsavedChanges();
+                            isAppUnlocked = true;
+                            initApp();
+                            startPeriodicSave();
+                            showToast('Welcome back! Data loaded automatically 🔓', 'success');
+                            loaded = true;
+                        }
+                    } catch (err) {
+                        console.error('Cache load failed:', err);
+                        EncryptedCache.clear();
+                    }
+                }
+
+                if (!loaded) {
+                    showWelcomeScreen();
+                }
+            }
         } else {
             errorEl.textContent = 'Incorrect password';
             shakeContainer();
@@ -159,6 +796,7 @@ function shakeContainer() {
 
 function lockApp() {
     isAppUnlocked = false;
+    SessionPersist.clear();
     if (autoLockTimer) clearTimeout(autoLockTimer);
     showLockScreen('unlock');
 }
@@ -206,12 +844,19 @@ function resetPasswordPrompt() {
         if (emergencyEl) emergencyEl.style.display = 'none';
         return;
     }
-    const keys = ['visits', 'trainings', 'observations', 'resources', 'notes', 'ideas', 'reflections', 'contacts', 'plannerTasks', 'goalTargets', 'followupStatus'];
-    keys.forEach(k => localStorage.removeItem(`apf_${k}`));
+    DB.clear();
+    lastEncSaveTime = null;
+    _sessionPassword = null;
+    clearUnsavedChanges();
+    stopPeriodicSave();
+    SessionPersist.clear();
+    EncryptedCache.clear();
+    FileLink.unlink();
     PasswordManager.removeHash();
     hideLockScreen();
+    appInitialized = false;
     showToast('All data cleared. Password removed.', 'info');
-    initApp();
+    showWelcomeScreen();
 }
 
 // Password management from settings
@@ -239,6 +884,7 @@ async function removePassword() {
         return;
     }
     PasswordManager.removeHash();
+    SessionPersist.clear();
     if (autoLockTimer) clearTimeout(autoLockTimer);
     updatePasswordUI();
     updateSidebarLockBtn();
@@ -3062,32 +3708,47 @@ function renderContacts() {
     }).join('')}</div>`;
 }
 
-// ===== BACKUP & RESTORE =====
+// ===== DATA & SECURITY =====
 function renderBackupInfo() {
-    const keys = ['visits', 'trainings', 'observations', 'resources', 'notes', 'ideas', 'reflections', 'contacts', 'plannerTasks', 'goalTargets', 'followupStatus'];
-    const counts = {};
-    let totalItems = 0;
-    keys.forEach(k => {
-        const data = DB.get(k);
-        counts[k] = data.length;
-        totalItems += data.length;
-    });
+    // Data summary in encrypted file card
+    const summaryEl = document.getElementById('encDataSummary');
+    if (summaryEl) {
+        const meta = [
+            { key: 'visits', label: 'Visits', icon: 'fa-school', color: '#8b5cf6' },
+            { key: 'trainings', label: 'Trainings', icon: 'fa-chalkboard-teacher', color: '#3b82f6' },
+            { key: 'observations', label: 'Observations', icon: 'fa-eye', color: '#10b981' },
+            { key: 'resources', label: 'Resources', icon: 'fa-book', color: '#f59e0b' },
+            { key: 'notes', label: 'Notes', icon: 'fa-sticky-note', color: '#ec4899' },
+            { key: 'ideas', label: 'Ideas', icon: 'fa-lightbulb', color: '#f97316' },
+            { key: 'reflections', label: 'Reflections', icon: 'fa-journal-whills', color: '#06b6d4' },
+            { key: 'contacts', label: 'Contacts', icon: 'fa-address-book', color: '#6366f1' },
+            { key: 'plannerTasks', label: 'Tasks', icon: 'fa-tasks', color: '#14b8a6' },
+            { key: 'goalTargets', label: 'Goals', icon: 'fa-bullseye', color: '#ef4444' },
+            { key: 'followupStatus', label: 'Follow-ups', icon: 'fa-clipboard-check', color: '#84cc16' }
+        ];
+        let total = 0;
+        const pills = meta.map(m => {
+            const count = DB.get(m.key).length;
+            total += count;
+            return `<div class="enc-data-pill" style="--pill-color:${m.color}">
+                <i class="fas ${m.icon}"></i>
+                <span class="enc-pill-count">${count}</span>
+                <span class="enc-pill-label">${m.label}</span>
+            </div>`;
+        }).join('');
 
-    const infoEl = document.getElementById('backupInfo');
-    if (!infoEl) return;
-    infoEl.innerHTML = `
-        <div><span>Total data items:</span><span>${totalItems}</span></div>
-        <div><span>Visits:</span><span>${counts.visits}</span></div>
-        <div><span>Trainings:</span><span>${counts.trainings}</span></div>
-        <div><span>Observations:</span><span>${counts.observations}</span></div>
-        <div><span>Resources:</span><span>${counts.resources}</span></div>
-        <div><span>Notes:</span><span>${counts.notes}</span></div>
-        <div><span>Ideas:</span><span>${counts.ideas}</span></div>
-        <div><span>Reflections:</span><span>${counts.reflections}</span></div>
-        <div><span>Contacts:</span><span>${counts.contacts}</span></div>
-    `;
+        summaryEl.innerHTML = `
+            <div class="enc-summary-header">
+                <i class="fas fa-database"></i>
+                <span>Data in Memory</span>
+                <span class="enc-total-badge">${total} items</span>
+            </div>
+            <div class="enc-data-grid">${pills}</div>
+        `;
+    }
 
     updatePasswordUI();
+    updateEncryptedFileStatus();
 }
 
 function downloadBackup() {
@@ -3163,8 +3824,13 @@ function resetAllData() {
         return;
     }
 
-    const keys = ['visits', 'trainings', 'observations', 'resources', 'notes', 'ideas', 'reflections', 'contacts', 'plannerTasks', 'goalTargets', 'followupStatus'];
-    keys.forEach(k => localStorage.removeItem(`apf_${k}`));
+    DB.clear();
+    lastEncSaveTime = null;
+    clearUnsavedChanges();
+    stopPeriodicSave();
+    SessionPersist.clear();
+    EncryptedCache.clear();
+    FileLink.unlink();
     showToast('All data has been reset', 'info');
     setTimeout(() => {
         renderBackupInfo();
@@ -3271,9 +3937,7 @@ function exportAllDataToExcel() {
 
 // ===== SAMPLE DATA =====
 function loadSampleData() {
-    if (localStorage.getItem('apf_initialized')) return; // Already initialized, never reload samples
-    if (DB.get('visits').length > 0 || DB.get('trainings').length > 0) return;
-    localStorage.setItem('apf_initialized', '1');
+    // Load sample data into in-memory store (no localStorage)
 
     const sampleVisits = [
         { id: DB.generateId(), school: 'Govt. Primary School, Anekal', block: 'Anekal Block', date: '2026-02-12', status: 'planned', purpose: 'Classroom Observation', notes: '', followUp: 'Share fraction activity cards with maths teacher', createdAt: new Date().toISOString() },
@@ -3388,9 +4052,6 @@ function initApp() {
     // Set current month
     document.getElementById('reportMonthFilter').value = new Date().getMonth();
 
-    // Load sample data for first-time users
-    loadSampleData();
-
     // Init goal tracker month selector
     initGoalMonthSelector();
 
@@ -3408,11 +4069,174 @@ function initApp() {
     renderDashboard();
 }
 
-document.addEventListener('DOMContentLoaded', () => {
-    if (PasswordManager.isPasswordSet()) {
-        showLockScreen('unlock');
-    } else {
+// ===== Welcome Screen (File-Only Storage) =====
+function showWelcomeScreen() {
+    const ws = document.getElementById('welcomeScreen');
+    if (ws) ws.style.display = 'flex';
+}
+
+function hideWelcomeScreen() {
+    const ws = document.getElementById('welcomeScreen');
+    if (ws) ws.style.display = 'none';
+}
+
+async function welcomeLoadFile(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+
+    if (!file.name.endsWith('.apf')) {
+        showToast('Please select an .apf encrypted file', 'error');
+        event.target.value = '';
+        return;
+    }
+
+    const pwd = await getEncryptionPassword();
+    if (!pwd) { event.target.value = ''; return; }
+
+    try {
+        const statusEl = document.getElementById('welcomeStatus');
+        if (statusEl) { statusEl.style.display = ''; statusEl.textContent = 'Decrypting file...'; }
+
+        const buffer = await file.arrayBuffer();
+        const data = await CryptoEngine.decrypt(pwd, buffer);
+
+        if (!data._meta || data._meta.app !== 'APF Dashboard') {
+            showToast('Invalid file — not an APF Dashboard backup', 'error');
+            if (statusEl) statusEl.style.display = 'none';
+            event.target.value = '';
+            return;
+        }
+
+        DB.clear();
+        ENCRYPTED_DATA_KEYS.forEach(k => {
+            if (data[k] !== undefined && Array.isArray(data[k])) {
+                _originalDBSet(k, data[k]);
+            }
+        });
+
+        // Set password from file's password if not already set
+        if (!PasswordManager.isPasswordSet()) {
+            const hash = await PasswordManager.hashPassword(pwd);
+            PasswordManager.setHash(hash);
+        }
+
+        _sessionPassword = pwd;
+        lastEncSaveTime = new Date().toISOString();
+        // Cache encrypted data in browser
+        await EncryptedCache.save(pwd);
+        clearUnsavedChanges();
+        hideWelcomeScreen();
         isAppUnlocked = true;
         initApp();
+        startPeriodicSave();
+        showToast('Data loaded from encrypted file! 🔓', 'success');
+
+        // Offer to link a file for auto-save (if File System Access API supported)
+        if (FileLink.isSupported() && !FileLink.isLinked()) {
+            setTimeout(() => {
+                if (confirm('Link a .apf file on your device for automatic read/write?\n\nThis means changes save directly to a file — no manual downloads needed.')) {
+                    linkFile();
+                }
+            }, 1500);
+        }
+    } catch (err) {
+        console.error('Decryption failed:', err);
+        const statusEl = document.getElementById('welcomeStatus');
+        if (statusEl) statusEl.style.display = 'none';
+        if (err.message.includes('Not a valid')) {
+            showToast('Not a valid APF encrypted file', 'error');
+        } else {
+            showToast('Decryption failed — wrong password or corrupted file', 'error');
+        }
+    }
+    event.target.value = '';
+}
+
+function welcomeStartFresh(withSampleData) {
+    DB.clear();
+    if (withSampleData) {
+        loadSampleData();
+    }
+    hideWelcomeScreen();
+    isAppUnlocked = true;
+    initApp();
+    startPeriodicSave();
+    if (!_sessionPassword && !withSampleData) {
+        clearUnsavedChanges();
+    }
+    showToast(withSampleData ? 'Started with sample data — set a password to auto-save!' : 'Started fresh — add your data!', 'info');
+}
+
+// ===== Beforeunload — save to file + cache =====
+window.addEventListener('beforeunload', (e) => {
+    if (hasUnsavedChanges && _sessionPassword) {
+        // Best-effort saves (fire-and-forget)
+        if (FileLink.isLinked()) FileLink.writeToFile(_sessionPassword);
+        EncryptedCache.save(_sessionPassword);
+    }
+});
+
+document.addEventListener('DOMContentLoaded', async () => {
+    // Restore persisted file handle from IndexedDB
+    if (FileLink.isSupported()) {
+        await FileLink.restoreHandle();
+    }
+
+    if (PasswordManager.isPasswordSet()) {
+        // Try to auto-restore session (page refresh — skip lock screen)
+        const savedPwd = SessionPersist.restore();
+        if (savedPwd) {
+            const hash = await PasswordManager.hashPassword(savedPwd);
+            if (hash === PasswordManager.getStoredHash()) {
+                _sessionPassword = savedPwd;
+                // Auto-load data silently
+                let loaded = false;
+                if (FileLink.isLinked()) {
+                    try {
+                        const data = await FileLink.readFromFile(savedPwd);
+                        if (data && data._meta && data._meta.app === 'APF Dashboard') {
+                            DB.clear();
+                            ENCRYPTED_DATA_KEYS.forEach(k => {
+                                if (data[k] !== undefined && Array.isArray(data[k])) _originalDBSet(k, data[k]);
+                            });
+                            lastEncSaveTime = EncryptedCache.getLastSaveTime();
+                            clearUnsavedChanges();
+                            loaded = true;
+                        }
+                    } catch (err) { console.error('Auto-restore file read failed:', err); }
+                }
+                if (!loaded && EncryptedCache.exists()) {
+                    try {
+                        const data = await EncryptedCache.load(savedPwd);
+                        if (data._meta && data._meta.app === 'APF Dashboard') {
+                            DB.clear();
+                            ENCRYPTED_DATA_KEYS.forEach(k => {
+                                if (data[k] !== undefined && Array.isArray(data[k])) _originalDBSet(k, data[k]);
+                            });
+                            lastEncSaveTime = EncryptedCache.getLastSaveTime();
+                            clearUnsavedChanges();
+                            loaded = true;
+                        }
+                    } catch (err) { console.error('Auto-restore cache failed:', err); EncryptedCache.clear(); }
+                }
+                if (loaded) {
+                    isAppUnlocked = true;
+                    initApp();
+                    startPeriodicSave();
+                    return; // Session restored — no lock screen needed
+                }
+                // Session token invalid now, clear it
+                SessionPersist.clear();
+            } else {
+                SessionPersist.clear();
+            }
+        }
+        // No valid session — show lock screen
+        showLockScreen('unlock');
+    } else if (EncryptedCache.exists()) {
+        EncryptedCache.clear();
+        showWelcomeScreen();
+    } else {
+        showWelcomeScreen();
     }
 });

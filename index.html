@@ -59,6 +59,33 @@
         </div>
     </div>
 
+    <!-- Welcome / Data Load Screen -->
+    <div id="welcomeScreen" class="welcome-screen" style="display:none;">
+        <div class="welcome-container">
+            <div class="welcome-icon"><i class="fas fa-shield-alt"></i></div>
+            <h1 class="welcome-title">APF Dashboard</h1>
+            <p class="welcome-subtitle">Welcome! Load your existing data file or start fresh. After this, your data auto-saves securely — no need to load the file again.</p>
+            <div class="welcome-actions">
+                <label class="btn btn-primary welcome-btn welcome-load-btn">
+                    <i class="fas fa-folder-open"></i> Load Existing Data File (.apf)
+                    <input type="file" accept=".apf" onchange="welcomeLoadFile(event)" style="display:none">
+                </label>
+                <div class="welcome-divider"><span>or start new</span></div>
+                <button class="btn btn-outline welcome-btn" onclick="welcomeStartFresh(false)">
+                    <i class="fas fa-plus-circle"></i> Start Fresh (Empty)
+                </button>
+                <button class="btn btn-outline welcome-btn welcome-sample-btn" onclick="welcomeStartFresh(true)">
+                    <i class="fas fa-database"></i> Start with Sample Data
+                </button>
+            </div>
+            <div class="welcome-status" id="welcomeStatus" style="display:none;"></div>
+            <div class="welcome-note">
+                <i class="fas fa-info-circle"></i>
+                <span>Your data is encrypted (AES-256) and auto-saved. Next time, just enter your password.</span>
+            </div>
+        </div>
+    </div>
+
     <!-- Sidebar Navigation -->
     <aside class="sidebar" id="sidebar">
         <div class="sidebar-header">
@@ -122,7 +149,7 @@
                 <i class="fas fa-address-book"></i><span>Contacts</span>
             </a>
             <a href="#" class="nav-item" data-section="backup" id="nav-backup">
-                <i class="fas fa-shield-alt"></i><span>Backup & Restore</span>
+                <i class="fas fa-shield-alt"></i><span>Data & Security</span>
             </a>
         </nav>
         <div class="sidebar-footer">
@@ -984,33 +1011,54 @@
         <section class="content-section" id="section-backup">
             <div class="section-header">
                 <div>
-                    <h1><i class="fas fa-shield-alt"></i> Backup & Restore</h1>
-                    <p class="section-subtitle">Protect your data — download backups and restore anytime</p>
+                    <h1><i class="fas fa-shield-alt"></i> Data & Security</h1>
+                    <p class="section-subtitle">Data auto-saves encrypted to your linked file &amp; browser — always protected</p>
                 </div>
             </div>
             <div class="backup-grid">
-                <div class="backup-card backup-download">
-                    <div class="backup-icon"><i class="fas fa-cloud-download-alt"></i></div>
-                    <h3>Download Backup</h3>
-                    <p>Export all your data as a JSON file. Keep it safe on your device or cloud storage.</p>
-                    <div class="backup-info" id="backupInfo"></div>
-                    <button class="btn btn-primary" onclick="downloadBackup()">
-                        <i class="fas fa-download"></i> Download Backup
-                    </button>
-                </div>
-                <div class="backup-card backup-restore">
-                    <div class="backup-icon" style="background:linear-gradient(135deg, #10b981, #059669);"><i class="fas fa-cloud-upload-alt"></i></div>
-                    <h3>Restore from Backup</h3>
-                    <p>Upload a previously downloaded backup file to restore all your data.</p>
-                    <div class="backup-warning">
-                        <i class="fas fa-exclamation-triangle"></i>
-                        <span>This will replace ALL current data. Make sure to download a backup first!</span>
+                <!-- Encrypted File Storage — Primary -->
+                <div class="backup-card backup-encrypted" style="grid-column: 1 / -1;">
+                    <!-- Top: Icon + Title -->
+                    <div class="enc-card-top">
+                        <div class="enc-card-icon">
+                            <i class="fas fa-file-shield"></i>
+                        </div>
+                        <div class="enc-card-title">
+                            <h3><i class="fas fa-lock"></i> Encrypted File Storage</h3>
+                            <p>AES-256 encrypted &bull; Auto-saves on every change &bull; Direct file read/write</p>
+                        </div>
                     </div>
-                    <label class="btn btn-outline backup-upload-btn">
-                        <i class="fas fa-upload"></i> Choose Backup File
-                        <input type="file" accept=".json" onchange="restoreBackup(event)" style="display:none">
-                    </label>
+
+                    <!-- Status Area -->
+                    <div class="enc-card-status" id="encryptedFileStatus"></div>
+
+                    <!-- Actions Row -->
+                    <div class="enc-card-actions">
+                        <div class="enc-action-group">
+                            <span class="enc-action-label"><i class="fas fa-file-arrow-down"></i> File</span>
+                            <div class="enc-action-buttons">
+                                <button class="btn btn-primary enc-btn-download" onclick="saveEncryptedFile()" id="btnSaveEncrypted">
+                                    <i class="fas fa-download"></i> Download .apf
+                                </button>
+                                <label class="btn btn-outline enc-btn-upload">
+                                    <i class="fas fa-upload"></i> Load .apf
+                                    <input type="file" accept=".apf" onchange="loadEncryptedFile(event)" style="display:none">
+                                </label>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Data Summary -->
+                    <div class="enc-card-summary" id="encDataSummary"></div>
+
+                    <!-- Footer Note -->
+                    <div class="enc-card-footer">
+                        <i class="fas fa-shield-alt"></i>
+                        <span>Data is encrypted with AES-256-GCM using PBKDF2 key derivation (100K iterations). Auto-saved to linked file &amp; browser cache.</span>
+                        <span id="encUnsavedBadge" class="unsaved-badge" style="display:none;">Saving...</span>
+                    </div>
                 </div>
+
                 <div class="backup-card backup-excel">
                     <div class="backup-icon" style="background:linear-gradient(135deg, #3b82f6, #1d4ed8);"><i class="fas fa-file-excel"></i></div>
                     <h3>Export to Excel</h3>

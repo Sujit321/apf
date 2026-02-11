@@ -1035,7 +1035,7 @@ function exportAllDataToExcel() {
     const wb = XLSX.utils.book_new();
 
     // Visits
-    const visits = JSON.parse(localStorage.getItem('apf_visits') || '[]');
+    const visits = DB.get('visits');
     if (visits.length > 0) {
         const ws = XLSX.utils.json_to_sheet(visits.map(v => ({
             School: v.school, Block: v.block, Date: v.date, Status: v.status,
@@ -1045,7 +1045,7 @@ function exportAllDataToExcel() {
     }
 
     // Trainings
-    const trainings = JSON.parse(localStorage.getItem('apf_trainings') || '[]');
+    const trainings = DB.get('trainings');
     if (trainings.length > 0) {
         const ws = XLSX.utils.json_to_sheet(trainings.map(t => ({
             Title: t.title, Topic: t.topic, Date: t.date, Duration: t.duration,
@@ -1056,7 +1056,7 @@ function exportAllDataToExcel() {
     }
 
     // Observations
-    const observations = JSON.parse(localStorage.getItem('apf_observations') || '[]');
+    const observations = DB.get('observations');
     if (observations.length > 0) {
         const ws = XLSX.utils.json_to_sheet(observations.map(o => ({
             School: o.school, Teacher: o.teacher, Date: o.date,
@@ -1069,7 +1069,7 @@ function exportAllDataToExcel() {
     }
 
     // Resources
-    const resources = JSON.parse(localStorage.getItem('apf_resources') || '[]');
+    const resources = DB.get('resources');
     if (resources.length > 0) {
         const ws = XLSX.utils.json_to_sheet(resources.map(r => ({
             Title: r.title, Type: r.type, Subject: r.subject,
@@ -1080,7 +1080,7 @@ function exportAllDataToExcel() {
     }
 
     // Notes
-    const notes = JSON.parse(localStorage.getItem('apf_notes') || '[]');
+    const notes = DB.get('notes');
     if (notes.length > 0) {
         const ws = XLSX.utils.json_to_sheet(notes.map(n => ({
             Title: n.title, Content: n.content, Color: n.color, 'Created At': n.createdAt
