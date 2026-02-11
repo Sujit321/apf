@@ -3157,7 +3157,11 @@ function restoreBackup(event) {
 
 function resetAllData() {
     if (!confirm('⚠️ DANGER: DELETE ALL DATA\n\nThis will permanently delete ALL your data including visits, trainings, observations, notes, ideas, contacts, reflections, and everything else.\n\nThis CANNOT be undone!\n\nAre you absolutely sure?')) return;
-    if (!confirm('Last chance! Type OK in the next prompt to confirm.')) return;
+    const answer = prompt('Type DELETE to confirm permanent data removal:');
+    if (answer !== 'DELETE') {
+        showToast('Reset cancelled', 'info');
+        return;
+    }
 
     const keys = ['visits', 'trainings', 'observations', 'resources', 'notes', 'ideas', 'reflections', 'contacts', 'plannerTasks', 'goalTargets', 'followupStatus'];
     keys.forEach(k => localStorage.removeItem(`apf_${k}`));
@@ -3267,7 +3271,9 @@ function exportAllDataToExcel() {
 
 // ===== SAMPLE DATA =====
 function loadSampleData() {
-    if (DB.get('visits').length > 0 || DB.get('trainings').length > 0) return; // Don't overwrite
+    if (localStorage.getItem('apf_initialized')) return; // Already initialized, never reload samples
+    if (DB.get('visits').length > 0 || DB.get('trainings').length > 0) return;
+    localStorage.setItem('apf_initialized', '1');
 
     const sampleVisits = [
         { id: DB.generateId(), school: 'Govt. Primary School, Anekal', block: 'Anekal Block', date: '2026-02-12', status: 'planned', purpose: 'Classroom Observation', notes: '', followUp: 'Share fraction activity cards with maths teacher', createdAt: new Date().toISOString() },
