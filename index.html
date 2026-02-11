@@ -503,12 +503,12 @@
         <section class="content-section" id="section-excel">
             <div class="section-header">
                 <div>
-                    <h1><i class="fas fa-file-excel"></i> Excel Analytics</h1>
-                    <p class="section-subtitle">Upload any Excel file and get instant dashboard visuals & insights</p>
+                    <h1><i class="fas fa-chart-line"></i> Excel Analytics</h1>
+                    <p class="section-subtitle">Upload any spreadsheet — get instant dashboards, charts &amp; insights</p>
                 </div>
                 <div class="header-actions">
                     <button class="btn btn-outline" onclick="clearExcelData()" id="clearExcelBtn" style="display:none;">
-                        <i class="fas fa-trash"></i> Clear
+                        <i class="fas fa-times"></i> Clear Data
                     </button>
                 </div>
             </div>
@@ -516,23 +516,28 @@
             <!-- Upload Area -->
             <div class="excel-upload-zone" id="excelUploadZone">
                 <div class="upload-content">
-                    <div class="upload-icon-wrapper">
-                        <i class="fas fa-cloud-upload-alt"></i>
+                    <div class="upload-icon-ring">
+                        <div class="upload-icon-inner">
+                            <i class="fas fa-file-excel"></i>
+                        </div>
                     </div>
-                    <h3>Drop your Excel file here</h3>
-                    <p>or click to browse — supports .xlsx, .xls, .csv files</p>
-                    <button class="btn btn-primary" onclick="document.getElementById('excelFileInput').click()">
-                        <i class="fas fa-folder-open"></i> Choose File
+                    <h3>Drop your spreadsheet here</h3>
+                    <p>Supports <strong>.xlsx</strong>, <strong>.xls</strong> &amp; <strong>.csv</strong> files</p>
+                    <button class="btn btn-primary upload-browse-btn" onclick="document.getElementById('excelFileInput').click()">
+                        <i class="fas fa-folder-open"></i> Browse Files
                     </button>
                     <input type="file" id="excelFileInput" accept=".xlsx,.xls,.csv" style="display:none"
                         onchange="handleExcelUpload(event)">
+                    <div class="upload-formats">
+                        <span><i class="fas fa-shield-alt"></i> Processed locally — nothing uploaded</span>
+                    </div>
                 </div>
             </div>
 
             <!-- Sheet Selector (shown after upload) -->
-            <div class="excel-sheet-selector" id="excelSheetSelector" style="display:none;">
-                <div class="sheet-info">
-                    <i class="fas fa-file-excel" style="color:var(--success);font-size:20px"></i>
+            <div class="excel-sheet-bar" id="excelSheetSelector" style="display:none;">
+                <div class="sheet-file-info">
+                    <div class="sheet-file-icon"><i class="fas fa-file-excel"></i></div>
                     <div>
                         <strong id="excelFileName">file.xlsx</strong>
                         <span id="excelFileInfo" class="text-muted"></span>
@@ -544,21 +549,36 @@
             <!-- Excel Dashboard -->
             <div id="excelDashboard" style="display:none;">
                 <!-- Summary Stats -->
-                <div class="excel-summary-bar" id="excelSummaryBar"></div>
+                <div class="excel-kpi-strip" id="excelSummaryBar"></div>
 
                 <!-- Analysis Tabs -->
-                <div class="excel-analysis-tabs">
-                    <button class="analysis-tab active" onclick="switchAnalysisTab('auto')" data-tab="auto">
-                        <i class="fas fa-magic"></i> Auto Analysis
+                <div class="excel-tab-bar">
+                    <button class="excel-tab active" onclick="switchAnalysisTab('auto')" data-tab="auto">
+                        <i class="fas fa-magic"></i> <span>Auto Analysis</span>
                     </button>
-                    <button class="analysis-tab" onclick="switchAnalysisTab('custom')" data-tab="custom">
-                        <i class="fas fa-sliders-h"></i> Custom Charts
+                    <button class="excel-tab" onclick="switchAnalysisTab('stats')" data-tab="stats">
+                        <i class="fas fa-square-root-alt"></i> <span>Statistics</span>
                     </button>
-                    <button class="analysis-tab" onclick="switchAnalysisTab('pivot')" data-tab="pivot">
-                        <i class="fas fa-th"></i> Pivot Analysis
+                    <button class="excel-tab" onclick="switchAnalysisTab('correlation')" data-tab="correlation">
+                        <i class="fas fa-project-diagram"></i> <span>Correlations</span>
                     </button>
-                    <button class="analysis-tab" onclick="switchAnalysisTab('quality')" data-tab="quality">
-                        <i class="fas fa-shield-alt"></i> Data Quality
+                    <button class="excel-tab" onclick="switchAnalysisTab('outliers')" data-tab="outliers">
+                        <i class="fas fa-exclamation-triangle"></i> <span>Outliers</span>
+                    </button>
+                    <button class="excel-tab" onclick="switchAnalysisTab('distribution')" data-tab="distribution">
+                        <i class="fas fa-wave-square"></i> <span>Distribution</span>
+                    </button>
+                    <button class="excel-tab" onclick="switchAnalysisTab('trends')" data-tab="trends">
+                        <i class="fas fa-chart-line"></i> <span>Trends</span>
+                    </button>
+                    <button class="excel-tab" onclick="switchAnalysisTab('custom')" data-tab="custom">
+                        <i class="fas fa-paint-brush"></i> <span>Chart Builder</span>
+                    </button>
+                    <button class="excel-tab" onclick="switchAnalysisTab('pivot')" data-tab="pivot">
+                        <i class="fas fa-th"></i> <span>Pivot Table</span>
+                    </button>
+                    <button class="excel-tab" onclick="switchAnalysisTab('quality')" data-tab="quality">
+                        <i class="fas fa-heartbeat"></i> <span>Data Quality</span>
                     </button>
                 </div>
 
@@ -568,71 +588,258 @@
                     <div class="excel-charts-grid" id="excelChartsGrid"></div>
                 </div>
 
+                <!-- TAB: Statistical Deep Dive -->
+                <div class="analysis-panel" id="panel-stats">
+                    <div class="tab-custom-controls">
+                        <div class="ctrl-section">
+                            <div class="custom-control-group">
+                                <label><i class="fas fa-columns"></i> Columns</label>
+                                <select id="statsColumnFilter" multiple></select>
+                                <button class="ctrl-multi-btn" onclick="toggleCtrlMulti(this, 'statsColumnFilter')">
+                                    <span class="ctrl-multi-label">All Columns</span>
+                                    <span class="ctrl-count">0</span>
+                                    <i class="fas fa-chevron-down"></i>
+                                </button>
+                                <div class="ctrl-multi-dropdown" id="statsColumnFilter-dropdown"></div>
+                            </div>
+                        </div>
+                        <div class="ctrl-section">
+                            <div class="custom-control-group">
+                                <label><i class="fas fa-sort"></i> Sort By</label>
+                                <select id="statsSortBy">
+                                    <option value="name">Name</option>
+                                    <option value="mean">Mean</option>
+                                    <option value="stddev">Std Dev</option>
+                                    <option value="missing">Missing %</option>
+                                    <option value="cv">CV %</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="ctrl-section ctrl-actions">
+                            <button class="tab-action-btn primary" onclick="renderStatistics()">
+                                <i class="fas fa-sync-alt"></i> Apply
+                            </button>
+                            <button class="tab-action-btn" onclick="exportTabToCSV('stats')">
+                                <i class="fas fa-download"></i> Export
+                            </button>
+                        </div>
+                    </div>
+                    <div id="statsOutput"></div>
+                </div>
+
+                <!-- TAB: Correlation Matrix -->
+                <div class="analysis-panel" id="panel-correlation">
+                    <div class="tab-custom-controls">
+                        <div class="ctrl-section">
+                            <div class="custom-control-group">
+                                <label><i class="fas fa-sliders-h"></i> Threshold</label>
+                                <select id="corrMinThreshold">
+                                    <option value="0">Show All</option>
+                                    <option value="0.3">|r| ≥ 0.3 (Weak+)</option>
+                                    <option value="0.5" selected>|r| ≥ 0.5 (Moderate+)</option>
+                                    <option value="0.7">|r| ≥ 0.7 (Strong+)</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="ctrl-section">
+                            <div class="custom-control-group">
+                                <label><i class="fas fa-hashtag"></i> Max Cols</label>
+                                <select id="corrMaxCols">
+                                    <option value="8">8</option>
+                                    <option value="12">12</option>
+                                    <option value="15" selected>15</option>
+                                    <option value="20">20</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="ctrl-section ctrl-actions">
+                            <button class="tab-action-btn primary" onclick="renderCorrelationMatrix()">
+                                <i class="fas fa-sync-alt"></i> Apply
+                            </button>
+                            <button class="tab-action-btn" onclick="exportTabToCSV('correlation')">
+                                <i class="fas fa-download"></i> Export
+                            </button>
+                        </div>
+                    </div>
+                    <div id="correlationOutput"></div>
+                </div>
+
+                <!-- TAB: Outlier Detection -->
+                <div class="analysis-panel" id="panel-outliers">
+                    <div class="tab-custom-controls">
+                        <div class="ctrl-section">
+                            <div class="custom-control-group">
+                                <label><i class="fas fa-ruler-combined"></i> Method</label>
+                                <select id="outlierMethod">
+                                    <option value="iqr" selected>IQR (1.5×)</option>
+                                    <option value="zscore">Z-Score (2.5σ)</option>
+                                    <option value="extreme">Extreme (3× IQR)</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="ctrl-section">
+                            <div class="custom-control-group">
+                                <label><i class="fas fa-eye"></i> Filter</label>
+                                <select id="outlierShow">
+                                    <option value="all">All Columns</option>
+                                    <option value="with">With Outliers Only</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="ctrl-section ctrl-actions">
+                            <button class="tab-action-btn primary" onclick="renderOutlierDetection()">
+                                <i class="fas fa-sync-alt"></i> Apply
+                            </button>
+                            <button class="tab-action-btn" onclick="exportTabToCSV('outliers')">
+                                <i class="fas fa-download"></i> Export
+                            </button>
+                        </div>
+                    </div>
+                    <div id="outlierOutput"></div>
+                </div>
+
+                <!-- TAB: Distribution Analysis -->
+                <div class="analysis-panel" id="panel-distribution">
+                    <div class="tab-custom-controls">
+                        <div class="ctrl-section">
+                            <div class="custom-control-group">
+                                <label><i class="fas fa-chart-bar"></i> Bins</label>
+                                <select id="distBinCount">
+                                    <option value="auto" selected>Auto</option>
+                                    <option value="10">10 bins</option>
+                                    <option value="15">15 bins</option>
+                                    <option value="20">20 bins</option>
+                                    <option value="30">30 bins</option>
+                                    <option value="50">50 bins</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="ctrl-section">
+                            <div class="custom-control-group">
+                                <label><i class="fas fa-list-ol"></i> Top N</label>
+                                <select id="distTopN">
+                                    <option value="5">Top 5</option>
+                                    <option value="10" selected>Top 10</option>
+                                    <option value="15">Top 15</option>
+                                    <option value="20">Top 20</option>
+                                    <option value="all">All</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="ctrl-section ctrl-actions">
+                            <button class="tab-action-btn primary" onclick="renderDistributionAnalysis()">
+                                <i class="fas fa-sync-alt"></i> Apply
+                            </button>
+                            <button class="tab-action-btn" onclick="exportTabToCSV('distribution')">
+                                <i class="fas fa-download"></i> Export
+                            </button>
+                        </div>
+                    </div>
+                    <div id="distributionOutput"></div>
+                </div>
+
+                <!-- TAB: Trends & Time Series -->
+                <div class="analysis-panel" id="panel-trends">
+                    <div class="tab-custom-controls">
+                        <div class="ctrl-section">
+                            <div class="custom-control-group">
+                                <label><i class="fas fa-calendar-alt"></i> Group</label>
+                                <select id="trendGroupBy">
+                                    <option value="auto" selected>Auto Detect</option>
+                                    <option value="day">Day</option>
+                                    <option value="week">Week</option>
+                                    <option value="month">Month</option>
+                                    <option value="year">Year</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="ctrl-section">
+                            <div class="custom-control-group">
+                                <label><i class="fas fa-chart-line"></i> MA Window</label>
+                                <select id="trendMAWindow">
+                                    <option value="auto" selected>Auto</option>
+                                    <option value="3">3 periods</option>
+                                    <option value="5">5 periods</option>
+                                    <option value="7">7 periods</option>
+                                    <option value="10">10 periods</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="ctrl-section ctrl-actions">
+                            <button class="tab-action-btn primary" onclick="renderTrendAnalysis()">
+                                <i class="fas fa-sync-alt"></i> Apply
+                            </button>
+                            <button class="tab-action-btn" onclick="exportTabToCSV('trends')">
+                                <i class="fas fa-download"></i> Export
+                            </button>
+                        </div>
+                    </div>
+                    <div id="trendsOutput"></div>
+                </div>
+
                 <!-- TAB: Custom Chart Builder -->
                 <div class="analysis-panel" id="panel-custom">
-                    <div class="card">
-                        <div class="card-header">
-                            <h3><i class="fas fa-paint-brush"></i> Build Your Own Chart</h3>
+                    <div class="excel-builder-card">
+                        <div class="builder-card-header">
+                            <div class="builder-card-icon"><i class="fas fa-paint-brush"></i></div>
+                            <div>
+                                <h3>Chart Builder</h3>
+                                <p>Configure axes, aggregation &amp; visualization type</p>
+                            </div>
                         </div>
-                        <div class="card-body">
-                            <div class="chart-builder-controls">
-                                <div class="builder-row">
-                                    <div class="form-group">
-                                        <label>Chart Type</label>
-                                        <select id="customChartType">
-                                            <option value="bar">📊 Bar Chart</option>
-                                            <option value="line">📈 Line Chart</option>
-                                            <option value="pie">🥧 Pie / Doughnut</option>
-                                            <option value="radar">🕸️ Radar Chart</option>
-                                            <option value="scatter">🔵 Scatter Plot</option>
-                                            <option value="histogram">📊 Histogram</option>
-                                            <option value="polarArea">🎯 Polar Area</option>
-                                            <option value="horizontalBar">📊 Horizontal Bar</option>
-                                        </select>
-                                    </div>
-                                    <div class="form-group">
-                                        <label>X-Axis / Labels</label>
-                                        <select id="customChartX"></select>
-                                    </div>
-                                    <div class="form-group">
-                                        <label>Y-Axis / Values</label>
-                                        <select id="customChartY"></select>
-                                    </div>
-                                    <div class="form-group">
-                                        <label>Aggregation</label>
-                                        <select id="customChartAgg">
-                                            <option value="sum">Sum</option>
-                                            <option value="average">Average</option>
-                                            <option value="count">Count</option>
-                                            <option value="min">Min</option>
-                                            <option value="max">Max</option>
-                                        </select>
-                                    </div>
+                        <div class="builder-card-body">
+                            <div class="builder-grid">
+                                <div class="form-group">
+                                    <label><i class="fas fa-chart-pie"></i> Chart Type</label>
+                                    <select id="customChartType">
+                                        <option value="bar">Bar Chart</option>
+                                        <option value="line">Line Chart</option>
+                                        <option value="pie">Pie / Doughnut</option>
+                                        <option value="radar">Radar Chart</option>
+                                        <option value="scatter">Scatter Plot</option>
+                                        <option value="histogram">Histogram</option>
+                                        <option value="polarArea">Polar Area</option>
+                                        <option value="horizontalBar">Horizontal Bar</option>
+                                    </select>
                                 </div>
-                                <div class="builder-row">
-                                    <div class="form-group">
-                                        <label>Group By (optional)</label>
-                                        <select id="customChartGroup">
-                                            <option value="">— None —</option>
-                                        </select>
-                                    </div>
-                                    <div class="form-group">
-                                        <label>Top N</label>
-                                        <select id="customChartTopN">
-                                            <option value="10">Top 10</option>
-                                            <option value="15">Top 15</option>
-                                            <option value="20" selected>Top 20</option>
-                                            <option value="50">Top 50</option>
-                                            <option value="all">All</option>
-                                        </select>
-                                    </div>
-                                    <div class="form-group" style="display:flex;align-items:flex-end;">
-                                        <button class="btn btn-primary" onclick="buildCustomChart()" style="width:100%">
-                                            <i class="fas fa-chart-bar"></i> Generate Chart
-                                        </button>
-                                    </div>
+                                <div class="form-group">
+                                    <label><i class="fas fa-arrows-alt-h"></i> X-Axis / Labels</label>
+                                    <select id="customChartX"></select>
+                                </div>
+                                <div class="form-group">
+                                    <label><i class="fas fa-arrows-alt-v"></i> Y-Axis / Values</label>
+                                    <select id="customChartY"></select>
+                                </div>
+                                <div class="form-group">
+                                    <label><i class="fas fa-calculator"></i> Aggregation</label>
+                                    <select id="customChartAgg">
+                                        <option value="sum">Sum</option>
+                                        <option value="average">Average</option>
+                                        <option value="count">Count</option>
+                                        <option value="min">Min</option>
+                                        <option value="max">Max</option>
+                                    </select>
+                                </div>
+                                <div class="form-group">
+                                    <label><i class="fas fa-layer-group"></i> Group By</label>
+                                    <select id="customChartGroup">
+                                        <option value="">— None —</option>
+                                    </select>
+                                </div>
+                                <div class="form-group">
+                                    <label><i class="fas fa-filter"></i> Top N</label>
+                                    <select id="customChartTopN">
+                                        <option value="10">Top 10</option>
+                                        <option value="15">Top 15</option>
+                                        <option value="20" selected>Top 20</option>
+                                        <option value="50">Top 50</option>
+                                        <option value="all">All</option>
+                                    </select>
                                 </div>
                             </div>
+                            <button class="btn btn-primary builder-generate-btn" onclick="buildCustomChart()">
+                                <i class="fas fa-bolt"></i> Generate Chart
+                            </button>
                         </div>
                     </div>
                     <div id="customChartOutput" style="margin-top:20px;"></div>
@@ -640,46 +847,44 @@
 
                 <!-- TAB: Pivot Analysis -->
                 <div class="analysis-panel" id="panel-pivot">
-                    <div class="card">
-                        <div class="card-header">
-                            <h3><i class="fas fa-th"></i> Pivot Table Builder</h3>
+                    <div class="excel-builder-card">
+                        <div class="builder-card-header">
+                            <div class="builder-card-icon" style="background:linear-gradient(135deg, #6366f1, #4f46e5);"><i class="fas fa-th"></i></div>
+                            <div>
+                                <h3>Pivot Table</h3>
+                                <p>Cross-tabulate and aggregate your data</p>
+                            </div>
                         </div>
-                        <div class="card-body">
-                            <div class="chart-builder-controls">
-                                <div class="builder-row">
-                                    <div class="form-group">
-                                        <label>Row (Group By)</label>
-                                        <select id="pivotRow"></select>
-                                    </div>
-                                    <div class="form-group">
-                                        <label>Value Column</label>
-                                        <select id="pivotValue"></select>
-                                    </div>
-                                    <div class="form-group">
-                                        <label>Aggregation</label>
-                                        <select id="pivotAgg">
-                                            <option value="sum">Sum</option>
-                                            <option value="average">Average</option>
-                                            <option value="count">Count</option>
-                                            <option value="min">Min</option>
-                                            <option value="max">Max</option>
-                                        </select>
-                                    </div>
-                                    <div class="form-group">
-                                        <label>Column Split (optional)</label>
-                                        <select id="pivotCol">
-                                            <option value="">— None —</option>
-                                        </select>
-                                    </div>
+                        <div class="builder-card-body">
+                            <div class="builder-grid">
+                                <div class="form-group">
+                                    <label><i class="fas fa-grip-lines"></i> Row (Group By)</label>
+                                    <select id="pivotRow"></select>
                                 </div>
-                                <div class="builder-row">
-                                    <div class="form-group" style="display:flex;align-items:flex-end;">
-                                        <button class="btn btn-primary" onclick="buildPivotTable()" style="width:100%">
-                                            <i class="fas fa-table"></i> Generate Pivot
-                                        </button>
-                                    </div>
+                                <div class="form-group">
+                                    <label><i class="fas fa-sort-numeric-up"></i> Value Column</label>
+                                    <select id="pivotValue"></select>
+                                </div>
+                                <div class="form-group">
+                                    <label><i class="fas fa-calculator"></i> Aggregation</label>
+                                    <select id="pivotAgg">
+                                        <option value="sum">Sum</option>
+                                        <option value="average">Average</option>
+                                        <option value="count">Count</option>
+                                        <option value="min">Min</option>
+                                        <option value="max">Max</option>
+                                    </select>
+                                </div>
+                                <div class="form-group">
+                                    <label><i class="fas fa-columns"></i> Column Split</label>
+                                    <select id="pivotCol">
+                                        <option value="">— None —</option>
+                                    </select>
                                 </div>
                             </div>
+                            <button class="btn btn-primary builder-generate-btn" onclick="buildPivotTable()" style="background:linear-gradient(135deg, #6366f1, #4f46e5);">
+                                <i class="fas fa-table"></i> Generate Pivot
+                            </button>
                         </div>
                     </div>
                     <div id="pivotOutput" style="margin-top:20px;"></div>
@@ -691,12 +896,12 @@
                 </div>
 
                 <!-- Data Table Preview -->
-                <div class="card" style="margin-top:20px;">
-                    <div class="card-header">
+                <div class="excel-table-card" style="margin-top:24px;">
+                    <div class="excel-table-header">
                         <h3><i class="fas fa-table"></i> Data Preview</h3>
                         <span class="text-muted" id="excelRowCount"></span>
                     </div>
-                    <div class="card-body" style="max-height:500px;overflow:auto;padding:0;">
+                    <div class="excel-table-body">
                         <div id="excelTableContainer"></div>
                     </div>
                 </div>
