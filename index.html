@@ -96,59 +96,62 @@
                     <span class="logo-subtitle">Resource Person</span>
                 </div>
             </div>
+            <button class="sidebar-toggle-btn" id="sidebarToggle" title="Collapse sidebar" onclick="toggleDesktopSidebar()">
+                <i class="fas fa-chevron-left"></i>
+            </button>
         </div>
         <nav class="sidebar-nav">
-            <a href="#" class="nav-item active" data-section="dashboard" id="nav-dashboard">
+            <a href="#" class="nav-item active" data-section="dashboard" id="nav-dashboard" data-tooltip="Dashboard">
                 <i class="fas fa-th-large"></i><span>Dashboard</span>
             </a>
-            <a href="#" class="nav-item" data-section="visits" id="nav-visits">
+            <a href="#" class="nav-item" data-section="visits" id="nav-visits" data-tooltip="School Visits">
                 <i class="fas fa-school"></i><span>School Visits</span>
             </a>
-            <a href="#" class="nav-item" data-section="training" id="nav-training">
+            <a href="#" class="nav-item" data-section="training" id="nav-training" data-tooltip="Teacher Training">
                 <i class="fas fa-chalkboard-teacher"></i><span>Teacher Training</span>
             </a>
-            <a href="#" class="nav-item" data-section="observations" id="nav-observations">
+            <a href="#" class="nav-item" data-section="observations" id="nav-observations" data-tooltip="Observations">
                 <i class="fas fa-clipboard-check"></i><span>Observations</span>
             </a>
-            <a href="#" class="nav-item" data-section="reports" id="nav-reports">
+            <a href="#" class="nav-item" data-section="reports" id="nav-reports" data-tooltip="Reports">
                 <i class="fas fa-chart-bar"></i><span>Reports</span>
             </a>
-            <a href="#" class="nav-item" data-section="resources" id="nav-resources">
+            <a href="#" class="nav-item" data-section="resources" id="nav-resources" data-tooltip="Resource Library">
                 <i class="fas fa-book-open"></i><span>Resource Library</span>
             </a>
             <div class="nav-divider"></div>
-            <a href="#" class="nav-item" data-section="excel" id="nav-excel">
+            <a href="#" class="nav-item" data-section="excel" id="nav-excel" data-tooltip="Excel Analytics">
                 <i class="fas fa-file-excel"></i><span>Excel Analytics</span>
             </a>
-            <a href="#" class="nav-item" data-section="notes" id="nav-notes">
+            <a href="#" class="nav-item" data-section="notes" id="nav-notes" data-tooltip="Quick Notes">
                 <i class="fas fa-sticky-note"></i><span>Quick Notes</span>
             </a>
-            <a href="#" class="nav-item" data-section="planner" id="nav-planner">
+            <a href="#" class="nav-item" data-section="planner" id="nav-planner" data-tooltip="Weekly Planner">
                 <i class="fas fa-calendar-week"></i><span>Weekly Planner</span>
             </a>
-            <a href="#" class="nav-item" data-section="goals" id="nav-goals">
+            <a href="#" class="nav-item" data-section="goals" id="nav-goals" data-tooltip="Goal Tracker">
                 <i class="fas fa-bullseye"></i><span>Goal Tracker</span>
             </a>
-            <a href="#" class="nav-item" data-section="analytics" id="nav-analytics">
+            <a href="#" class="nav-item" data-section="analytics" id="nav-analytics" data-tooltip="Analytics">
                 <i class="fas fa-chart-pie"></i><span>Analytics</span>
             </a>
-            <a href="#" class="nav-item" data-section="followups" id="nav-followups">
+            <a href="#" class="nav-item" data-section="followups" id="nav-followups" data-tooltip="Follow-ups">
                 <i class="fas fa-tasks"></i><span>Follow-ups</span>
             </a>
-            <a href="#" class="nav-item" data-section="ideas" id="nav-ideas">
+            <a href="#" class="nav-item" data-section="ideas" id="nav-ideas" data-tooltip="Idea Tracker">
                 <i class="fas fa-lightbulb"></i><span>Idea Tracker</span>
             </a>
             <div class="nav-divider"></div>
-            <a href="#" class="nav-item" data-section="schools" id="nav-schools">
+            <a href="#" class="nav-item" data-section="schools" id="nav-schools" data-tooltip="School Profiles">
                 <i class="fas fa-map-marker-alt"></i><span>School Profiles</span>
             </a>
-            <a href="#" class="nav-item" data-section="reflections" id="nav-reflections">
+            <a href="#" class="nav-item" data-section="reflections" id="nav-reflections" data-tooltip="Reflections">
                 <i class="fas fa-journal-whills"></i><span>Reflections</span>
             </a>
-            <a href="#" class="nav-item" data-section="contacts" id="nav-contacts">
+            <a href="#" class="nav-item" data-section="contacts" id="nav-contacts" data-tooltip="Contacts">
                 <i class="fas fa-address-book"></i><span>Contacts</span>
             </a>
-            <a href="#" class="nav-item" data-section="backup" id="nav-backup">
+            <a href="#" class="nav-item" data-section="backup" id="nav-backup" data-tooltip="Data & Security">
                 <i class="fas fa-shield-alt"></i><span>Data & Security</span>
             </a>
         </nav>

@@ -1000,6 +1000,49 @@ function closeMobileSidebar() {
     document.getElementById('sidebarOverlay').classList.remove('active');
 }
 
+// ===== Desktop Sidebar Toggle =====
+function toggleDesktopSidebar() {
+    const sidebar = document.getElementById('sidebar');
+    const body = document.body;
+    const btn = document.getElementById('sidebarToggle');
+    const isCollapsed = sidebar.classList.toggle('collapsed');
+    body.classList.toggle('sidebar-collapsed', isCollapsed);
+    
+    if (btn) {
+        btn.title = isCollapsed ? 'Expand sidebar' : 'Collapse sidebar';
+    }
+    
+    // Add tooltip data to nav items when collapsed
+    document.querySelectorAll('.nav-item').forEach(item => {
+        const label = item.querySelector('span')?.textContent || '';
+        item.setAttribute('data-tooltip', label);
+    });
+    
+    // Save preference
+    try { localStorage.setItem('apf_sidebar_collapsed', isCollapsed ? '1' : '0'); } catch(e) {}
+    
+    // Trigger resize for charts
+    setTimeout(() => window.dispatchEvent(new Event('resize')), 350);
+}
+
+function restoreSidebarState() {
+    try {
+        const saved = localStorage.getItem('apf_sidebar_collapsed');
+        if (saved === '1') {
+            const sidebar = document.getElementById('sidebar');
+            const body = document.body;
+            const btn = document.getElementById('sidebarToggle');
+            sidebar.classList.add('collapsed');
+            body.classList.add('sidebar-collapsed');
+            if (btn) btn.title = 'Expand sidebar';
+            document.querySelectorAll('.nav-item').forEach(item => {
+                const label = item.querySelector('span')?.textContent || '';
+                item.setAttribute('data-tooltip', label);
+            });
+        }
+    } catch(e) {}
+}
+
 // ===== Toast Notifications =====
 function showToast(message, type = 'success') {
     const container = document.getElementById('toastContainer');
@@ -4020,6 +4063,9 @@ function initApp() {
     });
 
     document.getElementById('sidebarOverlay').addEventListener('click', closeMobileSidebar);
+
+    // Restore desktop sidebar collapsed state
+    restoreSidebarState();
 
     // Close modals on overlay click
     document.querySelectorAll('.modal-overlay').forEach(overlay => {

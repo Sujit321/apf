@@ -104,6 +104,44 @@ body {
 .sidebar-header {
     padding: 24px 20px;
     border-bottom: 1px solid var(--border);
+    position: relative;
+}
+
+.sidebar-toggle-btn {
+    position: absolute;
+    top: 50%;
+    right: -14px;
+    transform: translateY(-50%);
+    width: 28px;
+    height: 28px;
+    background: var(--bg-card);
+    border: 1px solid var(--border-light);
+    border-radius: 50%;
+    color: var(--text-muted);
+    font-size: 11px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.3s ease;
+    z-index: 110;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+}
+
+.sidebar-toggle-btn:hover {
+    background: var(--accent);
+    color: #fff;
+    border-color: var(--accent);
+    transform: translateY(-50%) scale(1.1);
+}
+
+.sidebar.collapsed .sidebar-toggle-btn {
+    right: 50%;
+    transform: translateY(-50%) translateX(50%) rotate(180deg);
+}
+
+.sidebar.collapsed .sidebar-toggle-btn:hover {
+    transform: translateY(-50%) translateX(50%) rotate(180deg) scale(1.1);
 }
 
 .logo {
@@ -275,6 +313,101 @@ body {
     min-width: 0;
     max-width: calc(100vw - var(--sidebar-width));
     overflow-x: hidden;
+    transition: margin-left 0.3s cubic-bezier(0.4, 0, 0.2, 1), max-width 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* ===== Collapsed Sidebar (Desktop) ===== */
+.sidebar.collapsed {
+    width: 68px;
+}
+
+.sidebar.collapsed .logo-text {
+    opacity: 0;
+    width: 0;
+    overflow: hidden;
+    pointer-events: none;
+}
+
+.sidebar.collapsed .sidebar-header {
+    padding: 24px 13px;
+}
+
+.sidebar.collapsed .sidebar-nav {
+    padding: 16px 8px;
+}
+
+.sidebar.collapsed .nav-item {
+    justify-content: center;
+    padding: 12px;
+    gap: 0;
+}
+
+.sidebar.collapsed .nav-item span {
+    display: none;
+}
+
+.sidebar.collapsed .nav-item i {
+    font-size: 17px;
+}
+
+.sidebar.collapsed .nav-item.active::before {
+    height: 20px;
+}
+
+.sidebar.collapsed .nav-divider {
+    margin: 4px 8px;
+}
+
+.sidebar.collapsed .sidebar-footer {
+    padding: 12px 8px;
+}
+
+.sidebar.collapsed .user-details {
+    display: none;
+}
+
+.sidebar.collapsed .user-info {
+    justify-content: center;
+}
+
+.sidebar.collapsed .sidebar-lock-btn {
+    position: static;
+    margin: 8px auto 0;
+}
+
+/* Nav item tooltip on collapsed */
+.sidebar.collapsed .nav-item {
+    position: relative;
+}
+
+.sidebar.collapsed .nav-item::after {
+    content: attr(data-tooltip);
+    position: absolute;
+    left: calc(100% + 12px);
+    top: 50%;
+    transform: translateY(-50%) scale(0.9);
+    background: rgba(0,0,0,0.9);
+    color: #fff;
+    font-size: 12px;
+    font-weight: 500;
+    padding: 6px 12px;
+    border-radius: 8px;
+    white-space: nowrap;
+    opacity: 0;
+    pointer-events: none;
+    transition: all 0.2s ease;
+    z-index: 200;
+}
+
+.sidebar.collapsed .nav-item:hover::after {
+    opacity: 1;
+    transform: translateY(-50%) scale(1);
+}
+
+/* Adjust main content when sidebar collapsed */
+body.sidebar-collapsed .main-content {
+    margin-left: 68px;
+    max-width: calc(100vw - 68px);
 }
 
 .content-section {
