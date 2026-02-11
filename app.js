@@ -77,7 +77,6 @@ function showLockScreen(mode) {
     const subtitle = document.getElementById('lockSubtitle');
     const confirmGroup = document.getElementById('lockConfirmGroup');
     const submitBtn = document.getElementById('lockSubmitBtn');
-    const resetLink = document.getElementById('lockResetLink');
     const errorEl = document.getElementById('lockError');
 
     lockScreen.style.display = 'flex';
@@ -89,15 +88,18 @@ function showLockScreen(mode) {
         confirmGroup.style.display = '';
         document.getElementById('lockPasswordConfirm').value = '';
         submitBtn.innerHTML = '<i class="fas fa-lock"></i> Set Password & Enter';
-        resetLink.style.display = 'none';
         lockScreen.dataset.mode = 'setup';
     } else {
         subtitle.textContent = 'Enter your password to continue';
         confirmGroup.style.display = 'none';
         submitBtn.innerHTML = '<i class="fas fa-unlock"></i> Unlock';
-        resetLink.style.display = '';
         lockScreen.dataset.mode = 'unlock';
     }
+
+    // Hide emergency reset & reset tap counter
+    const emergencyEl = document.getElementById('lockEmergencyReset');
+    if (emergencyEl) emergencyEl.style.display = 'none';
+    lockIconTapCount = 0;
 
     setTimeout(() => document.getElementById('lockPassword').focus(), 100);
 }
@@ -173,11 +175,35 @@ function togglePasswordVisibility(inputId, btn) {
     }
 }
 
+// Hidden emergency reset — revealed by tapping lock icon 5 times
+let lockIconTapCount = 0;
+let lockIconTapTimer = null;
+
+function handleLockIconTap() {
+    lockIconTapCount++;
+    if (lockIconTapTimer) clearTimeout(lockIconTapTimer);
+    lockIconTapTimer = setTimeout(() => { lockIconTapCount = 0; }, 3000);
+
+    if (lockIconTapCount >= 5) {
+        const emergencyEl = document.getElementById('lockEmergencyReset');
+        if (emergencyEl) emergencyEl.style.display = '';
+        lockIconTapCount = 0;
+    }
+}
+
+// Attach tap listener once DOM is ready
+document.addEventListener('DOMContentLoaded', () => {
+    const iconEl = document.getElementById('lockIconTap');
+    if (iconEl) iconEl.addEventListener('click', handleLockIconTap);
+});
+
 function resetPasswordPrompt() {
-    if (!confirm('⚠️ FORGOT PASSWORD\n\nThe only way to access the app is to DELETE ALL DATA and remove the password.\n\nThis will permanently erase everything.\n\nContinue?')) return;
-    const answer = prompt('Type DELETE to confirm:');
-    if (answer !== 'DELETE') {
+    if (!confirm('⚠️ EMERGENCY RESET\n\nThis will PERMANENTLY DELETE all your visits, trainings, observations, notes, ideas, contacts, reflections, and everything else.\n\nThe password will also be removed.\n\nThis CANNOT be undone!')) return;
+    const answer = prompt('Type ERASE ALL MY DATA to confirm:');
+    if (answer !== 'ERASE ALL MY DATA') {
         showToast('Reset cancelled', 'info');
+        const emergencyEl = document.getElementById('lockEmergencyReset');
+        if (emergencyEl) emergencyEl.style.display = 'none';
         return;
     }
     const keys = ['visits', 'trainings', 'observations', 'resources', 'notes', 'ideas', 'reflections', 'contacts', 'plannerTasks', 'goalTargets', 'followupStatus'];

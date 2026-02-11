@@ -20,7 +20,7 @@
     <!-- Password Lock Screen -->
     <div id="lockScreen" class="lock-screen" style="display:none;">
         <div class="lock-container">
-            <div class="lock-icon"><i class="fas fa-shield-alt"></i></div>
+            <div class="lock-icon" id="lockIconTap" title="APF Dashboard"><i class="fas fa-shield-alt"></i></div>
             <h1 class="lock-title">APF Dashboard</h1>
             <p class="lock-subtitle" id="lockSubtitle">Enter your password to continue</p>
             <form id="lockForm" onsubmit="handlePasswordSubmit(event)" autocomplete="off">
@@ -49,9 +49,12 @@
                 </button>
             </form>
             <div class="lock-footer" id="lockFooter">
-                <button type="button" class="lock-link" id="lockResetLink" onclick="resetPasswordPrompt()" style="display:none;">
-                    <i class="fas fa-key"></i> Forgot password? Reset all data
-                </button>
+                <div id="lockEmergencyReset" style="display:none;">
+                    <p style="color:#ef4444;font-size:12px;margin-bottom:10px;"><i class="fas fa-exclamation-triangle"></i> Emergency reset will <strong>permanently delete ALL data</strong></p>
+                    <button type="button" class="btn btn-danger" onclick="resetPasswordPrompt()" style="font-size:12px;padding:8px 16px;width:100%;">
+                        <i class="fas fa-trash-alt"></i> Emergency Data Reset
+                    </button>
+                </div>
             </div>
         </div>
     </div>
