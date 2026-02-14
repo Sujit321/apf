@@ -1,5 +1,19 @@
 // ===== APF Resource Person Dashboard — App Logic =====
 
+// ===== Security: HTTPS Check for Crypto API =====
+if (typeof window !== 'undefined' && window.location.protocol !== 'https:' && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
+    console.warn('[APF Security] Running without HTTPS. crypto.subtle may not be available. Data encryption requires a secure context (HTTPS).');
+}
+
+// ===== Global Error Handlers =====
+window.onerror = function(msg, src, line, col, err) {
+    console.error(`[APF Error] ${msg} at ${src}:${line}:${col}`, err);
+    return false;
+};
+window.addEventListener('unhandledrejection', function(e) {
+    console.error('[APF] Unhandled promise rejection:', e.reason);
+});
+
 // ===== Data Layer (In-Memory Only — No Browser Storage) =====
 const DB = {
     _store: {},
@@ -372,13 +386,32 @@ let _sessionPassword = null;
 // Session persistence across page refresh (sessionStorage — cleared on tab close)
 const SessionPersist = {
     _KEY: 'apf_session_token',
+    _XOR_KEY: 'ApfDashboard2026SecureSession',
+    _obfuscate(str) {
+        // Simple XOR obfuscation to avoid plain-text password in sessionStorage
+        const key = this._XOR_KEY;
+        let result = '';
+        for (let i = 0; i < str.length; i++) {
+            result += String.fromCharCode(str.charCodeAt(i) ^ key.charCodeAt(i % key.length));
+        }
+        return btoa(result);
+    },
+    _deobfuscate(encoded) {
+        const str = atob(encoded);
+        const key = this._XOR_KEY;
+        let result = '';
+        for (let i = 0; i < str.length; i++) {
+            result += String.fromCharCode(str.charCodeAt(i) ^ key.charCodeAt(i % key.length));
+        }
+        return result;
+    },
     save(password) {
-        try { sessionStorage.setItem(this._KEY, btoa(password)); } catch {}
+        try { sessionStorage.setItem(this._KEY, this._obfuscate(password)); } catch {}
     },
     restore() {
         try {
             const t = sessionStorage.getItem(this._KEY);
-            return t ? atob(t) : null;
+            return t ? this._deobfuscate(t) : null;
         } catch { return null; }
     },
     clear() {
@@ -389,7 +422,7 @@ const SessionPersist = {
 // Unsaved changes tracking
 let hasUnsavedChanges = false;
 let lastEncSaveTime = null;
-const ENCRYPTED_DATA_KEYS = ['visits', 'trainings', 'observations', 'resources', 'notes', 'ideas', 'reflections', 'contacts', 'plannerTasks', 'goalTargets', 'followupStatus'];
+const ENCRYPTED_DATA_KEYS = ['visits', 'trainings', 'observations', 'resources', 'notes', 'ideas', 'reflections', 'contacts', 'plannerTasks', 'goalTargets', 'followupStatus', 'worklog', 'userProfile', 'meetings', 'growthAssessments', 'growthActionPlans'];
 
 // ===== Google Drive Auto-Backup (via Google Apps Script) =====
 const GoogleDriveSync = {
@@ -778,6 +811,8 @@ async function performAutoSave() {
         } else {
             clearUnsavedChanges();
             updateEncryptedFileStatus();
+            // Clear localStorage fallback since proper encrypted save succeeded
+            clearLocalStorageFallback();
             // 3. Schedule Google Drive backup if enabled
             GoogleDriveSync.scheduleAutoBackup();
         }
@@ -808,22 +843,48 @@ function stopPeriodicSave() {
     if (_periodicSaveInterval) { clearInterval(_periodicSaveInterval); _periodicSaveInterval = null; }
 }
 
-// Wrap DB.set to track changes
+// Wrap DB.set to track changes and persist to localStorage fallback
 const _originalDBSet = DB.set.bind(DB);
 DB.set = function(key, data) {
     _originalDBSet(key, data);
     if (ENCRYPTED_DATA_KEYS.includes(key)) {
         markUnsavedChanges();
+        // localStorage fallback when no password/encryption is set up
+        try { localStorage.setItem('apf_data_' + key, JSON.stringify(data)); } catch(e) {}
     }
 };
+
+// Restore data from localStorage fallback (used when no password/encryption is configured)
+function restoreFromLocalStorage() {
+    let restored = 0;
+    ENCRYPTED_DATA_KEYS.forEach(key => {
+        try {
+            const raw = localStorage.getItem('apf_data_' + key);
+            if (raw) {
+                const data = JSON.parse(raw);
+                if (Array.isArray(data) && data.length > 0) {
+                    _originalDBSet(key, data);
+                    restored++;
+                }
+            }
+        } catch(e) { console.warn('localStorage restore failed for', key, e); }
+    });
+    return restored;
+}
+
+// Clear localStorage fallback data (called after proper encrypted save succeeds)
+function clearLocalStorageFallback() {
+    ENCRYPTED_DATA_KEYS.forEach(key => {
+        try { localStorage.removeItem('apf_data_' + key); } catch(e) {}
+    });
+}
 
 async function getEncryptionPassword() {
     // Use session password if available
     if (_sessionPassword) return _sessionPassword;
-    return new Promise((resolve) => {
-        const pwd = prompt('Enter your password to encrypt/decrypt the file:');
-        resolve(pwd);
-    });
+    // Fallback: ask user to re-authenticate
+    showToast('Session expired — please refresh and log in again', 'error');
+    return null;
 }
 
 async function saveEncryptedFile() {
@@ -925,6 +986,7 @@ async function loadEncryptedFile(event) {
         await EncryptedCache.save(pwd);
         clearUnsavedChanges();
         updateEncryptedFileStatus();
+        applyProfileToUI();
         showToast('Data restored from encrypted file! 🔓', 'success');
         setTimeout(() => navigateTo('dashboard'), 500);
     } catch (err) {
@@ -1162,7 +1224,7 @@ async function handlePasswordSubmit(e) {
                 if (!loaded && EncryptedCache.exists()) {
                     try {
                         const data = await EncryptedCache.load(password);
-                        if (data._meta && data._meta.app === 'APF Dashboard') {
+                        if (data && data._meta && data._meta.app === 'APF Dashboard') {
                             DB.clear();
                             ENCRYPTED_DATA_KEYS.forEach(k => {
                                 if (data[k] !== undefined && Array.isArray(data[k])) {
@@ -1400,8 +1462,12 @@ function refreshSection(section) {
         case 'teachers': renderTeacherGrowth(); break;
         case 'reflections': initReflectionMonthFilter(); renderReflections(); break;
         case 'contacts': renderContacts(); break;
+        case 'meetings': renderMeetings(); break;
+        case 'worklog': renderWorkLog(); break;
         case 'livesync': break;
         case 'backup': renderBackupInfo(); break;
+        case 'settings': renderSettings(); break;
+        case 'growth': renderGrowthFramework(); break;
     }
 }
 
@@ -1961,6 +2027,16 @@ function renderDashboard() {
     const opts = { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' };
     document.getElementById('dashboardDate').textContent = now.toLocaleDateString('en-IN', opts);
 
+    // Personalized greeting
+    const profile = getProfile();
+    const greetEl = document.getElementById('dashboardGreeting');
+    if (greetEl) {
+        const hour = now.getHours();
+        const timeGreet = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening';
+        const name = profile.name ? profile.name.split(' ')[0] : '';
+        greetEl.textContent = name ? `${timeGreet}, ${name}! 👋` : 'Welcome back! 👋';
+    }
+
     // Metrics
     document.getElementById('metricTotalVisits').textContent = visits.length;
     document.getElementById('metricTrainings').textContent = trainings.length;
@@ -1997,10 +2073,12 @@ function renderDashboard() {
     }
 
     // Recent activity
+    const meetings = DB.get('meetings');
     const allItems = [
         ...visits.map(v => ({ type: 'visit', icon: 'fa-school', cls: 'visit', text: `Visit to <strong>${escapeHtml(v.school)}</strong> — ${v.status}`, time: v.createdAt || v.date, date: v.date })),
         ...trainings.map(t => ({ type: 'training', icon: 'fa-chalkboard-teacher', cls: 'training', text: `Training: <strong>${escapeHtml(t.title)}</strong>`, time: t.createdAt || t.date, date: t.date })),
         ...observations.map(o => ({ type: 'observation', icon: 'fa-clipboard-check', cls: 'observation', text: `Observation at <strong>${escapeHtml(o.school)}</strong> — ${escapeHtml(o.subject)}`, time: o.createdAt || o.date, date: o.date })),
+        ...meetings.map(m => ({ type: 'meeting', icon: 'fa-handshake', cls: 'meeting', text: `${escapeHtml(m.type || 'Meeting')}: <strong>${escapeHtml(m.title || '')}</strong>`, time: m.createdAt || m.date, date: m.date })),
     ].sort((a, b) => new Date(b.time) - new Date(a.time)).slice(0, 8);
 
     const actEl = document.getElementById('recentActivityList');
@@ -5363,7 +5441,7 @@ function generateMonthlyReport(output, visits, trainings, observations, month, y
 
     output.innerHTML = `<div class="report-content">
         <h2>Monthly Report — ${monthName} ${year}</h2>
-        <p class="report-subtitle">Report generated on ${new Date().toLocaleDateString('en-IN')}</p>
+        <p class="report-subtitle">Report by ${escapeHtml(getProfile().name || 'Resource Person')}${getProfile().district ? ' — ' + escapeHtml(getProfile().district) : ''} &bull; Generated on ${new Date().toLocaleDateString('en-IN')}</p>
 
         <div class="report-stats-grid">
             <div class="report-stat">
@@ -6474,6 +6552,7 @@ function renderWeeklyHeatmapChart(visits, trainings, observations) {
 function renderActivityTimeline(visits, trainings, observations) {
     const container = document.getElementById('activityTimeline');
     const countEl = document.getElementById('timelineCount');
+    if (!container || !countEl) return;
 
     const items = [
         ...visits.map(v => ({ type: 'visit', icon: 'fa-school', cls: 'tl-visit', title: v.school, detail: v.purpose || '', status: v.status, date: v.date, time: v.createdAt || v.date })),
@@ -6546,6 +6625,27 @@ function renderFollowups() {
                 teacher: o.teacher,
             });
         }
+    });
+
+    // Collect action items from meetings
+    const meetings = DB.get('meetings');
+    meetings.forEach(m => {
+        (m.actionItems || []).forEach((a, i) => {
+            if (a.text && a.text.trim()) {
+                const fId = `meeting_${m.id}_${i}`;
+                const isDone = a.done || followupStatus.some(f => f.id === fId && f.done);
+                followups.push({
+                    id: fId,
+                    source: 'meeting',
+                    school: m.title || 'Meeting',
+                    date: m.date,
+                    text: a.text + (a.assignee ? ` (→ ${a.assignee})` : ''),
+                    done: isDone,
+                    icon: 'fa-handshake',
+                    cls: 'followup-meeting',
+                });
+            }
+        });
     });
 
     followups.sort((a, b) => new Date(b.date) - new Date(a.date));
@@ -6935,6 +7035,515 @@ function renderIdeaList(ideas, container) {
     `).join('')}</div>`;
 }
 
+// ===== SCHOOL PROFILE IMPORT FROM EXCEL =====
+let _schoolImportRows = [];
+let _schoolImportFileName = '';
+
+function triggerSchoolProfileImport() {
+    document.getElementById('obsImportMenu')?.classList.remove('show');
+    document.getElementById('schoolProfileImportFile').click();
+}
+
+async function loadSchoolProfileImportPreview(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+    event.target.value = '';
+
+    _schoolImportFileName = file.name;
+    _schoolImportRows = [];
+
+    document.getElementById('schoolImportLoading').style.display = 'flex';
+    document.getElementById('schoolImportContent').style.display = 'none';
+    document.getElementById('schoolImportConfirmBtn').disabled = true;
+    document.getElementById('schoolProfileImportModal').classList.add('active');
+
+    try {
+        const data = await file.arrayBuffer();
+        const wb = XLSX.read(data, { type: 'array', cellDates: true });
+
+        let rows = [];
+        for (const sheetName of wb.SheetNames) {
+            const ws = wb.Sheets[sheetName];
+            const sheetRows = XLSX.utils.sheet_to_json(ws);
+            if (sheetRows.length > 0) rows = rows.concat(sheetRows);
+        }
+
+        if (rows.length === 0) {
+            showToast('No data found in Excel file', 'error');
+            closeModal('schoolProfileImportModal');
+            return;
+        }
+
+        // Check if it's a DMT file
+        const cols = Object.keys(rows[0]);
+        const isDMT = cols.some(c => c.includes('School Name') || c.includes('Teacher: Teacher Name') || c.includes('Practice Type'));
+        if (!isDMT) {
+            showToast('This does not appear to be a DMT Field Notes Excel. Needs "School Name" column.', 'error', 6000);
+            closeModal('schoolProfileImportModal');
+            return;
+        }
+
+        _schoolImportRows = rows;
+
+        // Extract unique values for filters
+        const states = [...new Set(rows.map(r => (r['State'] || '').trim()).filter(Boolean))].sort();
+        const blocks = [...new Set(rows.map(r => (r['Block Name'] || '').trim()).filter(Boolean))].sort();
+        const clusters = [...new Set(rows.map(r => (r['Cluster'] || '').trim()).filter(Boolean))].sort();
+        const observers = [...new Set(rows.map(r => (r['Actual Observer: Full Name'] || r['Primary Observer: Full Name'] || '').trim()).filter(Boolean))].sort();
+
+        const populateSelect = (id, label, values) => {
+            const el = document.getElementById(id);
+            if (!el) return;
+            el.innerHTML = `<option value="all">All ${label} (${values.length})</option>` +
+                values.map(v => `<option value="${escapeHtml(v)}">${escapeHtml(v)}</option>`).join('');
+        };
+
+        populateSelect('schoolImportFilterState', 'States', states);
+        populateSelect('schoolImportFilterBlock', 'Blocks', blocks);
+        populateClusterCheckboxes('schoolImportClusterList', clusters, 'previewSchoolProfileImport()');
+        updateClusterCount('schoolImportFilterCluster', 'schoolImportClusterCount');
+        populateSelect('schoolImportFilterObserver', 'Observers', observers);
+
+        document.getElementById('schoolImportFileName').textContent = file.name;
+
+        document.getElementById('schoolImportLoading').style.display = 'none';
+        document.getElementById('schoolImportContent').style.display = 'block';
+        previewSchoolProfileImport();
+    } catch (err) {
+        console.error('School profile import read error:', err);
+        showToast('Failed to read Excel: ' + err.message, 'error');
+        closeModal('schoolProfileImportModal');
+    }
+}
+
+function getSchoolImportFilters() {
+    return {
+        state: document.getElementById('schoolImportFilterState')?.value || 'all',
+        block: document.getElementById('schoolImportFilterBlock')?.value || 'all',
+        clusters: getSelectedClusters('schoolImportClusterList'),
+        observer: document.getElementById('schoolImportFilterObserver')?.value || 'all'
+    };
+}
+
+function getFilteredSchoolImportRows() {
+    const f = getSchoolImportFilters();
+    const anyFilter = f.state !== 'all' || f.block !== 'all' || f.clusters !== null || f.observer !== 'all';
+    if (!anyFilter) return { rows: _schoolImportRows, anyFilter: false };
+
+    const filtered = _schoolImportRows.filter(row => {
+        const rowState = (row['State'] || '').trim();
+        const rowBlock = (row['Block Name'] || '').trim();
+        const rowCluster = (row['Cluster'] || '').trim();
+        const rowObserver = (row['Actual Observer: Full Name'] || row['Primary Observer: Full Name'] || '').trim();
+        if (f.state !== 'all' && rowState !== f.state) return false;
+        if (f.block !== 'all' && rowBlock !== f.block) return false;
+        if (f.clusters !== null && !f.clusters.has(rowCluster)) return false;
+        if (f.observer !== 'all' && rowObserver !== f.observer) return false;
+        return true;
+    });
+    return { rows: filtered, anyFilter: true };
+}
+
+function extractSchoolProfilesFromRows(rows) {
+    const schoolMap = {};
+    rows.forEach(row => {
+        const schoolName = (row['School Name'] || '').trim();
+        if (!schoolName) return;
+        const key = schoolName.toLowerCase();
+
+        if (!schoolMap[key]) {
+            schoolMap[key] = {
+                name: schoolName,
+                block: (row['Block Name'] || '').trim(),
+                cluster: (row['Cluster'] || '').trim(),
+                district: (row['District Name'] || '').trim(),
+                state: (row['State'] || '').trim(),
+                teachers: new Set(),
+                subjects: new Set(),
+                totalObservations: 0,
+                dates: [],
+                observers: new Set()
+            };
+        }
+
+        const s = schoolMap[key];
+        s.totalObservations++;
+        const teacher = (row['Teacher: Teacher Name'] || '').trim();
+        if (teacher) s.teachers.add(teacher);
+        const subject = (row['Subject'] || '').trim();
+        if (subject) s.subjects.add(subject);
+        const observer = (row['Actual Observer: Full Name'] || row['Primary Observer: Full Name'] || '').trim();
+        if (observer) s.observers.add(observer);
+        if (!s.block && row['Block Name']) s.block = (row['Block Name'] || '').trim();
+        if (!s.cluster && row['Cluster']) s.cluster = (row['Cluster'] || '').trim();
+        if (!s.district && row['District Name']) s.district = (row['District Name'] || '').trim();
+        if (!s.state && row['State']) s.state = (row['State'] || '').trim();
+
+        const rawDate = row['Response Date'];
+        if (rawDate instanceof Date) {
+            s.dates.push(rawDate.toISOString().split('T')[0]);
+        } else if (typeof rawDate === 'string' && rawDate) {
+            const parsed = new Date(rawDate);
+            if (!isNaN(parsed)) s.dates.push(parsed.toISOString().split('T')[0]);
+        }
+    });
+
+    // Convert Sets to arrays and sort
+    return Object.values(schoolMap).map(s => ({
+        ...s,
+        teachers: [...s.teachers],
+        subjects: [...s.subjects],
+        observers: [...s.observers],
+        dates: s.dates.sort(),
+        lastDate: s.dates.length > 0 ? s.dates.sort().pop() : '',
+        firstDate: s.dates.length > 0 ? s.dates.sort()[0] : ''
+    })).sort((a, b) => b.totalObservations - a.totalObservations);
+}
+
+function previewSchoolProfileImport() {
+    const { rows, anyFilter } = getFilteredSchoolImportRows();
+    const totalRows = _schoolImportRows.length;
+    const schools = extractSchoolProfilesFromRows(rows);
+    const allSchools = extractSchoolProfilesFromRows(_schoolImportRows);
+
+    const previewEl = document.getElementById('schoolImportPreview');
+    const countEl = document.getElementById('schoolImportCount');
+    const listEl = document.getElementById('schoolImportSchoolList');
+    const btn = document.getElementById('schoolImportConfirmBtn');
+    const totalEl = document.getElementById('schoolImportTotalSchools');
+
+    totalEl.textContent = allSchools.length;
+
+    const blocks = [...new Set(schools.map(s => s.block).filter(Boolean))];
+    const clusters = [...new Set(schools.map(s => s.cluster).filter(Boolean))];
+    const totalTeachers = new Set(schools.flatMap(s => s.teachers)).size;
+
+    const filterLabel = anyFilter
+        ? `<strong>${schools.length}</strong> of ${allSchools.length} schools match your filters (from ${rows.length.toLocaleString()} rows)`
+        : `All <strong>${allSchools.length}</strong> schools found (from ${totalRows.toLocaleString()} rows)`;
+
+    // Check how many are already in visits
+    const existingVisits = DB.get('visits');
+    const existingSchoolKeys = new Set(existingVisits.map(v => (v.school || '').trim().toLowerCase()));
+    const newSchools = schools.filter(s => !existingSchoolKeys.has(s.name.toLowerCase()));
+    const existingCount = schools.length - newSchools.length;
+
+    previewEl.innerHTML = `
+        <div class="unload-preview-stats">
+            <div class="unload-preview-count" style="color: var(--accent)">
+                <i class="fas fa-${anyFilter ? 'filter' : 'database'}"></i>
+                ${filterLabel}
+            </div>
+            <div class="unload-preview-details">
+                <span><i class="fas fa-school"></i> ${schools.length} Schools</span>
+                <span><i class="fas fa-plus-circle" style="color:#10b981;"></i> ${newSchools.length} New</span>
+                <span><i class="fas fa-check-circle" style="color:#f59e0b;"></i> ${existingCount} Already Exist</span>
+                <span><i class="fas fa-chalkboard-teacher"></i> ${totalTeachers} Teachers</span>
+                <span><i class="fas fa-map-marker-alt"></i> ${blocks.length} Blocks</span>
+                <span><i class="fas fa-layer-group"></i> ${clusters.length} Clusters</span>
+            </div>
+        </div>`;
+
+    // Render school cards
+    if (schools.length > 0) {
+        listEl.innerHTML = `<div class="school-import-grid">${schools.slice(0, 50).map(s => {
+            const isExisting = existingSchoolKeys.has(s.name.toLowerCase());
+            return `<div class="school-import-card ${isExisting ? 'existing' : 'new-school'}">
+                <div class="school-import-card-header">
+                    <span class="school-import-name">${escapeHtml(s.name)}</span>
+                    <span class="school-import-badge ${isExisting ? 'badge-existing' : 'badge-new'}">${isExisting ? 'Exists' : 'New'}</span>
+                </div>
+                <div class="school-import-meta">
+                    ${s.block ? `<span><i class="fas fa-map-marker-alt"></i> ${escapeHtml(s.block)}</span>` : ''}
+                    ${s.cluster ? `<span><i class="fas fa-layer-group"></i> ${escapeHtml(s.cluster)}</span>` : ''}
+                    ${s.district ? `<span><i class="fas fa-city"></i> ${escapeHtml(s.district)}</span>` : ''}
+                </div>
+                <div class="school-import-stats">
+                    <span><i class="fas fa-clipboard-list"></i> ${s.totalObservations} obs</span>
+                    <span><i class="fas fa-chalkboard-teacher"></i> ${s.teachers.length} teachers</span>
+                    ${s.lastDate ? `<span><i class="fas fa-calendar"></i> ${new Date(s.lastDate).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: '2-digit' })}</span>` : ''}
+                </div>
+            </div>`;
+        }).join('')}</div>${schools.length > 50 ? `<p style="text-align:center;color:var(--text-muted);font-size:12px;margin-top:8px;">Showing 50 of ${schools.length} schools...</p>` : ''}`;
+    } else {
+        listEl.innerHTML = '<p style="text-align:center;color:var(--text-muted);padding:20px;">No schools found matching filters.</p>';
+    }
+
+    btn.disabled = schools.length === 0;
+    countEl.textContent = schools.length;
+}
+
+function executeSchoolProfileImport() {
+    const { rows } = getFilteredSchoolImportRows();
+    const schools = extractSchoolProfilesFromRows(rows);
+    if (schools.length === 0) return;
+
+    const f = getSchoolImportFilters();
+    const filterDesc = [f.state !== 'all' ? `State: ${f.state}` : '', f.block !== 'all' ? `Block: ${f.block}` : '', f.clusters !== null ? `Clusters: ${[...f.clusters].join(', ')}` : '', f.observer !== 'all' ? `Observer: ${f.observer}` : ''].filter(Boolean).join(', ') || 'No filter';
+
+    if (!confirm(`Import ${schools.length} school profiles from "${_schoolImportFileName}"?\n\nFilter: ${filterDesc}\n\nThis will create planned visits for new schools and update block/cluster info for existing ones.`)) return;
+
+    let visits = DB.get('visits');
+    const existingSchoolKeys = new Map();
+    visits.forEach((v, i) => {
+        const key = (v.school || '').trim().toLowerCase();
+        if (!existingSchoolKeys.has(key)) existingSchoolKeys.set(key, i);
+    });
+
+    let newCount = 0;
+    let updatedCount = 0;
+
+    schools.forEach(s => {
+        const key = s.name.toLowerCase();
+
+        if (existingSchoolKeys.has(key)) {
+            // Update existing visit with missing info
+            const idx = existingSchoolKeys.get(key);
+            let changed = false;
+            if (!visits[idx].block && s.block) { visits[idx].block = s.block; changed = true; }
+            if (!visits[idx].cluster && s.cluster) { visits[idx].cluster = s.cluster; changed = true; }
+            if (!visits[idx].district && s.district) { visits[idx].district = s.district; changed = true; }
+            if (!visits[idx].state && s.state) { visits[idx].state = s.state; changed = true; }
+            if (changed) updatedCount++;
+        } else {
+            // Create a new planned visit for this school
+            const visit = {
+                id: DB.generateId(),
+                school: s.name,
+                block: s.block || '',
+                cluster: s.cluster || '',
+                district: s.district || '',
+                state: s.state || '',
+                date: new Date().toISOString().split('T')[0],
+                status: 'planned',
+                purpose: 'School Profile Import',
+                notes: `Imported from Excel. ${s.teachers.length} teachers observed, ${s.totalObservations} observations. Subjects: ${s.subjects.join(', ') || 'N/A'}.${s.firstDate && s.lastDate ? ' Data range: ' + s.firstDate + ' to ' + s.lastDate : ''}`,
+                followUp: '',
+                createdAt: new Date().toISOString(),
+                source: 'Excel Import'
+            };
+            visits.push(visit);
+            existingSchoolKeys.set(key, visits.length - 1);
+            newCount++;
+        }
+    });
+
+    DB.set('visits', visits);
+    closeModal('schoolProfileImportModal');
+    _schoolImportRows = [];
+    renderSchoolProfiles();
+
+    const msg = [];
+    if (newCount > 0) msg.push(`${newCount} new school profiles imported`);
+    if (updatedCount > 0) msg.push(`${updatedCount} existing schools updated`);
+    showToast(`${msg.join(', ')}! 🏫`, 'success', 5000);
+
+    // Switch to schools section
+    navigateTo('schools');
+}
+
+// ===== SCHOOL DELETE FUNCTIONS =====
+function deleteSchoolProfile(encodedKey) {
+    const schoolKey = decodeURIComponent(encodedKey);
+    const schoolMap = getSchoolData();
+    const school = schoolMap[schoolKey];
+    if (!school) { showToast('School not found', 'error'); return; }
+
+    const visitCount = school.visits.length;
+    const obsCount = school.observations.length;
+
+    let msg = `Delete school "${school.name}"?\n\n`;
+    if (visitCount > 0 || obsCount > 0) {
+        msg += `This will remove:\n`;
+        if (visitCount > 0) msg += `• ${visitCount} visit(s)\n`;
+        if (obsCount > 0) msg += `• ${obsCount} observation(s)\n`;
+        msg += `\nThis cannot be undone!`;
+    }
+
+    if (!confirm(msg)) return;
+
+    // Remove visits for this school
+    if (visitCount > 0) {
+        const visits = DB.get('visits');
+        const filtered = visits.filter(v => (v.school || '').trim().toLowerCase() !== schoolKey);
+        DB.set('visits', filtered);
+    }
+
+    // Remove observations for this school
+    if (obsCount > 0) {
+        const observations = DB.get('observations');
+        const filtered = observations.filter(o => (o.school || '').trim().toLowerCase() !== schoolKey);
+        DB.set('observations', filtered);
+    }
+
+    showToast(`School "${school.name}" deleted`, 'success');
+    renderSchoolProfiles();
+}
+
+function openBulkDeleteSchools() {
+    const schoolMap = getSchoolData();
+    const schools = Object.values(schoolMap);
+    if (schools.length === 0) {
+        showToast('No schools to delete', 'info');
+        return;
+    }
+
+    // Collect all visits to build filter data
+    const visits = DB.get('visits');
+
+    // Build per-school info for filtering
+    const schoolInfos = schools.map(s => {
+        const key = s.name.trim().toLowerCase();
+        const schoolVisits = visits.filter(v => (v.school || '').trim().toLowerCase() === key);
+        const sources = [...new Set(schoolVisits.map(v => v.source || 'Manual'))];
+        const blocks = [...new Set([s.block, ...schoolVisits.map(v => v.block)].filter(Boolean))];
+        const clusters = [...new Set(schoolVisits.map(v => v.cluster).filter(Boolean))];
+        const statuses = [...new Set(schoolVisits.map(v => v.status).filter(Boolean))];
+        return {
+            name: s.name,
+            key,
+            visitCount: s.visits.length,
+            obsCount: s.observations.length,
+            block: blocks[0] || '',
+            cluster: clusters[0] || '',
+            sources,
+            blocks,
+            clusters,
+            statuses
+        };
+    });
+
+    // Populate filter checkboxes
+    const allSources = [...new Set(schoolInfos.flatMap(s => s.sources))].sort();
+    const allBlocks = [...new Set(schoolInfos.map(s => s.block).filter(Boolean))].sort();
+    const allClusters = [...new Set(schoolInfos.flatMap(s => s.clusters))].sort();
+    const allStatuses = [...new Set(schoolInfos.flatMap(s => s.statuses))].sort();
+
+    _schoolDelInfos = schoolInfos;
+
+    populateSchoolDelCheckboxes('schoolDelSourceList', allSources);
+    populateSchoolDelCheckboxes('schoolDelBlockList', allBlocks);
+    populateSchoolDelCheckboxes('schoolDelClusterList', allClusters);
+    populateSchoolDelCheckboxes('schoolDelStatusList', allStatuses);
+
+    previewBulkDeleteSchools();
+    openModal('bulkDeleteSchoolsModal');
+}
+
+let _schoolDelInfos = [];
+
+function populateSchoolDelCheckboxes(containerId, values) {
+    const container = document.getElementById(containerId);
+    if (!container) return;
+    if (values.length === 0) {
+        container.innerHTML = '<span style="color:var(--text-muted);font-size:11px;padding:4px;">None available</span>';
+        return;
+    }
+    container.innerHTML = values.map(v =>
+        `<label class="bulk-checkbox"><input type="checkbox" checked onchange="previewBulkDeleteSchools()" value="${escapeHtml(v)}"> ${escapeHtml(v || 'N/A')}</label>`
+    ).join('');
+}
+
+function schoolDelFilterToggle(filter, mode) {
+    const idMap = { source: 'schoolDelSourceList', block: 'schoolDelBlockList', cluster: 'schoolDelClusterList', status: 'schoolDelStatusList' };
+    const container = document.getElementById(idMap[filter]);
+    if (!container) return;
+    const checkboxes = container.querySelectorAll('input[type="checkbox"]');
+    checkboxes.forEach(cb => cb.checked = mode === 'all');
+    previewBulkDeleteSchools();
+}
+
+function getSchoolDelChecked(containerId) {
+    const container = document.getElementById(containerId);
+    if (!container) return new Set();
+    return new Set([...container.querySelectorAll('input[type="checkbox"]:checked')].map(cb => cb.value));
+}
+
+function getBulkDeleteSchoolsFiltered() {
+    const sources = getSchoolDelChecked('schoolDelSourceList');
+    const blocks = getSchoolDelChecked('schoolDelBlockList');
+    const clusters = getSchoolDelChecked('schoolDelClusterList');
+    const statuses = getSchoolDelChecked('schoolDelStatusList');
+
+    return _schoolDelInfos.filter(s => {
+        const matchesSource = s.sources.some(src => sources.has(src));
+        const matchesBlock = !s.block || blocks.has(s.block);
+        const matchesCluster = s.clusters.length === 0 || s.clusters.some(c => clusters.has(c));
+        const matchesStatus = s.statuses.length === 0 || s.statuses.some(st => statuses.has(st));
+        return matchesSource && matchesBlock && matchesCluster && matchesStatus;
+    });
+}
+
+function previewBulkDeleteSchools() {
+    const filtered = getBulkDeleteSchoolsFiltered();
+    const total = _schoolDelInfos.length;
+    const totalVisits = filtered.reduce((s, x) => s + x.visitCount, 0);
+    const totalObs = filtered.reduce((s, x) => s + x.obsCount, 0);
+
+    const previewEl = document.getElementById('schoolDelPreview');
+    const countEl = document.getElementById('schoolDelCount');
+    const btn = document.getElementById('schoolDelConfirmBtn');
+
+    previewEl.innerHTML = `
+        <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:10px 14px;background:${filtered.length > 0 ? 'rgba(239,68,68,0.08)' : 'var(--bg-secondary)'};border-radius:10px;border:1px solid ${filtered.length > 0 ? 'rgba(239,68,68,0.2)' : 'var(--border)'};">
+            <span style="font-size:13px;color:${filtered.length > 0 ? '#ef4444' : 'var(--text-muted)'};">
+                <i class="fas fa-${filtered.length > 0 ? 'exclamation-triangle' : 'info-circle'}"></i>
+                <strong>${filtered.length}</strong> of ${total} schools will be deleted
+            </span>
+            <span style="font-size:11px;color:var(--text-muted);"><i class="fas fa-school"></i> ${totalVisits} visits</span>
+            <span style="font-size:11px;color:var(--text-muted);"><i class="fas fa-clipboard-list"></i> ${totalObs} observations</span>
+        </div>
+    `;
+
+    // Show school list preview
+    const listEl = document.getElementById('schoolDelList');
+    if (filtered.length > 0) {
+        listEl.innerHTML = filtered.slice(0, 40).map(s => `
+            <div class="school-del-item">
+                <div class="school-del-name"><i class="fas fa-school"></i> ${escapeHtml(s.name)}</div>
+                <div class="school-del-meta">
+                    ${s.block ? `<span>${escapeHtml(s.block)}</span>` : ''}
+                    <span>${s.visitCount} visits</span>
+                    <span>${s.obsCount} obs</span>
+                    <span class="school-del-source">${escapeHtml(s.sources.join(', '))}</span>
+                </div>
+            </div>
+        `).join('') + (filtered.length > 40 ? `<p style="text-align:center;color:var(--text-muted);font-size:11px;">...and ${filtered.length - 40} more</p>` : '');
+    } else {
+        listEl.innerHTML = '<p style="text-align:center;color:var(--text-muted);padding:16px;">No schools match current filters</p>';
+    }
+
+    btn.disabled = filtered.length === 0;
+    countEl.textContent = filtered.length;
+}
+
+function executeBulkDeleteSchools() {
+    const filtered = getBulkDeleteSchoolsFiltered();
+    if (filtered.length === 0) return;
+
+    const totalVisits = filtered.reduce((s, x) => s + x.visitCount, 0);
+    const totalObs = filtered.reduce((s, x) => s + x.obsCount, 0);
+
+    if (!confirm(`⚠️ DELETE ${filtered.length} SCHOOLS\n\nThis will permanently remove:\n• ${totalVisits} visit(s)\n• ${totalObs} observation(s)\n\nThis CANNOT be undone!`)) return;
+
+    const keysToDelete = new Set(filtered.map(s => s.key));
+
+    // Remove visits
+    let visits = DB.get('visits');
+    visits = visits.filter(v => !keysToDelete.has((v.school || '').trim().toLowerCase()));
+    DB.set('visits', visits);
+
+    // Remove observations
+    let observations = DB.get('observations');
+    observations = observations.filter(o => !keysToDelete.has((o.school || '').trim().toLowerCase()));
+    DB.set('observations', observations);
+
+    closeModal('bulkDeleteSchoolsModal');
+    _schoolDelInfos = [];
+    renderSchoolProfiles();
+    showToast(`Deleted ${filtered.length} schools (${totalVisits} visits, ${totalObs} observations removed)`, 'success', 5000);
+}
+
 // ===== SCHOOL PROFILES =====
 function getSchoolData() {
     const visits = DB.get('visits');
@@ -7005,6 +7614,7 @@ function renderSchoolProfiles() {
 
         return `
             <div class="school-profile-card" onclick="showSchoolDetail('${safeKey}')">
+                <div class="school-card-delete" onclick="event.stopPropagation(); deleteSchoolProfile('${safeKey}')" title="Delete this school"><i class="fas fa-times"></i></div>
                 <div class="school-card-name"><i class="fas fa-school"></i> ${escapeHtml(school.name)}</div>
                 <div class="school-card-block">${escapeHtml(school.block || 'Block not specified')}</div>
                 <div class="school-card-metrics">
@@ -7050,6 +7660,8 @@ function showSchoolDetail(encodedKey) {
             <div class="school-detail-header">
                 <button class="back-btn" onclick="renderSchoolProfiles()"><i class="fas fa-arrow-left"></i> Back</button>
                 <h2><i class="fas fa-school"></i> ${escapeHtml(school.name)}</h2>
+                <button class="btn btn-outline btn-sm" onclick="printSchoolHealthCard('${encodeURIComponent(schoolKey)}')" style="margin-left:auto;"><i class="fas fa-print"></i> Health Card</button>
+                <button class="btn btn-danger btn-sm" onclick="deleteSchoolProfile('${encodeURIComponent(schoolKey)}')"><i class="fas fa-trash"></i> Delete</button>
             </div>
             ${school.block ? `<p style="color:var(--text-muted);margin-bottom:20px;"><i class="fas fa-map-marker-alt" style="color:var(--amber);margin-right:6px;"></i>${escapeHtml(school.block)}</p>` : ''}
             <div class="school-detail-stats">
@@ -7077,6 +7689,362 @@ function showSchoolDetail(encodedKey) {
             </div>
         </div>
     `;
+}
+
+// ===== MEETING TRACKER =====
+function renderMeetings() {
+    const meetings = DB.get('meetings');
+    const filter = document.getElementById('meetingFilter')?.value || 'all';
+
+    // Filter
+    let filtered = [...meetings];
+    if (filter !== 'all') {
+        filtered = filtered.filter(m => m.type === filter);
+    }
+    filtered.sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+
+    // Stats
+    const now = new Date();
+    const thisMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+    const thisMonthMeetings = meetings.filter(m => (m.date || '').startsWith(thisMonth));
+    const totalActionItems = meetings.reduce((s, m) => s + (m.actionItems || []).filter(a => !a.done).length, 0);
+    const typeCount = {};
+    meetings.forEach(m => { typeCount[m.type || 'Other'] = (typeCount[m.type || 'Other'] || 0) + 1; });
+    const topType = Object.entries(typeCount).sort((a, b) => b[1] - a[1])[0];
+
+    const statsEl = document.getElementById('meetingStats');
+    if (statsEl) {
+        statsEl.innerHTML = `
+            <div class="meeting-stat-card"><div class="meeting-stat-icon" style="background:rgba(99,102,241,0.15);color:#6366f1;"><i class="fas fa-handshake"></i></div><div class="meeting-stat-value">${meetings.length}</div><div class="meeting-stat-label">Total Meetings</div></div>
+            <div class="meeting-stat-card"><div class="meeting-stat-icon" style="background:rgba(16,185,129,0.15);color:#10b981;"><i class="fas fa-calendar-check"></i></div><div class="meeting-stat-value">${thisMonthMeetings.length}</div><div class="meeting-stat-label">This Month</div></div>
+            <div class="meeting-stat-card"><div class="meeting-stat-icon" style="background:rgba(245,158,11,0.15);color:#f59e0b;"><i class="fas fa-exclamation-circle"></i></div><div class="meeting-stat-value">${totalActionItems}</div><div class="meeting-stat-label">Pending Actions</div></div>
+            <div class="meeting-stat-card"><div class="meeting-stat-icon" style="background:rgba(236,72,153,0.15);color:#ec4899;"><i class="fas fa-star"></i></div><div class="meeting-stat-value">${topType ? topType[0] : '-'}</div><div class="meeting-stat-label">Most Frequent</div></div>
+        `;
+    }
+
+    // Render list
+    const container = document.getElementById('meetingList');
+    if (!container) return;
+
+    if (filtered.length === 0) {
+        container.innerHTML = '<div class="idea-empty"><i class="fas fa-handshake"></i><h3>No meetings recorded</h3><p>Track your BRC, cluster, district, and other meetings here.</p></div>';
+        return;
+    }
+
+    const typeColors = { 'BRC Meeting': '#6366f1', 'Cluster Meeting': '#10b981', 'District Meeting': '#f59e0b', 'SDMC Meeting': '#ec4899', 'Parent-Teacher Meeting': '#8b5cf6', 'Convergence Meeting': '#3b82f6', 'Review Meeting': '#ef4444', 'Other': '#64748b' };
+
+    container.innerHTML = filtered.map(m => {
+        const color = typeColors[m.type] || '#64748b';
+        const pendingActions = (m.actionItems || []).filter(a => !a.done).length;
+        const totalActions = (m.actionItems || []).length;
+        return `
+            <div class="meeting-card">
+                <div class="meeting-card-header">
+                    <span class="meeting-type-badge" style="background:${color}20;color:${color};border:1px solid ${color}40;">${escapeHtml(m.type || 'Meeting')}</span>
+                    <span class="meeting-date"><i class="fas fa-calendar-alt"></i> ${m.date ? new Date(m.date).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : 'N/A'}</span>
+                    <div class="meeting-card-actions">
+                        <button class="btn-icon-sm" onclick="openMeetingModal('${m.id}')" title="Edit"><i class="fas fa-edit"></i></button>
+                        <button class="btn-icon-sm" onclick="deleteMeeting('${m.id}')" title="Delete"><i class="fas fa-trash"></i></button>
+                    </div>
+                </div>
+                <div class="meeting-card-title">${escapeHtml(m.title || 'Untitled Meeting')}</div>
+                ${m.location ? `<div class="meeting-card-meta"><i class="fas fa-map-marker-alt"></i> ${escapeHtml(m.location)}</div>` : ''}
+                ${m.organizer ? `<div class="meeting-card-meta"><i class="fas fa-user-tie"></i> ${escapeHtml(m.organizer)}</div>` : ''}
+                ${m.attendees ? `<div class="meeting-card-meta"><i class="fas fa-users"></i> ${escapeHtml(m.attendees)}</div>` : ''}
+                ${m.agenda ? `<div class="meeting-card-detail"><strong>Agenda:</strong> ${escapeHtml(m.agenda)}</div>` : ''}
+                ${m.decisions ? `<div class="meeting-card-detail"><strong>Decisions:</strong> ${escapeHtml(m.decisions)}</div>` : ''}
+                ${m.keyTakeaways ? `<div class="meeting-card-detail"><strong>Key Takeaways:</strong> ${escapeHtml(m.keyTakeaways)}</div>` : ''}
+                ${totalActions > 0 ? `
+                    <div class="meeting-actions-section">
+                        <strong>Action Items (${totalActions - pendingActions}/${totalActions} done):</strong>
+                        <div class="meeting-action-progress"><div class="meeting-action-bar" style="width:${totalActions > 0 ? Math.round(((totalActions - pendingActions) / totalActions) * 100) : 0}%"></div></div>
+                        <ul class="meeting-action-list">${(m.actionItems || []).map((a, i) => `
+                            <li class="${a.done ? 'done' : ''}">
+                                <label><input type="checkbox" ${a.done ? 'checked' : ''} onchange="toggleMeetingAction('${m.id}', ${i})"> ${escapeHtml(a.text)}</label>
+                                ${a.assignee ? `<span class="action-assignee">${escapeHtml(a.assignee)}</span>` : ''}
+                            </li>`).join('')}
+                        </ul>
+                    </div>` : ''}
+                ${m.nextMeetingDate ? `<div class="meeting-card-meta" style="margin-top:8px;color:#6366f1;"><i class="fas fa-forward"></i> Next meeting: ${new Date(m.nextMeetingDate).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}</div>` : ''}
+            </div>
+        `;
+    }).join('');
+}
+
+function openMeetingModal(id) {
+    const form = document.getElementById('meetingForm');
+    form.reset();
+    document.getElementById('meetingId').value = '';
+    document.getElementById('meetingModalTitle').innerHTML = '<i class="fas fa-handshake"></i> New Meeting';
+    document.getElementById('meetingActionItemsContainer').innerHTML = '';
+    document.getElementById('meetingDate').value = new Date().toISOString().split('T')[0];
+
+    if (id) {
+        const meetings = DB.get('meetings');
+        const m = meetings.find(x => x.id === id);
+        if (m) {
+            document.getElementById('meetingModalTitle').innerHTML = '<i class="fas fa-handshake"></i> Edit Meeting';
+            document.getElementById('meetingId').value = m.id;
+            document.getElementById('meetingTitle').value = m.title || '';
+            document.getElementById('meetingType').value = m.type || 'Other';
+            document.getElementById('meetingDate').value = m.date || '';
+            document.getElementById('meetingLocation').value = m.location || '';
+            document.getElementById('meetingOrganizer').value = m.organizer || '';
+            document.getElementById('meetingAttendees').value = m.attendees || '';
+            document.getElementById('meetingAgenda').value = m.agenda || '';
+            document.getElementById('meetingDecisions').value = m.decisions || '';
+            document.getElementById('meetingKeyTakeaways').value = m.keyTakeaways || '';
+            document.getElementById('meetingNextDate').value = m.nextMeetingDate || '';
+            // Render action items
+            const container = document.getElementById('meetingActionItemsContainer');
+            container.innerHTML = (m.actionItems || []).map((a, i) => getMeetingActionItemHtml(i, a.text, a.assignee, a.done)).join('');
+        }
+    }
+    openModal('meetingModal');
+}
+
+function getMeetingActionItemHtml(index, text, assignee, done) {
+    return `<div class="meeting-action-row" data-index="${index}">
+        <input type="text" class="form-control meeting-action-text" placeholder="Action item..." value="${escapeHtml(text || '')}" style="flex:1;">
+        <input type="text" class="form-control meeting-action-assignee" placeholder="Assigned to..." value="${escapeHtml(assignee || '')}" style="width:140px;">
+        <label class="meeting-action-done-label"><input type="checkbox" class="meeting-action-done" ${done ? 'checked' : ''}> Done</label>
+        <button type="button" class="btn-icon-sm" onclick="this.closest('.meeting-action-row').remove()" title="Remove"><i class="fas fa-times"></i></button>
+    </div>`;
+}
+
+function addMeetingActionItem() {
+    const container = document.getElementById('meetingActionItemsContainer');
+    const index = container.children.length;
+    container.insertAdjacentHTML('beforeend', getMeetingActionItemHtml(index, '', '', false));
+}
+
+function saveMeeting(e) {
+    e.preventDefault();
+    const meetings = DB.get('meetings');
+    const id = document.getElementById('meetingId').value;
+
+    // Collect action items
+    const actionRows = document.querySelectorAll('#meetingActionItemsContainer .meeting-action-row');
+    const actionItems = [];
+    actionRows.forEach(row => {
+        const text = row.querySelector('.meeting-action-text').value.trim();
+        if (text) {
+            actionItems.push({
+                text,
+                assignee: row.querySelector('.meeting-action-assignee').value.trim(),
+                done: row.querySelector('.meeting-action-done').checked
+            });
+        }
+    });
+
+    const meeting = {
+        id: id || DB.generateId(),
+        title: document.getElementById('meetingTitle').value.trim(),
+        type: document.getElementById('meetingType').value,
+        date: document.getElementById('meetingDate').value,
+        location: document.getElementById('meetingLocation').value.trim(),
+        organizer: document.getElementById('meetingOrganizer').value.trim(),
+        attendees: document.getElementById('meetingAttendees').value.trim(),
+        agenda: document.getElementById('meetingAgenda').value.trim(),
+        decisions: document.getElementById('meetingDecisions').value.trim(),
+        keyTakeaways: document.getElementById('meetingKeyTakeaways').value.trim(),
+        nextMeetingDate: document.getElementById('meetingNextDate').value,
+        actionItems,
+        createdAt: id ? (meetings.find(m => m.id === id) || {}).createdAt || new Date().toISOString() : new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+    };
+
+    if (id) {
+        const idx = meetings.findIndex(m => m.id === id);
+        if (idx !== -1) meetings[idx] = meeting;
+    } else {
+        meetings.push(meeting);
+    }
+
+    DB.set('meetings', meetings);
+    closeModal('meetingModal');
+    renderMeetings();
+    showToast(id ? 'Meeting updated' : 'Meeting saved! 🤝');
+}
+
+function deleteMeeting(id) {
+    if (!confirm('Delete this meeting?')) return;
+    let meetings = DB.get('meetings');
+    meetings = meetings.filter(m => m.id !== id);
+    DB.set('meetings', meetings);
+    renderMeetings();
+    showToast('Meeting deleted');
+}
+
+function toggleMeetingAction(meetingId, actionIndex) {
+    const meetings = DB.get('meetings');
+    const m = meetings.find(x => x.id === meetingId);
+    if (m && m.actionItems && m.actionItems[actionIndex] !== undefined) {
+        m.actionItems[actionIndex].done = !m.actionItems[actionIndex].done;
+        DB.set('meetings', meetings);
+        renderMeetings();
+    }
+}
+
+// ===== SCHOOL HEALTH CARD (PRINT) =====
+function printSchoolHealthCard(encodedKey) {
+    const schoolKey = decodeURIComponent(encodedKey);
+    const schoolMap = getSchoolData();
+    const school = schoolMap[schoolKey];
+    if (!school) { showToast('School not found', 'error'); return; }
+
+    const profile = getProfile();
+    const completedVisits = school.visits.filter(v => v.status === 'completed').length;
+    const teachers = [...new Set(school.observations.map(o => o.teacher).filter(Boolean))];
+    const subjects = [...new Set(school.observations.map(o => o.subject).filter(Boolean))];
+    const lastVisit = school.visits.filter(v => v.date).sort((a, b) => b.date.localeCompare(a.date))[0];
+
+    // Teacher-wise summary
+    const teacherMap = {};
+    school.observations.forEach(o => {
+        const t = (o.teacher || 'Unknown').trim();
+        if (!teacherMap[t]) teacherMap[t] = { obs: 0, engTotal: 0, methTotal: 0, tlmTotal: 0, dates: [], subjects: new Set() };
+        teacherMap[t].obs++;
+        teacherMap[t].engTotal += ((o.engagementRating || o.engagement) || 0);
+        teacherMap[t].methTotal += (o.methodology || 0);
+        teacherMap[t].tlmTotal += (o.tlm || 0);
+        teacherMap[t].dates.push(o.date);
+        if (o.subject) teacherMap[t].subjects.add(o.subject);
+    });
+
+    const teacherRows = Object.entries(teacherMap).map(([name, d]) => {
+        const avgEng = d.obs > 0 ? (d.engTotal / d.obs).toFixed(1) : '-';
+        const avgMeth = d.obs > 0 ? (d.methTotal / d.obs).toFixed(1) : '-';
+        const avgTlm = d.obs > 0 ? (d.tlmTotal / d.obs).toFixed(1) : '-';
+        const overallAvg = d.obs > 0 ? ((d.engTotal + d.methTotal + d.tlmTotal) / (d.obs * 3)).toFixed(1) : '-';
+        const dates = d.dates.sort();
+        let trend = '—';
+        if (dates.length >= 2) {
+            const firstHalf = dates.slice(0, Math.ceil(dates.length / 2));
+            const secondHalf = dates.slice(Math.ceil(dates.length / 2));
+            const avgFirst = firstHalf.length > 0 ? school.observations.filter(o => (o.teacher || '').trim() === name && firstHalf.includes(o.date)).reduce((s, o) => s + (((o.engagementRating || o.engagement) || 0) + (o.methodology || 0) + (o.tlm || 0)) / 3, 0) / firstHalf.length : 0;
+            const avgSecond = secondHalf.length > 0 ? school.observations.filter(o => (o.teacher || '').trim() === name && secondHalf.includes(o.date)).reduce((s, o) => s + (((o.engagementRating || o.engagement) || 0) + (o.methodology || 0) + (o.tlm || 0)) / 3, 0) / secondHalf.length : 0;
+            trend = avgSecond > avgFirst + 0.3 ? '↑ Improving' : avgSecond < avgFirst - 0.3 ? '↓ Declining' : '→ Stable';
+        }
+        return `<tr>
+            <td style="font-weight:600;">${escapeHtml(name)}</td>
+            <td style="text-align:center;">${d.obs}</td>
+            <td style="text-align:center;">${[...d.subjects].join(', ')}</td>
+            <td style="text-align:center;">${avgEng}</td>
+            <td style="text-align:center;">${avgMeth}</td>
+            <td style="text-align:center;">${avgTlm}</td>
+            <td style="text-align:center;font-weight:600;">${overallAvg}</td>
+            <td style="text-align:center;">${trend}</td>
+        </tr>`;
+    }).join('');
+
+    // Strengths and areas from observations
+    const strengths = school.observations.map(o => o.strengths).filter(Boolean);
+    const areas = school.observations.map(o => o.areas).filter(Boolean);
+    const suggestions = school.observations.map(o => o.suggestions).filter(Boolean);
+
+    // Follow-ups
+    const followupStatus = DB.get('followupStatus');
+    const pendingFollowups = [
+        ...school.visits.filter(v => v.followUp && v.followUp.trim() && !followupStatus.some(f => f.id === v.id && f.done)).map(v => ({ text: v.followUp, date: v.date, source: 'Visit' })),
+        ...school.observations.filter(o => o.suggestions && o.suggestions.trim() && !followupStatus.some(f => f.id === o.id && f.done)).map(o => ({ text: o.suggestions, date: o.date, source: 'Observation' }))
+    ];
+
+    // Visit frequency bar (simple HTML bars)
+    const monthCounts = {};
+    [...school.visits, ...school.observations].forEach(item => {
+        if (item.date) {
+            const m = item.date.substring(0, 7);
+            monthCounts[m] = (monthCounts[m] || 0) + 1;
+        }
+    });
+    const monthKeys = Object.keys(monthCounts).sort();
+    const maxCount = Math.max(...Object.values(monthCounts), 1);
+    const activityBars = monthKeys.slice(-6).map(m => {
+        const pct = Math.round((monthCounts[m] / maxCount) * 100);
+        const label = new Date(m + '-01').toLocaleDateString('en-IN', { month: 'short', year: '2-digit' });
+        return `<div style="text-align:center;flex:1;"><div style="height:${Math.max(pct, 5)}px;max-height:60px;background:#6366f1;border-radius:3px 3px 0 0;margin:0 2px;"></div><div style="font-size:9px;color:#64748b;margin-top:2px;">${label}</div><div style="font-size:10px;font-weight:600;">${monthCounts[m]}</div></div>`;
+    }).join('');
+
+    const avgRating = school.observations.length > 0
+        ? (school.observations.reduce((s, o) => s + (((o.engagementRating || o.engagement) || 0) + (o.methodology || 0) + (o.tlm || 0)) / 3, 0) / school.observations.length).toFixed(1)
+        : 'N/A';
+
+    const html = `<!DOCTYPE html>
+<html><head><title>School Health Card — ${escapeHtml(school.name)}</title>
+<style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: 'Segoe UI', Arial, sans-serif; padding: 16px 24px; color: #1e293b; font-size: 11px; }
+    .header { text-align: center; border-bottom: 3px solid #6366f1; padding-bottom: 10px; margin-bottom: 12px; }
+    .header h1 { font-size: 16px; color: #6366f1; margin-bottom: 2px; }
+    .header .school-name { font-size: 20px; font-weight: 700; color: #1e293b; }
+    .header p { color: #64748b; font-size: 10px; }
+    .meta-row { display: flex; justify-content: space-between; margin-bottom: 12px; padding: 6px 10px; background: #f8fafc; border-radius: 6px; font-size: 11px; }
+    .stats-grid { display: flex; gap: 8px; margin-bottom: 14px; }
+    .stat-box { flex: 1; text-align: center; padding: 8px 4px; background: #f1f5f9; border-radius: 6px; }
+    .stat-box .val { font-size: 20px; font-weight: 700; color: #6366f1; }
+    .stat-box .lbl { font-size: 9px; color: #64748b; text-transform: uppercase; }
+    h3 { font-size: 12px; color: #6366f1; margin: 12px 0 6px; border-bottom: 1px solid #e2e8f0; padding-bottom: 4px; }
+    table { width: 100%; border-collapse: collapse; font-size: 10px; margin-bottom: 10px; }
+    th { background: #6366f1; color: white; padding: 5px 6px; text-align: left; font-size: 9px; text-transform: uppercase; }
+    td { padding: 4px 6px; border-bottom: 1px solid #e2e8f0; }
+    tr:nth-child(even) { background: #f8fafc; }
+    .bar-chart { display: flex; align-items: flex-end; height: 80px; padding: 0 10px; margin-bottom: 14px; }
+    .section-block { margin-bottom: 10px; }
+    .section-block ul { padding-left: 16px; }
+    .section-block li { margin-bottom: 3px; line-height: 1.4; }
+    .followup-item { padding: 4px 8px; margin-bottom: 3px; background: #fff7ed; border-left: 3px solid #f59e0b; border-radius: 0 4px 4px 0; font-size: 10px; }
+    .footer { text-align: center; margin-top: 16px; font-size: 9px; color: #94a3b8; border-top: 1px solid #e2e8f0; padding-top: 6px; }
+    .signature { display: flex; justify-content: space-between; margin-top: 30px; }
+    .sig-box { text-align: center; width: 180px; }
+    .sig-line { border-top: 1px solid #334155; margin-top: 30px; padding-top: 4px; font-size: 10px; color: #64748b; }
+    @media print { body { padding: 8px; } }
+</style></head><body>
+<div class="header">
+    <h1>📋 School Health Card</h1>
+    <div class="school-name">${escapeHtml(school.name)}</div>
+    <p>Azim Premji Foundation — Field Support Summary</p>
+</div>
+<div class="meta-row">
+    <div><strong>Block:</strong> ${escapeHtml(school.block || 'N/A')} &nbsp;&bull;&nbsp; <strong>RP:</strong> ${escapeHtml(profile.name || 'N/A')} &nbsp;&bull;&nbsp; <strong>District:</strong> ${escapeHtml(profile.district || 'N/A')}</div>
+    <div><strong>Generated:</strong> ${new Date().toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' })} &nbsp;&bull;&nbsp; <strong>Last Visit:</strong> ${lastVisit ? new Date(lastVisit.date).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : 'N/A'}</div>
+</div>
+<div class="stats-grid">
+    <div class="stat-box"><div class="val">${school.visits.length}</div><div class="lbl">Total Visits</div></div>
+    <div class="stat-box"><div class="val">${completedVisits}</div><div class="lbl">Completed</div></div>
+    <div class="stat-box"><div class="val">${school.observations.length}</div><div class="lbl">Observations</div></div>
+    <div class="stat-box"><div class="val">${teachers.length}</div><div class="lbl">Teachers</div></div>
+    <div class="stat-box"><div class="val">${avgRating}</div><div class="lbl">Avg Rating</div></div>
+</div>
+
+${monthKeys.length > 0 ? `<h3>📊 Activity Trend (Last 6 months)</h3><div class="bar-chart">${activityBars}</div>` : ''}
+
+${teacherRows ? `<h3>👩‍🏫 Teacher-wise Summary</h3>
+<table>
+    <tr><th>Teacher</th><th>Obs.</th><th>Subjects</th><th>Engage.</th><th>Method.</th><th>TLM</th><th>Overall</th><th>Trend</th></tr>
+    ${teacherRows}
+</table>` : ''}
+
+${strengths.length > 0 ? `<h3>✅ Strengths Observed</h3><div class="section-block"><ul>${strengths.slice(0, 5).map(s => `<li>${escapeHtml(s)}</li>`).join('')}</ul></div>` : ''}
+${areas.length > 0 ? `<h3>🔶 Areas for Improvement</h3><div class="section-block"><ul>${areas.slice(0, 5).map(a => `<li>${escapeHtml(a)}</li>`).join('')}</ul></div>` : ''}
+
+${pendingFollowups.length > 0 ? `<h3>⏳ Pending Follow-ups (${pendingFollowups.length})</h3>${pendingFollowups.slice(0, 5).map(f => `<div class="followup-item"><strong>${f.source} (${new Date(f.date).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}):</strong> ${escapeHtml(f.text)}</div>`).join('')}` : ''}
+
+${subjects.length > 0 ? `<div style="margin-top:8px;"><strong style="font-size:10px;">Subjects covered:</strong> <span style="font-size:10px;color:#64748b;">${escapeHtml(subjects.join(', '))}</span></div>` : ''}
+
+<div class="signature">
+    <div class="sig-box"><div class="sig-line">${escapeHtml(profile.designation || 'Resource Person')}</div></div>
+    <div class="sig-box"><div class="sig-line">Head Master / Head Mistress</div></div>
+    <div class="sig-box"><div class="sig-line">Block Coordinator</div></div>
+</div>
+<div class="footer">Generated by ${escapeHtml(profile.name || 'APF Resource Person')} — APF Dashboard — ${new Date().toLocaleDateString('en-IN')}</div>
+</body></html>`;
+
+    const w = window.open('', '_blank', 'width=1000,height=800');
+    if (!w) { showToast('Popup blocked — please allow popups for this site', 'error'); return; }
+    w.document.write(html);
+    w.document.close();
+    setTimeout(() => w.print(), 500);
 }
 
 // ===== REFLECTIONS JOURNAL =====
@@ -7231,6 +8199,7 @@ function openContactModal(id) {
             document.getElementById('contactPhone').value = c.phone || '';
             document.getElementById('contactEmail').value = c.email || '';
             document.getElementById('contactBlock').value = c.block || '';
+            document.getElementById('contactCluster').value = c.cluster || '';
             document.getElementById('contactNotes').value = c.notes || '';
         }
     }
@@ -7251,6 +8220,7 @@ function saveContact(e) {
         phone: document.getElementById('contactPhone').value.trim(),
         email: document.getElementById('contactEmail').value.trim(),
         block: document.getElementById('contactBlock').value.trim(),
+        cluster: document.getElementById('contactCluster').value.trim(),
         notes: document.getElementById('contactNotes').value.trim(),
         createdAt: id ? (contacts.find(c => c.id === id) || {}).createdAt || new Date().toISOString() : new Date().toISOString()
     };
@@ -7275,6 +8245,183 @@ function deleteContact(id) {
     DB.set('contacts', contacts);
     renderContacts();
     showToast('Contact deleted');
+}
+
+// ===== BULK DELETE CONTACTS =====
+function openBulkDeleteContacts() {
+    const contacts = DB.get('contacts');
+    if (contacts.length === 0) {
+        showToast('No contacts to delete', 'info');
+        return;
+    }
+
+    // Migrate cluster from notes for older contacts that stored it there
+    let migrated = false;
+    contacts.forEach(c => {
+        if (!c.cluster && c.notes) {
+            const m = c.notes.match(/Cluster:\s*([^|]+)/i);
+            if (m) {
+                c.cluster = m[1].trim();
+                // Remove "Cluster: xyz" from notes
+                c.notes = c.notes.replace(/\s*\|?\s*Cluster:\s*[^|]+/i, '').replace(/^\s*\|\s*/, '').trim();
+                migrated = true;
+            }
+        }
+    });
+    // Also try to fill cluster from observations for contacts without one
+    if (contacts.some(c => !c.cluster && c.school)) {
+        const observations = DB.get('observations');
+        const schoolClusterMap = {};
+        observations.forEach(o => {
+            if (o.school && o.cluster) {
+                schoolClusterMap[o.school.trim().toLowerCase()] = o.cluster.trim();
+            }
+        });
+        contacts.forEach(c => {
+            if (!c.cluster && c.school) {
+                const key = c.school.trim().toLowerCase();
+                if (schoolClusterMap[key]) {
+                    c.cluster = schoolClusterMap[key];
+                    migrated = true;
+                }
+            }
+        });
+    }
+    if (migrated) DB.set('contacts', contacts);
+
+    // Populate filter dropdowns dynamically from contact data
+    const roles = new Set(), blocks = new Set(), clusters = new Set(), schools = new Set(), sources = new Set();
+    contacts.forEach(c => {
+        if (c.role) roles.add(c.role);
+        if (c.block) blocks.add(c.block.trim());
+        if (c.cluster) clusters.add(c.cluster.trim());
+        if (c.school) schools.add(c.school.trim());
+        if (c.source) sources.add(c.source);
+    });
+
+    populateBulkDelCheckboxes('bulkDelRole', roles);
+    populateBulkDelCheckboxes('bulkDelBlock', blocks);
+    populateBulkDelCheckboxes('bulkDelCluster', clusters);
+    populateBulkDelCheckboxes('bulkDelSchool', schools);
+    populateBulkDelCheckboxes('bulkDelSource', sources);
+    // Reset phone checkboxes to checked
+    document.querySelectorAll('#bulkDelPhone input[type=checkbox]').forEach(cb => cb.checked = true);
+
+    previewBulkDelete();
+    openModal('bulkDeleteContactsModal');
+}
+
+function populateBulkDelCheckboxes(containerId, valuesSet) {
+    const container = document.getElementById(containerId);
+    const sorted = [...valuesSet].sort((a, b) => a.localeCompare(b));
+    if (sorted.length === 0) {
+        container.innerHTML = '<span class="bulk-filter-empty">None available</span>';
+        return;
+    }
+    container.innerHTML = sorted.map(v =>
+        `<label class="bulk-checkbox"><input type="checkbox" value="${escapeHtml(v)}" onchange="previewBulkDelete()" checked> <span>${escapeHtml(v)}</span></label>`
+    ).join('');
+}
+
+function bulkFilterToggle(containerId, checkAll) {
+    document.querySelectorAll('#' + containerId + ' input[type=checkbox]').forEach(cb => cb.checked = checkAll);
+    previewBulkDelete();
+}
+
+function getBulkFilterChecked(containerId) {
+    const checked = [];
+    document.querySelectorAll('#' + containerId + ' input[type=checkbox]:checked').forEach(cb => checked.push(cb.value));
+    return checked;
+}
+
+function getBulkDeleteFiltered() {
+    const contacts = DB.get('contacts');
+    const roles = new Set(getBulkFilterChecked('bulkDelRole'));
+    const blocks = new Set(getBulkFilterChecked('bulkDelBlock'));
+    const clusters = new Set(getBulkFilterChecked('bulkDelCluster'));
+    const schools = new Set(getBulkFilterChecked('bulkDelSchool'));
+    const sources = new Set(getBulkFilterChecked('bulkDelSource'));
+    const phoneChecked = getBulkFilterChecked('bulkDelPhone');
+    const allowWith = phoneChecked.includes('with');
+    const allowWithout = phoneChecked.includes('without');
+
+    const allRoles = document.querySelectorAll('#bulkDelRole input[type=checkbox]');
+    const allBlocks = document.querySelectorAll('#bulkDelBlock input[type=checkbox]');
+    const allClusters = document.querySelectorAll('#bulkDelCluster input[type=checkbox]');
+    const allSchools = document.querySelectorAll('#bulkDelSchool input[type=checkbox]');
+    const allSources = document.querySelectorAll('#bulkDelSource input[type=checkbox]');
+
+    return contacts.filter(c => {
+        // If all checked = no filter (pass all), if none checked = block all
+        if (allRoles.length > 0 && !roles.has(c.role || '')) return false;
+        if (allBlocks.length > 0 && !blocks.has((c.block || '').trim())) return false;
+        if (allClusters.length > 0 && !clusters.has((c.cluster || '').trim())) return false;
+        if (allSchools.length > 0 && !schools.has((c.school || '').trim())) return false;
+        if (allSources.length > 0 && !sources.has(c.source || '')) return false;
+        // Phone filter
+        if (c.phone && !allowWith) return false;
+        if (!c.phone && !allowWithout) return false;
+        return true;
+    });
+}
+
+function previewBulkDelete() {
+    const matched = getBulkDeleteFiltered();
+    const count = matched.length;
+    document.getElementById('bulkDeleteCount').textContent = count;
+    document.getElementById('bulkDeleteBtnCount').textContent = count;
+
+    const btn = document.getElementById('bulkDeleteConfirmBtn');
+    btn.disabled = count === 0;
+
+    const listEl = document.getElementById('bulkDeleteList');
+    if (count === 0) {
+        listEl.innerHTML = '<div class="bulk-preview-empty">No contacts match the selected filters</div>';
+    } else {
+        const showMax = 50;
+        const shown = matched.slice(0, showMax);
+        listEl.innerHTML = shown.map(c => `
+            <div class="bulk-preview-item">
+                <span class="bulk-preview-name">${escapeHtml(c.name || 'Unknown')}</span>
+                <span class="bulk-preview-meta">${escapeHtml(c.role || '')}${c.block ? ' · ' + escapeHtml(c.block) : ''}${c.cluster ? ' · ' + escapeHtml(c.cluster) : ''}</span>
+            </div>
+        `).join('') + (count > showMax ? `<div class="bulk-preview-more">...and ${count - showMax} more</div>` : '');
+    }
+}
+
+function executeBulkDeleteContacts() {
+    const matched = getBulkDeleteFiltered();
+    if (matched.length === 0) return;
+
+    const filterParts = [];
+    const rolesChecked = getBulkFilterChecked('bulkDelRole');
+    const blocksChecked = getBulkFilterChecked('bulkDelBlock');
+    const clustersChecked = getBulkFilterChecked('bulkDelCluster');
+    const schoolsChecked = getBulkFilterChecked('bulkDelSchool');
+    const sourcesChecked = getBulkFilterChecked('bulkDelSource');
+    const phoneChecked = getBulkFilterChecked('bulkDelPhone');
+    const allR = document.querySelectorAll('#bulkDelRole input').length;
+    const allB = document.querySelectorAll('#bulkDelBlock input').length;
+    const allCl = document.querySelectorAll('#bulkDelCluster input').length;
+    const allSc = document.querySelectorAll('#bulkDelSchool input').length;
+    const allSo = document.querySelectorAll('#bulkDelSource input').length;
+    if (rolesChecked.length < allR) filterParts.push(`Roles: ${rolesChecked.join(', ')}`);
+    if (blocksChecked.length < allB) filterParts.push(`Blocks: ${blocksChecked.join(', ')}`);
+    if (clustersChecked.length < allCl) filterParts.push(`Clusters: ${clustersChecked.join(', ')}`);
+    if (schoolsChecked.length < allSc) filterParts.push(`Schools: ${schoolsChecked.length} selected`);
+    if (sourcesChecked.length < allSo) filterParts.push(`Sources: ${sourcesChecked.join(', ')}`);
+    if (phoneChecked.length < 2) filterParts.push(`Phone: ${phoneChecked.join(', ')}`);
+
+    const filterDesc = filterParts.length > 0 ? filterParts.join(', ') : 'All contacts';
+    if (!confirm(`⚠️ DELETE ${matched.length} CONTACTS?\n\nFilter: ${filterDesc}\n\nThis action cannot be undone!`)) return;
+
+    const idsToDelete = new Set(matched.map(c => c.id));
+    let contacts = DB.get('contacts');
+    contacts = contacts.filter(c => !idsToDelete.has(c.id));
+    DB.set('contacts', contacts);
+    closeModal('bulkDeleteContactsModal');
+    renderContacts();
+    showToast(`Deleted ${matched.length} contacts`, 'success');
 }
 
 function extractContactsFromObservations() {
@@ -7359,7 +8506,7 @@ function extractContactsFromObservations() {
     const contacts = DB.get('contacts');
     let added = 0;
     toAdd.forEach(t => {
-        const notes = [t.stage ? `Stage: ${t.stage}` : '', t.cluster ? `Cluster: ${t.cluster}` : '', t.nid ? `NID: ${t.nid}` : ''].filter(Boolean).join(' | ');
+        const notes = [t.stage ? `Stage: ${t.stage}` : '', t.nid ? `NID: ${t.nid}` : ''].filter(Boolean).join(' | ');
         contacts.push({
             id: DB.generateId(),
             name: t.name || 'Unknown Teacher',
@@ -7368,6 +8515,7 @@ function extractContactsFromObservations() {
             phone: t.phone,
             email: '',
             block: t.block,
+            cluster: t.cluster,
             notes: notes,
             createdAt: new Date().toISOString(),
             source: 'Observation Extract'
@@ -7385,229 +8533,6 @@ function extractContactsFromObservations() {
     }
 }
 
-// ===== TRUECALLER VERIFICATION =====
-const TC_API_KEY = 'lVwbc02fc94a52fac4cfa837823b049379862';
-
-function openTruecallerSearch(prefillPhone) {
-    openModal('truecallerModal');
-    const phoneInput = document.getElementById('tcSearchPhone');
-    const resultArea = document.getElementById('tcSearchResult');
-    resultArea.innerHTML = '';
-    if (prefillPhone) {
-        phoneInput.value = prefillPhone.replace(/^\+91|^91/, '').replace(/[^\d]/g, '');
-    } else {
-        phoneInput.value = '';
-    }
-    phoneInput.focus();
-}
-
-async function truecallerSearch(phone, countryCode) {
-    const phoneNum = phone || document.getElementById('tcSearchPhone').value.replace(/[^\d]/g, '');
-    const cc = countryCode || document.getElementById('tcCountryCode').value;
-    const resultArea = document.getElementById('tcSearchResult');
-    const searchBtn = document.getElementById('tcSearchBtn');
-
-    if (!phoneNum || phoneNum.length < 7) {
-        showToast('Enter a valid phone number', 'error');
-        return null;
-    }
-
-    resultArea.innerHTML = `<div class="tc-loading"><i class="fas fa-spinner fa-spin"></i> Searching Truecaller...</div>`;
-    if (searchBtn) {
-        searchBtn.disabled = true;
-        searchBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Searching...';
-    }
-
-    try {
-        // Try multiple Truecaller endpoints and CORS proxy combinations
-        const endpoints = [
-            {
-                url: `https://search5-noneu.truecaller.com/v2/search?q=${encodeURIComponent(phoneNum)}&countryCode=${cc}&type=4`,
-                headers: { 'accountId': TC_API_KEY }
-            },
-            {
-                url: `https://asia-south1-truecaller-web.cloudfunctions.net/api/noneu/search/v1?q=${encodeURIComponent(phoneNum)}&countryCode=${cc}&type=4`,
-                headers: { 'Authorization': `Bearer ${TC_API_KEY}` }
-            }
-        ];
-
-        const proxyFns = [
-            (url) => `https://corsproxy.io/?${encodeURIComponent(url)}`,
-            (url) => `https://api.cors.lol/?url=${encodeURIComponent(url)}`,
-            (url) => `https://proxy.cors.sh/${url}`,
-            (url) => url  // direct (last resort)
-        ];
-
-        let resp = null;
-        let lastErr = null;
-        let data = null;
-
-        outer:
-        for (const endpoint of endpoints) {
-            for (const mkProxy of proxyFns) {
-                try {
-                    const proxyUrl = mkProxy(endpoint.url);
-                    const hdrs = { ...endpoint.headers };
-                    // cors.sh needs its own key header
-                    if (proxyUrl.includes('proxy.cors.sh')) {
-                        hdrs['x-cors-api-key'] = 'temp_' + Date.now();
-                    }
-                    resp = await fetch(proxyUrl, { headers: hdrs });
-                    if (resp.ok) {
-                        const text = await resp.text();
-                        try { data = JSON.parse(text); } catch(_) { data = null; }
-                        if (data && (data.data || data.status)) { break outer; }
-                        data = null; resp = null;
-                    } else {
-                        resp = null;
-                    }
-                } catch (e) {
-                    lastErr = e;
-                    resp = null;
-                }
-            }
-        }
-
-        if (!data) {
-            throw lastErr || new Error('All lookup attempts failed');
-        }
-
-        const info = data?.data?.[0] || null;
-
-        if (!info) {
-            resultArea.innerHTML = `
-                <div class="tc-result-card tc-not-found">
-                    <div class="tc-result-icon" style="background:rgba(239,68,68,0.15);color:#ef4444"><i class="fas fa-user-times"></i></div>
-                    <div class="tc-result-info">
-                        <div class="tc-result-label">No Results Found</div>
-                        <div class="tc-result-sub">This number is not registered on Truecaller</div>
-                    </div>
-                </div>`;
-            return null;
-        }
-
-        const name = info.name || 'Unknown';
-        const firstName = info.firstName || '';
-        const lastName = info.lastName || '';
-        const fullName = (firstName + ' ' + lastName).trim() || name;
-        const carrier = info.phones?.[0]?.carrier || '';
-        const numType = info.phones?.[0]?.numberType || '';
-        const city = info.addresses?.[0]?.city || '';
-        const timeZone = info.addresses?.[0]?.timeZone || '';
-        const spamScore = info.spamScore || 0;
-        const spamType = info.spamType || '';
-
-        let spamBadge = '';
-        if (spamScore > 0 || spamType) {
-            spamBadge = `<span class="tc-spam-badge"><i class="fas fa-exclamation-triangle"></i> Spam Risk (${spamScore})</span>`;
-        } else {
-            spamBadge = `<span class="tc-safe-badge"><i class="fas fa-shield-alt"></i> Safe</span>`;
-        }
-
-        resultArea.innerHTML = `
-            <div class="tc-result-card">
-                <div class="tc-result-header">
-                    <div class="tc-result-icon" style="background:rgba(33,150,243,0.15);color:#2196F3"><i class="fas fa-user-check"></i></div>
-                    <div class="tc-result-info">
-                        <div class="tc-result-name">${escapeHtml(fullName)}</div>
-                        ${spamBadge}
-                    </div>
-                </div>
-                <div class="tc-result-details">
-                    <div class="tc-detail"><i class="fas fa-phone"></i> <strong>${escapeHtml(phoneNum)}</strong></div>
-                    ${carrier ? `<div class="tc-detail"><i class="fas fa-broadcast-tower"></i> ${escapeHtml(carrier)}</div>` : ''}
-                    ${numType ? `<div class="tc-detail"><i class="fas fa-sim-card"></i> ${escapeHtml(numType)}</div>` : ''}
-                    ${city ? `<div class="tc-detail"><i class="fas fa-map-marker-alt"></i> ${escapeHtml(city)}</div>` : ''}
-                    ${timeZone ? `<div class="tc-detail"><i class="fas fa-clock"></i> ${escapeHtml(timeZone)}</div>` : ''}
-                </div>
-                <div class="tc-result-actions">
-                    <button class="btn btn-primary btn-sm" onclick="addTruecallerToContacts('${escapeHtml(fullName).replace(/'/g, "\\'")}', '${escapeHtml(phoneNum)}', '${escapeHtml(carrier)}', '${escapeHtml(city)}')" style="background:#2196F3">
-                        <i class="fas fa-user-plus"></i> Save to Contacts
-                    </button>
-                    <button class="btn btn-outline btn-sm" onclick="window.open('tel:${phoneNum.replace(/[^\d+]/g, '')}')">
-                        <i class="fas fa-phone"></i> Call
-                    </button>
-                </div>
-            </div>`;
-
-        return { name: fullName, phone: phoneNum, carrier, city, spamScore };
-
-    } catch (err) {
-        console.error('Truecaller API error:', err);
-        resultArea.innerHTML = `
-            <div class="tc-result-card tc-error">
-                <div class="tc-result-icon" style="background:rgba(239,68,68,0.15);color:#ef4444"><i class="fas fa-exclamation-circle"></i></div>
-                <div class="tc-result-info">
-                    <div class="tc-result-label">Lookup Failed</div>
-                    <div class="tc-result-sub">${escapeHtml(err.message)}<br><small>Tried multiple endpoints &amp; proxies. Check internet connection, API key, or try again. Works best on mobile browsers.</small></div>
-                </div>
-                <div style="margin-top:12px;text-align:center;">
-                    <a href="https://www.truecaller.com/search/in/${phoneNum}" target="_blank" class="btn btn-outline btn-sm" style="display:inline-flex;align-items:center;gap:6px;">
-                        <i class="fas fa-external-link-alt"></i> Try on Truecaller Website
-                    </a>
-                </div>
-            </div>`;
-        return null;
-    } finally {
-        if (searchBtn) {
-            searchBtn.disabled = false;
-            searchBtn.innerHTML = '<i class="fas fa-search"></i> Search on Truecaller';
-        }
-    }
-}
-
-function addTruecallerToContacts(name, phone, carrier, city) {
-    const contacts = DB.get('contacts');
-    // Check if already exists
-    const exists = contacts.some(c => (c.phone || '').replace(/[^\d]/g, '') === phone.replace(/[^\d]/g, ''));
-    if (exists) {
-        showToast('This number is already in your contacts', 'info');
-        return;
-    }
-    contacts.push({
-        id: DB.generateId(),
-        name: name,
-        role: 'Other',
-        school: '',
-        phone: phone,
-        email: '',
-        block: city || '',
-        notes: carrier ? `Carrier: ${carrier} | Added via Truecaller` : 'Added via Truecaller',
-        createdAt: new Date().toISOString(),
-        source: 'Truecaller'
-    });
-    DB.set('contacts', contacts);
-    renderContacts();
-    showToast(`${name} added to contacts!`, 'success');
-}
-
-async function verifyContactTruecaller(contactId) {
-    const contacts = DB.get('contacts');
-    const contact = contacts.find(c => c.id === contactId);
-    if (!contact || !contact.phone) {
-        showToast('No phone number to verify', 'error');
-        return;
-    }
-
-    const phone = contact.phone.replace(/[^\d]/g, '');
-    // Show in modal with prefilled phone
-    openTruecallerSearch(phone);
-    // Auto-search
-    const result = await truecallerSearch(phone, 'IN');
-
-    if (result && result.name) {
-        // Update the contact's truecaller verified name
-        const idx = contacts.findIndex(c => c.id === contactId);
-        if (idx !== -1) {
-            contacts[idx].tcVerified = true;
-            contacts[idx].tcName = result.name;
-            contacts[idx].tcSpamScore = result.spamScore || 0;
-            DB.set('contacts', contacts);
-            renderContacts();
-        }
-    }
-}
-
 function renderContacts() {
     let contacts = DB.get('contacts');
     const roleFilter = document.getElementById('contactRoleFilter').value;
@@ -7621,6 +8546,7 @@ function renderContacts() {
             (c.name || '').toLowerCase().includes(searchTerm) ||
             (c.school || '').toLowerCase().includes(searchTerm) ||
             (c.block || '').toLowerCase().includes(searchTerm) ||
+            (c.cluster || '').toLowerCase().includes(searchTerm) ||
             (c.phone || '').includes(searchTerm) ||
             (c.role || '').toLowerCase().includes(searchTerm)
         );
@@ -7677,13 +8603,13 @@ function renderContacts() {
                 <div class="contact-card-details">
                     ${c.school ? `<div class="contact-detail-row"><i class="fas fa-building"></i> ${escapeHtml(c.school)}</div>` : ''}
                     ${c.block ? `<div class="contact-detail-row"><i class="fas fa-map-marker-alt"></i> ${escapeHtml(c.block)}</div>` : ''}
-                    ${c.phone ? `<div class="contact-detail-row"><i class="fas fa-phone"></i> <a href="tel:${escapeHtml(c.phone)}">${escapeHtml(c.phone)}</a>${c.tcVerified ? `<span class="tc-verified-inline" title="Truecaller: ${escapeHtml(c.tcName || '')}"><i class="fas fa-check-circle"></i> ${escapeHtml(c.tcName || 'Verified')}</span>` : ''}</div>` : ''}
+                    ${c.cluster ? `<div class="contact-detail-row"><i class="fas fa-layer-group"></i> ${escapeHtml(c.cluster)}</div>` : ''}
+                    ${c.phone ? `<div class="contact-detail-row"><i class="fas fa-phone"></i> <a href="tel:${escapeHtml(c.phone)}">${escapeHtml(c.phone)}</a></div>` : ''}
                     ${c.email ? `<div class="contact-detail-row"><i class="fas fa-envelope"></i> <a href="mailto:${escapeHtml(c.email)}">${escapeHtml(c.email)}</a></div>` : ''}
                     ${c.notes ? `<div class="contact-detail-row"><i class="fas fa-sticky-note"></i> ${escapeHtml(c.notes)}</div>` : ''}
                 </div>
                 <div class="contact-card-actions">
                     ${c.phone ? `<button onclick="window.open('tel:${c.phone.replace(/[^\d+\-\s()]/g, '')}')"  ><i class="fas fa-phone"></i> Call</button>` : ''}
-                    ${c.phone ? `<button class="tc-verify-btn" onclick="verifyContactTruecaller('${c.id}')" title="Verify on Truecaller"><i class="fas fa-phone-square-alt"></i> ${c.tcVerified ? 'Re-verify' : 'Verify'}</button>` : ''}
                     <button onclick="openContactModal('${c.id}')"><i class="fas fa-pen"></i> Edit</button>
                     <button class="delete-btn" onclick="deleteContact('${c.id}')"><i class="fas fa-trash"></i></button>
                 </div>
@@ -7708,7 +8634,10 @@ function renderBackupInfo() {
             { key: 'contacts', label: 'Contacts', icon: 'fa-address-book', color: '#6366f1' },
             { key: 'plannerTasks', label: 'Tasks', icon: 'fa-tasks', color: '#14b8a6' },
             { key: 'goalTargets', label: 'Goals', icon: 'fa-bullseye', color: '#ef4444' },
-            { key: 'followupStatus', label: 'Follow-ups', icon: 'fa-clipboard-check', color: '#84cc16' }
+            { key: 'followupStatus', label: 'Follow-ups', icon: 'fa-clipboard-check', color: '#84cc16' },
+            { key: 'worklog', label: 'Work Log', icon: 'fa-clipboard-list', color: '#7c3aed' },
+            { key: 'userProfile', label: 'Profile', icon: 'fa-user-circle', color: '#0ea5e9' },
+            { key: 'meetings', label: 'Meetings', icon: 'fa-handshake', color: '#0d9488' }
         ];
         let total = 0;
         const pills = meta.map(m => {
@@ -7746,7 +8675,7 @@ function renderBackupInfo() {
 
 function downloadBackup() {
     try {
-        const keys = ['visits', 'trainings', 'observations', 'resources', 'notes', 'ideas', 'reflections', 'contacts', 'plannerTasks', 'goalTargets', 'followupStatus'];
+        const keys = ENCRYPTED_DATA_KEYS;
         const backup = { _meta: { version: 1, app: 'APF Dashboard', exportedAt: new Date().toISOString() } };
         keys.forEach(k => { backup[k] = DB.get(k); });
 
@@ -7785,8 +8714,7 @@ function restoreBackup(event) {
                 return;
             }
 
-            const keys = ['visits', 'trainings', 'observations', 'resources', 'notes', 'ideas', 'reflections', 'contacts', 'plannerTasks', 'goalTargets', 'followupStatus'];
-            keys.forEach(k => {
+            ENCRYPTED_DATA_KEYS.forEach(k => {
                 if (backup[k] !== undefined) {
                     if (!Array.isArray(backup[k])) {
                         console.warn(`Backup key "${k}" is not an array, skipping`);
@@ -7798,6 +8726,7 @@ function restoreBackup(event) {
 
             showToast('Data restored successfully! Refreshing...', 'success');
             setTimeout(() => {
+                applyProfileToUI();
                 renderBackupInfo();
                 navigateTo('dashboard');
             }, 1000);
@@ -7936,7 +8865,1924 @@ function exportAllDataToExcel() {
     showToast('Data exported to Excel');
 }
 
+// ===== APP SETTINGS =====
+const APP_SETTINGS_KEY = 'apf_app_settings';
+const ACCENT_COLORS = [
+    { name: 'Amber', value: '#f59e0b', css: '245, 158, 11' },
+    { name: 'Blue', value: '#3b82f6', css: '59, 130, 246' },
+    { name: 'Purple', value: '#8b5cf6', css: '139, 92, 246' },
+    { name: 'Green', value: '#10b981', css: '16, 185, 129' },
+    { name: 'Rose', value: '#f43f5e', css: '244, 63, 94' },
+    { name: 'Cyan', value: '#06b6d4', css: '6, 182, 212' },
+    { name: 'Orange', value: '#f97316', css: '249, 115, 22' },
+    { name: 'Indigo', value: '#6366f1', css: '99, 102, 241' }
+];
+
+function getDefaultSettings() {
+    return {
+        accentColor: '#f59e0b',
+        fontSize: 'default',
+        compactMode: false,
+        defaultBlock: '',
+        defaultCluster: '',
+        defaultDistrict: '',
+        defaultState: '',
+        dateFormat: 'dd-mmm-yyyy',
+        smartAlerts: true,
+        dashCharts: true,
+        recentActivity: true,
+        startPage: 'dashboard',
+        followupReminder: true,
+        visitReminder: true,
+        worklogAuto: true,
+        saveToast: true
+    };
+}
+
+function getAppSettings() {
+    try {
+        const raw = localStorage.getItem(APP_SETTINGS_KEY);
+        if (raw) {
+            const parsed = JSON.parse(raw);
+            return { ...getDefaultSettings(), ...parsed };
+        }
+    } catch (e) {}
+    return getDefaultSettings();
+}
+
+function saveAppSettings() {
+    const settings = {
+        accentColor: getAppSettings().accentColor,
+        fontSize: getAppSettings().fontSize,
+        compactMode: document.getElementById('settingCompactMode')?.checked ?? false,
+        defaultBlock: (document.getElementById('settingDefaultBlock')?.value || '').trim(),
+        defaultCluster: (document.getElementById('settingDefaultCluster')?.value || '').trim(),
+        defaultDistrict: (document.getElementById('settingDefaultDistrict')?.value || '').trim(),
+        defaultState: (document.getElementById('settingDefaultState')?.value || '').trim(),
+        dateFormat: document.getElementById('settingDateFormat')?.value || 'dd-mmm-yyyy',
+        smartAlerts: document.getElementById('settingSmartAlerts')?.checked ?? true,
+        dashCharts: document.getElementById('settingDashCharts')?.checked ?? true,
+        recentActivity: document.getElementById('settingRecentActivity')?.checked ?? true,
+        startPage: document.getElementById('settingStartPage')?.value || 'dashboard',
+        followupReminder: document.getElementById('settingFollowupReminder')?.checked ?? true,
+        visitReminder: document.getElementById('settingVisitReminder')?.checked ?? true,
+        worklogAuto: document.getElementById('settingWorklogAuto')?.checked ?? true,
+        saveToast: document.getElementById('settingSaveToast')?.checked ?? true
+    };
+
+    try { localStorage.setItem(APP_SETTINGS_KEY, JSON.stringify(settings)); } catch (e) {}
+    showToast('Settings saved', 'success', 1500);
+}
+
+function renderSettings() {
+    const s = getAppSettings();
+
+    // Theme toggle
+    const themeToggle = document.getElementById('settingThemeToggle');
+    const themeLabel = document.getElementById('settingThemeLabel');
+    const isLight = document.body.classList.contains('light-mode');
+    if (themeToggle) themeToggle.checked = isLight;
+    if (themeLabel) themeLabel.textContent = isLight ? 'Light' : 'Dark';
+
+    // Accent colors
+    const colorGrid = document.getElementById('settingAccentColors');
+    if (colorGrid) {
+        colorGrid.innerHTML = ACCENT_COLORS.map(c =>
+            `<div class="settings-color-swatch ${s.accentColor === c.value ? 'active' : ''}" 
+                 style="background:${c.value};" 
+                 title="${c.name}" 
+                 onclick="setAccentColor('${c.value}', '${c.css}')">
+                ${s.accentColor === c.value ? '<i class="fas fa-check"></i>' : ''}
+            </div>`
+        ).join('');
+    }
+
+    // Font size buttons
+    document.querySelectorAll('.settings-size-btn').forEach(btn => {
+        btn.classList.remove('active');
+    });
+    const sizeMap = { 'small': 0, 'default': 1, 'large': 2 };
+    const btns = document.querySelectorAll('.settings-size-btn');
+    if (btns[sizeMap[s.fontSize]]) btns[sizeMap[s.fontSize]].classList.add('active');
+
+    // Compact mode
+    const compact = document.getElementById('settingCompactMode');
+    if (compact) compact.checked = s.compactMode;
+
+    // Default values
+    const fields = { settingDefaultBlock: s.defaultBlock, settingDefaultCluster: s.defaultCluster, settingDefaultDistrict: s.defaultDistrict, settingDefaultState: s.defaultState };
+    Object.entries(fields).forEach(([id, val]) => {
+        const el = document.getElementById(id);
+        if (el) el.value = val;
+    });
+
+    // Date format
+    const dateFormat = document.getElementById('settingDateFormat');
+    if (dateFormat) dateFormat.value = s.dateFormat;
+
+    // Toggles
+    const toggles = {
+        settingSmartAlerts: s.smartAlerts,
+        settingDashCharts: s.dashCharts,
+        settingRecentActivity: s.recentActivity,
+        settingFollowupReminder: s.followupReminder,
+        settingVisitReminder: s.visitReminder,
+        settingWorklogAuto: s.worklogAuto,
+        settingSaveToast: s.saveToast
+    };
+    Object.entries(toggles).forEach(([id, val]) => {
+        const el = document.getElementById(id);
+        if (el) el.checked = val;
+    });
+
+    // Start page
+    const startPage = document.getElementById('settingStartPage');
+    if (startPage) startPage.value = s.startPage;
+
+    // Data stats
+    renderSettingsDataStats();
+}
+
+function renderSettingsDataStats() {
+    const statsEl = document.getElementById('settingsDataStats');
+    if (!statsEl) return;
+
+    const dataKeys = [
+        { key: 'visits', label: 'Visits', icon: 'fa-school', color: '#3b82f6' },
+        { key: 'trainings', label: 'Trainings', icon: 'fa-chalkboard-teacher', color: '#8b5cf6' },
+        { key: 'observations', label: 'Observations', icon: 'fa-eye', color: '#10b981' },
+        { key: 'resources', label: 'Resources', icon: 'fa-book', color: '#f59e0b' },
+        { key: 'notes', label: 'Notes', icon: 'fa-sticky-note', color: '#06b6d4' },
+        { key: 'ideas', label: 'Ideas', icon: 'fa-lightbulb', color: '#f97316' },
+        { key: 'reflections', label: 'Reflections', icon: 'fa-journal-whills', color: '#ec4899' },
+        { key: 'contacts', label: 'Contacts', icon: 'fa-address-book', color: '#6366f1' },
+        { key: 'plannerTasks', label: 'Planner Tasks', icon: 'fa-calendar-alt', color: '#14b8a6' },
+        { key: 'meetings', label: 'Meetings', icon: 'fa-handshake', color: '#a855f7' },
+        { key: 'growthAssessments', label: 'Assessments', icon: 'fa-seedling', color: '#16a34a' }
+    ];
+
+    let totalRecords = 0;
+    const cards = dataKeys.map(d => {
+        const count = DB.get(d.key).length;
+        totalRecords += count;
+        return `<div class="settings-data-stat">
+            <div class="settings-data-stat-icon" style="color:${d.color};"><i class="fas ${d.icon}"></i></div>
+            <div class="settings-data-stat-value">${count}</div>
+            <div class="settings-data-stat-label">${d.label}</div>
+        </div>`;
+    });
+
+    // Estimate storage size
+    let storageSize = 0;
+    try {
+        ENCRYPTED_DATA_KEYS.forEach(k => {
+            const data = DB.get(k);
+            storageSize += JSON.stringify(data).length;
+        });
+    } catch(e) {}
+    const sizeStr = storageSize > 1048576 ? (storageSize / 1048576).toFixed(1) + ' MB'
+                  : storageSize > 1024 ? (storageSize / 1024).toFixed(1) + ' KB'
+                  : storageSize + ' B';
+
+    statsEl.innerHTML = `
+        <div class="settings-data-overview">
+            <div class="settings-data-total">
+                <div class="settings-data-total-value">${totalRecords}</div>
+                <div class="settings-data-total-label">Total Records</div>
+            </div>
+            <div class="settings-data-total">
+                <div class="settings-data-total-value">${sizeStr}</div>
+                <div class="settings-data-total-label">Data Size</div>
+            </div>
+        </div>
+        <div class="settings-data-grid">${cards.join('')}</div>
+    `;
+}
+
+function toggleThemeFromSettings(isLight) {
+    const body = document.body;
+    const hasLight = body.classList.contains('light-mode');
+    if (isLight && !hasLight) toggleTheme();
+    else if (!isLight && hasLight) toggleTheme();
+    const label = document.getElementById('settingThemeLabel');
+    if (label) label.textContent = isLight ? 'Light' : 'Dark';
+}
+
+function setAccentColor(hex, cssRgb) {
+    const s = getAppSettings();
+    s.accentColor = hex;
+    try { localStorage.setItem(APP_SETTINGS_KEY, JSON.stringify(s)); } catch(e) {}
+
+    // Apply accent color to CSS variables
+    document.documentElement.style.setProperty('--amber', hex);
+    document.documentElement.style.setProperty('--amber-rgb', cssRgb);
+
+    // Re-render color grid
+    const colorGrid = document.getElementById('settingAccentColors');
+    if (colorGrid) {
+        colorGrid.innerHTML = ACCENT_COLORS.map(c =>
+            `<div class="settings-color-swatch ${hex === c.value ? 'active' : ''}" 
+                 style="background:${c.value};" 
+                 title="${c.name}" 
+                 onclick="setAccentColor('${c.value}', '${c.css}')">
+                ${hex === c.value ? '<i class="fas fa-check"></i>' : ''}
+            </div>`
+        ).join('');
+    }
+    showToast(`Accent color: ${ACCENT_COLORS.find(c => c.value === hex)?.name || 'Custom'}`, 'success', 1500);
+}
+
+function setAppFontSize(size) {
+    const s = getAppSettings();
+    s.fontSize = size;
+    try { localStorage.setItem(APP_SETTINGS_KEY, JSON.stringify(s)); } catch(e) {}
+    applyFontSize(size);
+
+    // Update active button
+    document.querySelectorAll('.settings-size-btn').forEach(btn => btn.classList.remove('active'));
+    const idx = { 'small': 0, 'default': 1, 'large': 2 }[size];
+    const btns = document.querySelectorAll('.settings-size-btn');
+    if (btns[idx]) btns[idx].classList.add('active');
+
+    showToast(`Font size: ${size}`, 'success', 1500);
+}
+
+function applyFontSize(size) {
+    document.body.classList.remove('font-small', 'font-large');
+    if (size === 'small') document.body.classList.add('font-small');
+    else if (size === 'large') document.body.classList.add('font-large');
+}
+
+function toggleCompactMode(enabled) {
+    document.body.classList.toggle('compact-mode', enabled);
+    const s = getAppSettings();
+    s.compactMode = enabled;
+    try { localStorage.setItem(APP_SETTINGS_KEY, JSON.stringify(s)); } catch(e) {}
+    showToast(`Compact mode ${enabled ? 'enabled' : 'disabled'}`, 'success', 1500);
+}
+
+function applyAppSettings() {
+    const s = getAppSettings();
+
+    // Apply accent color
+    const accent = ACCENT_COLORS.find(c => c.value === s.accentColor);
+    if (accent) {
+        document.documentElement.style.setProperty('--amber', accent.value);
+        document.documentElement.style.setProperty('--amber-rgb', accent.css);
+    }
+
+    // Apply font size
+    applyFontSize(s.fontSize);
+
+    // Apply compact mode
+    document.body.classList.toggle('compact-mode', s.compactMode);
+}
+
+function exportSettingsJSON() {
+    const settings = getAppSettings();
+    const blob = new Blob([JSON.stringify(settings, null, 2)], { type: 'application/json' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `APF_Settings_${new Date().toISOString().split('T')[0]}.json`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+    showToast('Settings exported');
+}
+
+function importSettingsJSON(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = function(e) {
+        try {
+            const imported = JSON.parse(e.target.result);
+            const merged = { ...getDefaultSettings(), ...imported };
+            localStorage.setItem(APP_SETTINGS_KEY, JSON.stringify(merged));
+            applyAppSettings();
+            renderSettings();
+            showToast('Settings imported successfully', 'success');
+        } catch (err) {
+            showToast('Invalid settings file', 'error');
+        }
+    };
+    reader.readAsText(file);
+    event.target.value = '';
+}
+
+function resetAppSettings() {
+    if (!confirm('Reset all settings to defaults?\n\nThis will not affect your data — only preferences.')) return;
+    const defaults = getDefaultSettings();
+    try { localStorage.setItem(APP_SETTINGS_KEY, JSON.stringify(defaults)); } catch(e) {}
+
+    // Reset accent color
+    document.documentElement.style.removeProperty('--amber');
+    document.documentElement.style.removeProperty('--amber-rgb');
+
+    applyAppSettings();
+    renderSettings();
+    showToast('Settings reset to defaults', 'success');
+}
+
+function getSettingValue(key) {
+    return getAppSettings()[key];
+}
+
+function formatDateSetting(dateStr) {
+    if (!dateStr) return '';
+    const format = getAppSettings().dateFormat;
+    const d = new Date(dateStr);
+    if (isNaN(d.getTime())) return dateStr;
+
+    const day = String(d.getDate()).padStart(2, '0');
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const year = d.getFullYear();
+    const monthShort = d.toLocaleDateString('en-IN', { month: 'short' });
+
+    switch (format) {
+        case 'dd/mm/yyyy': return `${day}/${month}/${year}`;
+        case 'mm/dd/yyyy': return `${month}/${day}/${year}`;
+        case 'yyyy-mm-dd': return `${year}-${month}-${day}`;
+        case 'dd-mmm-yyyy':
+        default: return `${day}-${monthShort}-${year}`;
+    }
+}
+
+// ===== PROFESSIONAL GROWTH FRAMEWORK =====
+const GROWTH_DIMENSIONS = [
+    {
+        id: 'dim1',
+        name: 'Building & Sustaining Professional Relationships',
+        shortName: 'Relationships',
+        icon: 'fa-handshake',
+        color: '#3b82f6',
+        levels: [
+            'Makes efforts to build relationships with teachers in a few schools. There is continuity in efforts and learning from senior members.',
+            'Reaches out to as many teachers as possible through various platforms (school, workshop, cluster meeting, TLC, home, community). Makes efforts for understanding teachers, their circumstances, interest areas, strengths and uses these constructively.',
+            'Uses various modes (in-person, social media, workshops, community functions) effectively. Uses existing connect to expand further – taking support of teachers, education functionaries to reach more teachers. Focused on purpose while doing relationship building and mobilization. Motivates teachers to take up initiatives at classroom/school level.',
+            'Drives relationships towards maturity where frequency of connect is not a measure of quality. Constantly strives for creative ways for better communication and mobilization. Is able to mentor others in this aspect of work.'
+        ]
+    },
+    {
+        id: 'dim2',
+        name: 'Engaging with Teachers — Designing & Facilitating Sessions',
+        shortName: 'Session Design',
+        icon: 'fa-chalkboard-teacher',
+        color: '#8b5cf6',
+        levels: [
+            'Shows readiness to contribute in small supportive roles in session facilitation. Shows self-initiative in taking up assignments like report writing and other tasks during sessions/workshops.',
+            'Assists session designing and facilitation by giving inputs and doing assigned tasks (content/data search, gathering primary data, preparing summary/draft handouts). Does session facilitation in guidance of senior members. Adapts available sessions and material to own requirement.',
+            'Independently designs sessions, resources, support material and does engaging facilitation while remaining focused on session objectives. Conceptualises and designs longer engagements (workshops, seminars etc.).',
+            'Adapts/changes a session plan while facilitating to suit participant needs. Facilitates sessions in tough situations (difficult participants, sensitive/challenging topics). Reviews session plans by others and guides improvement. Mentors other members through observation, co-facilitation, feedback and handholding.'
+        ]
+    },
+    {
+        id: 'dim3',
+        name: 'Content & Material Development',
+        shortName: 'Content Dev',
+        icon: 'fa-pen-fancy',
+        color: '#10b981',
+        levels: [
+            'Engages with existing content and material for sessions, workshops with interest and asks relevant questions.',
+            'Writes simple descriptions of school engagement, sessions, workshops and simple notes on readings. Selects and adapts existing material to suit own requirement. Develops session/workshop/course material (PPT, worksheets, handouts) with some guidance.',
+            'Contributes substantially in developing good quality workshop/course modules. Independently develops good quality material. Writes good quality teaching plans. Writes reflective notes, reviews, reports based on readings and experiences which enrich existing content/material.',
+            'Assists/mentors others in developing session/workshop/course material. Selects/develops content as per curricular goals with ability to contribute in textbook writing. Documents field experiences as reports, articles and papers. Writes well thought out notes with strong theory-practice connect.'
+        ]
+    },
+    {
+        id: 'dim4',
+        name: 'Onsite / School Level Engagement',
+        shortName: 'School Engagement',
+        icon: 'fa-school',
+        color: '#f59e0b',
+        levels: [
+            'Shows inclination and effort towards student and teacher engagement at school level. Plans and maintains regularity in school engagement. Observes senior members and learns from them.',
+            'Engages with children and teachers in classroom situations with interest and planning. Draws a sense of student learning levels and teacher practices. Builds comprehensiveness in school observation. Attempts to scaffold teachers as per agreed plan.',
+            'Draws comprehensive sense of student learning and teacher practices in short durations. Engages with all school teachers for team effort. Engages with school heads and draws their support. Visualizes and provides individualized scaffolding. Plans and executes student engagement independently and with teachers.',
+            'Draws comprehensive and in-depth sense with proper evidences in short durations. Motivates school teams (teachers + Principal) for school development initiatives. Scaffolds variety of teachers in multiple ways – providing need-based inputs, relevant resources, hand-holding, co-teaching or demonstration.'
+        ]
+    },
+    {
+        id: 'dim5',
+        name: 'Visualising, Planning & Executing Teacher Capacity Building',
+        shortName: 'Capacity Building',
+        icon: 'fa-bullseye',
+        color: '#ef4444',
+        levels: [
+            'Reads articles, books and engages with team members to understand teacher capacity building efforts in totality, broader timeframe and continuity. Shares reflections/thoughts with other team members.',
+            'Makes appropriate choices (directly related to teaching-learning process) about particular topics/content/issues for discussion and demonstration with teachers.',
+            'Visualizes forward/backward linkages of sessions conducted earlier and builds on them for classroom effect. Conceptualizes teacher development plans for different categories of teachers based on expertise and motivation levels. Plans a series of capacity development engagements in multiple modes.',
+            'Develops comprehensive, long-term teacher professional development plan for variety of cohorts and executes it successfully (shows change in teaching practices and learning levels). Mentors others to understand, conceptualize and execute teacher capacity building initiatives.'
+        ]
+    }
+];
+
+function getGrowthAssessments() {
+    return DB.get('growthAssessments') || [];
+}
+
+function getLatestAssessment() {
+    const assessments = getGrowthAssessments();
+    if (assessments.length === 0) return null;
+    return assessments.sort((a, b) => (b.date || '').localeCompare(a.date || ''))[0];
+}
+
+function renderGrowthFramework() {
+    const latest = getLatestAssessment();
+    const assessments = getGrowthAssessments();
+
+    // Overview
+    renderGrowthOverview(latest, assessments);
+
+    // Radar chart
+    renderGrowthRadar(latest);
+
+    // Journey card
+    renderGrowthJourney(latest, assessments);
+
+    // Growth trend line chart (shows when 2+ assessments)
+    renderGrowthTrendChart();
+
+    // Dimension cards
+    renderGrowthDimensions(latest);
+
+    // Action Plans
+    renderGrowthActionPlans();
+
+    // Growth Tips & Suggestions
+    renderGrowthTips();
+
+    // Timeline
+    renderGrowthTimeline(assessments);
+}
+
+function renderGrowthOverview(latest, assessments) {
+    const el = document.getElementById('growthOverview');
+    if (!el) return;
+
+    if (!latest) {
+        el.innerHTML = `
+            <div class="growth-empty-state">
+                <div class="growth-empty-icon"><i class="fas fa-seedling"></i></div>
+                <h3>Begin Your Growth Journey</h3>
+                <p>The APF Developmental Framework helps you track your growth across 5 key dimensions of a Resource Person's work. Start by taking a self-assessment.</p>
+                <button class="btn btn-primary" onclick="openGrowthAssessment()" style="margin-top:16px;">
+                    <i class="fas fa-pen-ruler"></i> Take First Assessment
+                </button>
+            </div>
+        `;
+        return;
+    }
+
+    const totalScore = GROWTH_DIMENSIONS.reduce((s, d) => s + (latest.levels[d.id] || 1), 0);
+    const maxScore = GROWTH_DIMENSIONS.length * 4;
+    const avgLevel = (totalScore / GROWTH_DIMENSIONS.length).toFixed(1);
+    const pct = Math.round((totalScore / maxScore) * 100);
+
+    // Growth from previous assessment
+    let growthText = '';
+    if (assessments.length >= 2) {
+        const sorted = assessments.sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+        const prev = sorted[1];
+        const prevTotal = GROWTH_DIMENSIONS.reduce((s, d) => s + (prev.levels[d.id] || 1), 0);
+        const diff = totalScore - prevTotal;
+        if (diff > 0) growthText = `<span class="growth-trend up"><i class="fas fa-arrow-up"></i> +${diff} points since last assessment</span>`;
+        else if (diff < 0) growthText = `<span class="growth-trend down"><i class="fas fa-arrow-down"></i> ${diff} points since last assessment</span>`;
+        else growthText = `<span class="growth-trend flat"><i class="fas fa-minus"></i> Same as last assessment</span>`;
+    }
+
+    const levelLabel = avgLevel >= 3.5 ? 'Expert Practitioner' : avgLevel >= 2.5 ? 'Proficient Practitioner' : avgLevel >= 1.5 ? 'Developing Practitioner' : 'Emerging Practitioner';
+
+    el.innerHTML = `
+        <div class="growth-score-card">
+            <div class="growth-score-ring">
+                <svg viewBox="0 0 120 120">
+                    <circle cx="60" cy="60" r="52" fill="none" stroke="var(--border)" stroke-width="8"/>
+                    <circle cx="60" cy="60" r="52" fill="none" stroke="var(--amber)" stroke-width="8" 
+                        stroke-dasharray="${326.7 * pct / 100} ${326.7 * (1 - pct / 100)}" 
+                        stroke-linecap="round" transform="rotate(-90 60 60)" style="transition:stroke-dasharray 1s;"/>
+                </svg>
+                <div class="growth-score-value">${avgLevel}</div>
+                <div class="growth-score-max">/4</div>
+            </div>
+            <div class="growth-score-info">
+                <h3>${levelLabel}</h3>
+                <p>Overall average across 5 dimensions</p>
+                ${growthText}
+                <div class="growth-score-meta">
+                    <span><i class="fas fa-calendar"></i> Last assessed: ${formatDateSetting(latest.date)}</span>
+                    <span><i class="fas fa-history"></i> ${assessments.length} assessment${assessments.length > 1 ? 's' : ''}</span>
+                </div>
+            </div>
+        </div>
+        <div class="growth-level-badges">
+            ${GROWTH_DIMENSIONS.map(d => {
+                const lvl = latest.levels[d.id] || 1;
+                return `<div class="growth-level-badge" style="--dim-color:${d.color}">
+                    <i class="fas ${d.icon}"></i>
+                    <span class="growth-badge-label">${d.shortName}</span>
+                    <span class="growth-badge-level">L${lvl}</span>
+                </div>`;
+            }).join('')}
+        </div>
+    `;
+}
+
+let growthRadarChartInstance = null;
+function renderGrowthRadar(latest) {
+    const canvas = document.getElementById('growthRadarChart');
+    if (!canvas || typeof Chart === 'undefined') return;
+
+    if (growthRadarChartInstance) {
+        growthRadarChartInstance.destroy();
+        growthRadarChartInstance = null;
+    }
+
+    const labels = GROWTH_DIMENSIONS.map(d => d.shortName);
+    const data = GROWTH_DIMENSIONS.map(d => latest ? (latest.levels[d.id] || 1) : 0);
+    const bgColors = GROWTH_DIMENSIONS.map(d => d.color + '33');
+    const borderColors = GROWTH_DIMENSIONS.map(d => d.color);
+
+    // Get previous assessment for comparison
+    const assessments = getGrowthAssessments();
+    const sorted = assessments.sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+    const prevData = sorted.length >= 2 ? GROWTH_DIMENSIONS.map(d => sorted[1].levels[d.id] || 1) : null;
+
+    const datasets = [
+        {
+            label: 'Current Level',
+            data: data,
+            backgroundColor: 'rgba(245, 158, 11, 0.15)',
+            borderColor: 'rgb(245, 158, 11)',
+            pointBackgroundColor: borderColors,
+            pointBorderColor: borderColors,
+            pointRadius: 6,
+            pointHoverRadius: 8,
+            borderWidth: 2,
+            fill: true
+        }
+    ];
+    if (prevData) {
+        datasets.push({
+            label: 'Previous',
+            data: prevData,
+            backgroundColor: 'rgba(150, 150, 150, 0.05)',
+            borderColor: 'rgba(150, 150, 150, 0.4)',
+            pointBackgroundColor: 'rgba(150,150,150,0.5)',
+            pointRadius: 3,
+            borderWidth: 1,
+            borderDash: [5, 5],
+            fill: true
+        });
+    }
+
+    growthRadarChartInstance = new Chart(canvas, {
+        type: 'radar',
+        data: { labels, datasets },
+        options: {
+            responsive: true,
+            maintainAspectRatio: true,
+            plugins: {
+                legend: { display: prevData ? true : false, labels: { color: 'var(--text-secondary)', font: { size: 11 } } }
+            },
+            scales: {
+                r: {
+                    min: 0,
+                    max: 4,
+                    ticks: {
+                        stepSize: 1,
+                        color: 'var(--text-muted)',
+                        backdropColor: 'transparent',
+                        font: { size: 10 },
+                        callback: v => 'L' + v
+                    },
+                    pointLabels: {
+                        color: (ctx) => GROWTH_DIMENSIONS[ctx.index]?.color || '#999',
+                        font: { size: 12, weight: '600' }
+                    },
+                    grid: { color: 'rgba(150,150,150,0.15)' },
+                    angleLines: { color: 'rgba(150,150,150,0.15)' }
+                }
+            }
+        }
+    });
+}
+
+function renderGrowthJourney(latest, assessments) {
+    const el = document.getElementById('growthJourneyCard');
+    if (!el) return;
+
+    if (!latest) {
+        el.innerHTML = '<div style="padding:24px;text-align:center;color:var(--text-muted);"><i class="fas fa-route" style="font-size:32px;margin-bottom:12px;display:block;"></i>Your growth journey will appear here after your first assessment.</div>';
+        return;
+    }
+
+    // Find strongest and weakest dimensions
+    const dimLevels = GROWTH_DIMENSIONS.map(d => ({ ...d, level: latest.levels[d.id] || 1 }));
+    dimLevels.sort((a, b) => b.level - a.level);
+    const strongest = dimLevels[0];
+    const weakest = dimLevels[dimLevels.length - 1];
+
+    // Next growth targets
+    const nextTargets = dimLevels.filter(d => d.level < 4).slice(-2);
+
+    el.innerHTML = `
+        <h3><i class="fas fa-route"></i> Growth Insights</h3>
+        <div class="growth-insight-cards">
+            <div class="growth-insight strength">
+                <div class="growth-insight-icon" style="color:${strongest.color};"><i class="fas fa-trophy"></i></div>
+                <div>
+                    <strong>Strongest Area</strong>
+                    <span>${strongest.shortName} — Level ${strongest.level}</span>
+                </div>
+            </div>
+            <div class="growth-insight focus">
+                <div class="growth-insight-icon" style="color:${weakest.color};"><i class="fas fa-crosshairs"></i></div>
+                <div>
+                    <strong>Focus Area</strong>
+                    <span>${weakest.shortName} — Level ${weakest.level}</span>
+                </div>
+            </div>
+            ${nextTargets.map(t => `
+                <div class="growth-insight target">
+                    <div class="growth-insight-icon" style="color:${t.color};"><i class="fas fa-flag"></i></div>
+                    <div>
+                        <strong>Next Target: L${t.level + 1}</strong>
+                        <span>${t.shortName}</span>
+                    </div>
+                </div>
+            `).join('')}
+        </div>
+        <div class="growth-progress-summary">
+            <strong><i class="fas fa-chart-line"></i> Overall Progress</strong>
+            <div class="growth-progress-bar-wrap">
+                ${GROWTH_DIMENSIONS.map(d => {
+                    const lvl = latest.levels[d.id] || 1;
+                    return `<div class="growth-dim-progress">
+                        <span class="growth-dim-progress-label" style="color:${d.color};"><i class="fas ${d.icon}"></i></span>
+                        <div class="growth-dim-progress-bar">
+                            <div class="growth-dim-progress-fill" style="width:${lvl * 25}%;background:${d.color};"></div>
+                        </div>
+                        <span class="growth-dim-progress-val">L${lvl}</span>
+                    </div>`;
+                }).join('')}
+            </div>
+        </div>
+    `;
+}
+
+function renderGrowthDimensions(latest) {
+    const el = document.getElementById('growthDimensions');
+    if (!el) return;
+    if (!latest) { el.innerHTML = ''; return; }
+
+    el.innerHTML = GROWTH_DIMENSIONS.map(d => {
+        const currentLevel = latest.levels[d.id] || 1;
+        const notes = latest.notes?.[d.id] || '';
+        const evidence = latest.evidence?.[d.id] || '';
+
+        return `
+        <div class="growth-dim-card" onclick="showGrowthDimDetail('${d.id}')">
+            <div class="growth-dim-card-header" style="--dim-color:${d.color}">
+                <div class="growth-dim-icon" style="background:${d.color};"><i class="fas ${d.icon}"></i></div>
+                <div>
+                    <h4>${d.name}</h4>
+                    <div class="growth-dim-level-row">
+                        ${[1,2,3,4].map(l => `<span class="growth-dim-dot ${l <= currentLevel ? 'active' : ''}" style="${l <= currentLevel ? 'background:'+d.color : ''}"></span>`).join('')}
+                        <span class="growth-dim-level-text">Level ${currentLevel} of 4</span>
+                    </div>
+                </div>
+            </div>
+            <div class="growth-dim-card-body">
+                <p class="growth-dim-desc">${d.levels[currentLevel - 1].substring(0, 160)}${d.levels[currentLevel - 1].length > 160 ? '...' : ''}</p>
+                ${notes ? `<div class="growth-dim-notes"><i class="fas fa-sticky-note"></i> ${escapeHtml(notes).substring(0, 100)}${notes.length > 100 ? '...' : ''}</div>` : ''}
+                ${currentLevel < 4 ? `<div class="growth-dim-next"><i class="fas fa-arrow-right"></i> <strong>Next (L${currentLevel + 1}):</strong> ${d.levels[currentLevel].substring(0, 120)}...</div>` : '<div class="growth-dim-next mastered"><i class="fas fa-crown"></i> Mastery level achieved!</div>'}
+            </div>
+        </div>`;
+    }).join('');
+}
+
+function renderGrowthTimeline(assessments) {
+    const el = document.getElementById('growthTimeline');
+    if (!el) return;
+
+    if (assessments.length === 0) {
+        el.innerHTML = '<p style="text-align:center;color:var(--text-muted);padding:20px;">No assessments yet.</p>';
+        return;
+    }
+
+    const sorted = [...assessments].sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+
+    el.innerHTML = `<div class="growth-timeline-list">
+        ${sorted.map((a, idx) => {
+            const total = GROWTH_DIMENSIONS.reduce((s, d) => s + (a.levels[d.id] || 1), 0);
+            const avg = (total / GROWTH_DIMENSIONS.length).toFixed(1);
+            const isMentor = a.assessType === 'mentor';
+            return `<div class="growth-timeline-item ${idx === 0 ? 'latest' : ''}">
+                <div class="growth-timeline-dot"></div>
+                <div class="growth-timeline-content">
+                    <div class="growth-timeline-date">
+                        ${formatDateSetting(a.date)}
+                        ${isMentor ? `<span class="growth-timeline-badge mentor"><i class="fas fa-user-tie"></i> Mentor${a.mentorName ? ': ' + escapeHtml(a.mentorName) : ''}</span>` : '<span class="growth-timeline-badge self"><i class="fas fa-user"></i> Self</span>'}
+                    </div>
+                    <div class="growth-timeline-score">Average: <strong>${avg}/4</strong></div>
+                    <div class="growth-timeline-dims">
+                        ${GROWTH_DIMENSIONS.map(d => `<span style="color:${d.color};" title="${d.shortName}: L${a.levels[d.id] || 1}"><i class="fas ${d.icon}"></i> L${a.levels[d.id] || 1}</span>`).join('')}
+                    </div>
+                    <div class="growth-timeline-actions">
+                        <button class="btn btn-ghost btn-xs" onclick="event.stopPropagation(); editGrowthAssessment('${a.id}')" title="Edit"><i class="fas fa-edit"></i></button>
+                        ${idx !== 0 ? `<button class="btn btn-ghost btn-xs" onclick="event.stopPropagation(); deleteGrowthAssessment('${a.id}')" title="Delete"><i class="fas fa-trash"></i></button>` : ''}
+                    </div>
+                </div>
+            </div>`;
+        }).join('')}
+    </div>`;
+}
+
+function openGrowthAssessment() {
+    growthEditId = null;
+    growthAssessMode = 'self';
+    const latest = getLatestAssessment();
+    const form = document.getElementById('growthAssessForm');
+    if (!form) return;
+
+    // Reset mode toggle
+    const modeToggle = document.getElementById('growthAssessModeToggle');
+    if (modeToggle) {
+        modeToggle.querySelectorAll('.growth-mode-btn').forEach((b, i) => b.classList.toggle('active', i === 0));
+    }
+    const mentorFields = document.getElementById('growthMentorFields');
+    if (mentorFields) mentorFields.style.display = 'none';
+    const title = document.getElementById('growthAssessModalTitle');
+    if (title) title.innerHTML = '<i class="fas fa-pen-ruler"></i> Self-Assessment';
+    const helpText = document.getElementById('growthAssessHelpText');
+    if (helpText) helpText.innerHTML = '<i class="fas fa-info-circle"></i> Honestly assess your current level (1-4) for each dimension. Add notes/evidence to support your self-rating.';
+
+    form.innerHTML = GROWTH_DIMENSIONS.map(d => {
+        const currentLevel = latest ? (latest.levels[d.id] || 1) : 1;
+        const currentNotes = latest ? (latest.notes?.[d.id] || '') : '';
+        const currentEvidence = latest ? (latest.evidence?.[d.id] || '') : '';
+
+        return `
+        <div class="growth-assess-dim">
+            <div class="growth-assess-dim-header" style="border-left:4px solid ${d.color};">
+                <i class="fas ${d.icon}" style="color:${d.color};"></i>
+                <strong>${d.name}</strong>
+            </div>
+            <div class="growth-assess-levels" id="growthLevels_${d.id}">
+                ${d.levels.map((desc, i) => `
+                    <label class="growth-assess-level-option ${i + 1 === currentLevel ? 'selected' : ''}">
+                        <input type="radio" name="growth_${d.id}" value="${i + 1}" ${i + 1 === currentLevel ? 'checked' : ''} onchange="selectGrowthLevel('${d.id}', ${i + 1})">
+                        <div class="growth-assess-level-header">
+                            <span class="growth-assess-level-badge" style="background:${d.color}">Level ${i + 1}</span>
+                        </div>
+                        <p>${desc}</p>
+                    </label>
+                `).join('')}
+            </div>
+            <div class="growth-assess-notes">
+                <label><i class="fas fa-sticky-note"></i> Self-Reflection Notes</label>
+                <textarea id="growthNotes_${d.id}" placeholder="What evidence supports this level? What are you doing well? What needs work?">${escapeHtml(currentNotes)}</textarea>
+            </div>
+            <div class="growth-assess-notes">
+                <label><i class="fas fa-link"></i> Evidence / Examples</label>
+                <textarea id="growthEvidence_${d.id}" placeholder="Specific examples: sessions conducted, schools visited, materials developed, mentoring done...">${escapeHtml(currentEvidence)}</textarea>
+            </div>
+        </div>`;
+    }).join('');
+
+    openModal('growthAssessModal');
+}
+
+function selectGrowthLevel(dimId, level) {
+    const container = document.getElementById('growthLevels_' + dimId);
+    if (!container) return;
+    container.querySelectorAll('.growth-assess-level-option').forEach((opt, i) => {
+        opt.classList.toggle('selected', i + 1 === level);
+    });
+}
+
+function saveGrowthAssessment() {
+    const assessment = {
+        id: growthEditId || DB.generateId(),
+        date: growthEditId ? (getGrowthAssessments().find(a => a.id === growthEditId)?.date || new Date().toISOString().split('T')[0]) : new Date().toISOString().split('T')[0],
+        levels: {},
+        notes: {},
+        evidence: {},
+        assessType: growthAssessMode
+    };
+
+    if (growthAssessMode === 'mentor') {
+        assessment.mentorName = (document.getElementById('growthMentorName')?.value || '').trim();
+        assessment.mentorType = document.getElementById('growthMentorType')?.value || 'Quarterly Review';
+    }
+
+    GROWTH_DIMENSIONS.forEach(d => {
+        const selected = document.querySelector(`input[name="growth_${d.id}"]:checked`);
+        assessment.levels[d.id] = selected ? parseInt(selected.value) : 1;
+        assessment.notes[d.id] = (document.getElementById('growthNotes_' + d.id)?.value || '').trim();
+        assessment.evidence[d.id] = (document.getElementById('growthEvidence_' + d.id)?.value || '').trim();
+    });
+
+    let assessments = getGrowthAssessments();
+
+    if (growthEditId) {
+        const idx = assessments.findIndex(a => a.id === growthEditId);
+        if (idx >= 0) assessments[idx] = assessment;
+        else assessments.push(assessment);
+    } else {
+        assessments.push(assessment);
+    }
+
+    DB.set('growthAssessments', assessments);
+
+    const wasEdit = !!growthEditId;
+    growthEditId = null;
+    growthAssessMode = 'self';
+    closeModal('growthAssessModal');
+    renderGrowthFramework();
+    showToast(wasEdit ? 'Assessment updated! 🌱' : 'Assessment saved! Keep growing 🌱', 'success');
+}
+
+function deleteGrowthAssessment(id) {
+    if (!confirm('Delete this assessment? This cannot be undone.')) return;
+    let assessments = getGrowthAssessments();
+    assessments = assessments.filter(a => a.id !== id);
+    DB.set('growthAssessments', assessments);
+    renderGrowthFramework();
+    showToast('Assessment deleted', 'info');
+}
+
+function showGrowthDimDetail(dimId) {
+    const dim = GROWTH_DIMENSIONS.find(d => d.id === dimId);
+    if (!dim) return;
+
+    const latest = getLatestAssessment();
+    const currentLevel = latest ? (latest.levels[dimId] || 1) : 0;
+    const notes = latest?.notes?.[dimId] || '';
+    const evidence = latest?.evidence?.[dimId] || '';
+
+    // Get history for this dimension
+    const assessments = getGrowthAssessments().sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+
+    document.getElementById('growthDimDetailTitle').innerHTML = `<i class="fas ${dim.icon}" style="color:${dim.color};"></i> ${dim.name}`;
+
+    document.getElementById('growthDimDetailContent').innerHTML = `
+        <div class="growth-detail-current">
+            <div class="growth-detail-level" style="background:${dim.color};">
+                <span>CURRENT LEVEL</span>
+                <strong>${currentLevel || '—'}</strong>
+                <span>of 4</span>
+            </div>
+            <div class="growth-detail-desc">
+                ${currentLevel > 0 ? `<p>${dim.levels[currentLevel - 1]}</p>` : '<p style="color:var(--text-muted);">Not yet assessed</p>'}
+            </div>
+        </div>
+
+        <div class="growth-detail-levels">
+            <h4>All Levels</h4>
+            ${dim.levels.map((desc, i) => `
+                <div class="growth-detail-level-item ${i + 1 === currentLevel ? 'current' : ''} ${i + 1 < currentLevel ? 'achieved' : ''}">
+                    <div class="growth-detail-level-num" style="${i + 1 <= currentLevel ? 'background:'+dim.color+';color:white;' : ''}">
+                        ${i + 1 <= currentLevel ? '<i class="fas fa-check"></i>' : i + 1}
+                    </div>
+                    <div>
+                        <strong>Level ${i + 1} ${i + 1 === currentLevel ? '(Current)' : i + 1 < currentLevel ? '(Achieved)' : ''}</strong>
+                        <p>${desc}</p>
+                    </div>
+                </div>
+            `).join('')}
+        </div>
+
+        ${notes ? `<div class="growth-detail-notes"><h4><i class="fas fa-sticky-note"></i> Self-Reflection Notes</h4><p>${escapeHtml(notes)}</p></div>` : ''}
+        ${evidence ? `<div class="growth-detail-notes"><h4><i class="fas fa-link"></i> Evidence & Examples</h4><p>${escapeHtml(evidence)}</p></div>` : ''}
+
+        ${assessments.length > 1 ? `
+            <div class="growth-detail-history">
+                <h4><i class="fas fa-history"></i> Level History</h4>
+                <div class="growth-detail-history-list">
+                    ${assessments.map(a => `
+                        <div class="growth-detail-history-item">
+                            <span class="growth-detail-history-date">${formatDateSetting(a.date)}</span>
+                            <span class="growth-detail-history-level" style="background:${dim.color};">L${a.levels[dimId] || 1}</span>
+                        </div>
+                    `).join('')}
+                </div>
+            </div>
+        ` : ''}
+    `;
+
+    openModal('growthDimDetailModal');
+}
+
+function exportGrowthReport() {
+    const latest = getLatestAssessment();
+    const assessments = getGrowthAssessments();
+    if (!latest) { showToast('Take an assessment first', 'info'); return; }
+
+    if (typeof XLSX === 'undefined') { showToast('Excel library not loaded', 'error'); return; }
+
+    const wb = XLSX.utils.book_new();
+
+    // Current assessment sheet
+    const currentData = GROWTH_DIMENSIONS.map(d => ({
+        'Dimension': d.name,
+        'Current Level': latest.levels[d.id] || 1,
+        'Level Description': d.levels[(latest.levels[d.id] || 1) - 1],
+        'Self-Reflection': latest.notes?.[d.id] || '',
+        'Evidence': latest.evidence?.[d.id] || '',
+        'Next Level': (latest.levels[d.id] || 1) < 4 ? d.levels[latest.levels[d.id] || 1] : 'Mastery achieved'
+    }));
+    const ws1 = XLSX.utils.json_to_sheet(currentData);
+    XLSX.utils.book_append_sheet(wb, ws1, 'Current Assessment');
+
+    // History sheet
+    if (assessments.length > 0) {
+        const histData = [];
+        assessments.sort((a, b) => (a.date || '').localeCompare(b.date || '')).forEach(a => {
+            const row = { Date: a.date };
+            GROWTH_DIMENSIONS.forEach(d => { row[d.shortName] = a.levels[d.id] || 1; });
+            row['Average'] = (GROWTH_DIMENSIONS.reduce((s, d) => s + (a.levels[d.id] || 1), 0) / GROWTH_DIMENSIONS.length).toFixed(1);
+            histData.push(row);
+        });
+        const ws2 = XLSX.utils.json_to_sheet(histData);
+        XLSX.utils.book_append_sheet(wb, ws2, 'Assessment History');
+    }
+
+    // Framework reference sheet
+    const refData = [];
+    GROWTH_DIMENSIONS.forEach(d => {
+        d.levels.forEach((desc, i) => {
+            refData.push({ Dimension: d.name, Level: i + 1, Description: desc });
+        });
+    });
+    const ws3 = XLSX.utils.json_to_sheet(refData);
+    XLSX.utils.book_append_sheet(wb, ws3, 'Framework Reference');
+
+    XLSX.writeFile(wb, `APF_Growth_Report_${new Date().toISOString().split('T')[0]}.xlsx`);
+    showToast('Growth report exported to Excel');
+}
+
+// --- Mentor Assessment Mode ---
+let growthAssessMode = 'self';
+let growthEditId = null;
+
+function setGrowthAssessMode(mode, ev) {
+    growthAssessMode = mode;
+    document.querySelectorAll('.growth-mode-btn').forEach(b => b.classList.remove('active'));
+    const evTarget = ev ? ev.target : (window.event ? window.event.target : null);
+    if (evTarget) evTarget.closest('.growth-mode-btn').classList.add('active');
+    const mentorFields = document.getElementById('growthMentorFields');
+    const helpText = document.getElementById('growthAssessHelpText');
+    const title = document.getElementById('growthAssessModalTitle');
+    if (mode === 'mentor') {
+        mentorFields.style.display = 'block';
+        helpText.innerHTML = '<i class="fas fa-info-circle"></i> As a mentor/assessor, rate the Resource Person\'s level (1-4) for each dimension based on your observations.';
+        title.innerHTML = '<i class="fas fa-user-tie"></i> Mentor Assessment';
+    } else {
+        mentorFields.style.display = 'none';
+        helpText.innerHTML = '<i class="fas fa-info-circle"></i> Honestly assess your current level (1-4) for each dimension. Add notes/evidence to support your self-rating.';
+        title.innerHTML = '<i class="fas fa-pen-ruler"></i> Self-Assessment';
+    }
+}
+
+// --- Edit Past Assessment ---
+function editGrowthAssessment(id) {
+    const assessments = getGrowthAssessments();
+    const assessment = assessments.find(a => a.id === id);
+    if (!assessment) { showToast('Assessment not found', 'error'); return; }
+
+    growthEditId = id;
+    const form = document.getElementById('growthAssessForm');
+    if (!form) return;
+
+    // Reset mode
+    growthAssessMode = assessment.assessType === 'mentor' ? 'mentor' : 'self';
+    const modeToggle = document.getElementById('growthAssessModeToggle');
+    if (modeToggle) {
+        modeToggle.querySelectorAll('.growth-mode-btn').forEach((b, i) => {
+            b.classList.toggle('active', (i === 0 && growthAssessMode === 'self') || (i === 1 && growthAssessMode === 'mentor'));
+        });
+    }
+    const mentorFields = document.getElementById('growthMentorFields');
+    if (assessment.assessType === 'mentor') {
+        mentorFields.style.display = 'block';
+        document.getElementById('growthMentorName').value = assessment.mentorName || '';
+        document.getElementById('growthMentorType').value = assessment.mentorType || 'Quarterly Review';
+    } else {
+        mentorFields.style.display = 'none';
+    }
+
+    document.getElementById('growthAssessModalTitle').innerHTML = '<i class="fas fa-edit"></i> Edit Assessment (' + formatDateSetting(assessment.date) + ')';
+
+    form.innerHTML = GROWTH_DIMENSIONS.map(d => {
+        const currentLevel = assessment.levels[d.id] || 1;
+        const currentNotes = assessment.notes?.[d.id] || '';
+        const currentEvidence = assessment.evidence?.[d.id] || '';
+
+        return `
+        <div class="growth-assess-dim">
+            <div class="growth-assess-dim-header" style="border-left:4px solid ${d.color};">
+                <i class="fas ${d.icon}" style="color:${d.color};"></i>
+                <strong>${d.name}</strong>
+            </div>
+            <div class="growth-assess-levels" id="growthLevels_${d.id}">
+                ${d.levels.map((desc, i) => `
+                    <label class="growth-assess-level-option ${i + 1 === currentLevel ? 'selected' : ''}">
+                        <input type="radio" name="growth_${d.id}" value="${i + 1}" ${i + 1 === currentLevel ? 'checked' : ''} onchange="selectGrowthLevel('${d.id}', ${i + 1})">
+                        <div class="growth-assess-level-header">
+                            <span class="growth-assess-level-badge" style="background:${d.color}">Level ${i + 1}</span>
+                        </div>
+                        <p>${desc}</p>
+                    </label>
+                `).join('')}
+            </div>
+            <div class="growth-assess-notes">
+                <label><i class="fas fa-sticky-note"></i> Self-Reflection Notes</label>
+                <textarea id="growthNotes_${d.id}" placeholder="What evidence supports this level?">${escapeHtml(currentNotes)}</textarea>
+            </div>
+            <div class="growth-assess-notes">
+                <label><i class="fas fa-link"></i> Evidence / Examples</label>
+                <textarea id="growthEvidence_${d.id}" placeholder="Specific examples...">${escapeHtml(currentEvidence)}</textarea>
+            </div>
+        </div>`;
+    }).join('');
+
+    openModal('growthAssessModal');
+}
+
+// --- Growth Trend Line Chart ---
+let growthTrendChartInstance = null;
+function renderGrowthTrendChart() {
+    const section = document.getElementById('growthTrendSection');
+    const canvas = document.getElementById('growthTrendChart');
+    if (!section || !canvas || typeof Chart === 'undefined') return;
+
+    const assessments = getGrowthAssessments();
+    if (assessments.length < 2) { section.style.display = 'none'; return; }
+
+    section.style.display = 'block';
+    const sorted = [...assessments].sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+    const labels = sorted.map(a => formatDateSetting(a.date));
+
+    if (growthTrendChartInstance) { growthTrendChartInstance.destroy(); growthTrendChartInstance = null; }
+
+    const datasets = GROWTH_DIMENSIONS.map(d => ({
+        label: d.shortName,
+        data: sorted.map(a => a.levels[d.id] || 1),
+        borderColor: d.color,
+        backgroundColor: d.color + '22',
+        pointBackgroundColor: d.color,
+        pointRadius: 5,
+        pointHoverRadius: 7,
+        borderWidth: 2,
+        tension: 0.3,
+        fill: false
+    }));
+
+    // Overall average line
+    datasets.push({
+        label: 'Overall Average',
+        data: sorted.map(a => {
+            const sum = GROWTH_DIMENSIONS.reduce((s, d) => s + (a.levels[d.id] || 1), 0);
+            return +(sum / GROWTH_DIMENSIONS.length).toFixed(1);
+        }),
+        borderColor: '#f59e0b',
+        backgroundColor: '#f59e0b22',
+        pointBackgroundColor: '#f59e0b',
+        pointRadius: 6,
+        pointHoverRadius: 8,
+        borderWidth: 3,
+        tension: 0.3,
+        borderDash: [6, 3],
+        fill: false
+    });
+
+    growthTrendChartInstance = new Chart(canvas, {
+        type: 'line',
+        data: { labels, datasets },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            interaction: { mode: 'index', intersect: false },
+            plugins: {
+                legend: {
+                    display: true,
+                    position: 'bottom',
+                    labels: { usePointStyle: true, padding: 16, font: { size: 11 } }
+                },
+                tooltip: {
+                    callbacks: {
+                        label: ctx => `${ctx.dataset.label}: Level ${ctx.parsed.y}`
+                    }
+                }
+            },
+            scales: {
+                y: {
+                    min: 0, max: 4,
+                    ticks: { stepSize: 1, callback: v => 'L' + v },
+                    grid: { color: 'rgba(150,150,150,0.12)' }
+                },
+                x: {
+                    grid: { display: false }
+                }
+            }
+        }
+    });
+}
+
+// --- Action Plans CRUD ---
+function getGrowthActions() {
+    return DB.get('growthActionPlans') || [];
+}
+
+function renderGrowthActionPlans() {
+    const el = document.getElementById('growthActionPlans');
+    const section = document.getElementById('growthActionPlansSection');
+    if (!el) return;
+
+    const actions = getGrowthActions();
+    const latest = getLatestAssessment();
+
+    if (!latest) {
+        if (section) section.style.display = 'none';
+        return;
+    }
+    if (section) section.style.display = 'block';
+
+    if (actions.length === 0) {
+        el.innerHTML = `<div class="growth-action-empty">
+            <i class="fas fa-clipboard-check" style="font-size:28px;color:var(--text-muted);margin-bottom:10px;"></i>
+            <p style="color:var(--text-muted);margin:0;">No action plans yet. Set concrete goals for your growth!</p>
+        </div>`;
+        return;
+    }
+
+    // Sort: in-progress first, then not-started, then completed
+    const statusOrder = { 'in-progress': 0, 'not-started': 1, 'completed': 2 };
+    const sorted = [...actions].sort((a, b) => (statusOrder[a.status] || 1) - (statusOrder[b.status] || 1));
+
+    el.innerHTML = sorted.map(a => {
+        const dim = GROWTH_DIMENSIONS.find(d => d.id === a.dimId);
+        const statusIcon = a.status === 'completed' ? 'fa-check-circle' : a.status === 'in-progress' ? 'fa-spinner fa-pulse' : 'fa-circle';
+        const statusClass = a.status === 'completed' ? 'completed' : a.status === 'in-progress' ? 'in-progress' : 'not-started';
+        const priorityColor = a.priority === 'high' ? '#ef4444' : a.priority === 'medium' ? '#f59e0b' : '#10b981';
+        const isOverdue = a.targetDate && a.status !== 'completed' && a.targetDate < new Date().toISOString().split('T')[0];
+
+        return `<div class="growth-action-card ${statusClass} ${isOverdue ? 'overdue' : ''}">
+            <div class="growth-action-check">
+                <button class="growth-action-toggle" onclick="toggleGrowthAction('${a.id}')" title="${a.status === 'completed' ? 'Mark incomplete' : 'Mark complete'}">
+                    <i class="fas ${statusIcon}" style="color:${a.status === 'completed' ? '#10b981' : a.status === 'in-progress' ? '#3b82f6' : 'var(--text-muted)'}"></i>
+                </button>
+            </div>
+            <div class="growth-action-body">
+                <div class="growth-action-title ${a.status === 'completed' ? 'done' : ''}">${escapeHtml(a.title)}</div>
+                <div class="growth-action-meta">
+                    ${dim ? `<span class="growth-action-dim" style="background:${dim.color}20;color:${dim.color};"><i class="fas ${dim.icon}"></i> ${dim.shortName}</span>` : ''}
+                    <span class="growth-action-target-level"><i class="fas fa-flag"></i> Target L${a.targetLevel || '?'}</span>
+                    <span class="growth-action-priority" style="color:${priorityColor};"><i class="fas fa-signal"></i> ${(a.priority || 'medium').charAt(0).toUpperCase() + (a.priority || 'medium').slice(1)}</span>
+                    ${a.targetDate ? `<span class="growth-action-date ${isOverdue ? 'overdue' : ''}"><i class="fas fa-calendar"></i> ${formatDateSetting(a.targetDate)}</span>` : ''}
+                </div>
+                ${a.steps ? `<div class="growth-action-steps"><i class="fas fa-list"></i> ${escapeHtml(a.steps).substring(0, 120)}${a.steps.length > 120 ? '...' : ''}</div>` : ''}
+            </div>
+            <div class="growth-action-actions">
+                <button class="btn btn-ghost btn-xs" onclick="openGrowthActionPlan('${a.id}')" title="Edit"><i class="fas fa-edit"></i></button>
+                <button class="btn btn-ghost btn-xs" onclick="deleteGrowthAction('${a.id}')" title="Delete"><i class="fas fa-trash"></i></button>
+            </div>
+        </div>`;
+    }).join('');
+}
+
+function openGrowthActionPlan(editId) {
+    const dimSelect = document.getElementById('growthActionDim');
+    if (!dimSelect) return;
+
+    // Populate dimension dropdown
+    dimSelect.innerHTML = GROWTH_DIMENSIONS.map(d => `<option value="${d.id}">${d.icon ? '' : ''}${d.name}</option>`).join('');
+
+    if (editId) {
+        const action = getGrowthActions().find(a => a.id === editId);
+        if (action) {
+            document.getElementById('growthActionId').value = action.id;
+            dimSelect.value = action.dimId || GROWTH_DIMENSIONS[0].id;
+            document.getElementById('growthActionTitle').value = action.title || '';
+            document.getElementById('growthActionTargetLevel').value = action.targetLevel || '3';
+            document.getElementById('growthActionDate').value = action.targetDate || '';
+            document.getElementById('growthActionSteps').value = action.steps || '';
+            document.getElementById('growthActionSupport').value = action.support || '';
+            document.getElementById('growthActionPriority').value = action.priority || 'medium';
+            document.getElementById('growthActionStatus').value = action.status || 'not-started';
+        }
+    } else {
+        document.getElementById('growthActionId').value = '';
+        document.getElementById('growthActionTitle').value = '';
+        document.getElementById('growthActionTargetLevel').value = '3';
+        document.getElementById('growthActionDate').value = '';
+        document.getElementById('growthActionSteps').value = '';
+        document.getElementById('growthActionSupport').value = '';
+        document.getElementById('growthActionPriority').value = 'medium';
+        document.getElementById('growthActionStatus').value = 'not-started';
+
+        // Auto-select weakest dimension
+        const latest = getLatestAssessment();
+        if (latest) {
+            const weakest = GROWTH_DIMENSIONS.reduce((min, d) => (!min || (latest.levels[d.id] || 1) < (latest.levels[min.id] || 1)) ? d : min, null);
+            if (weakest) dimSelect.value = weakest.id;
+        }
+    }
+
+    openModal('growthActionModal');
+}
+
+function saveGrowthAction() {
+    const title = document.getElementById('growthActionTitle').value.trim();
+    if (!title) { showToast('Please enter a goal / action item', 'error'); return; }
+
+    const id = document.getElementById('growthActionId').value || DB.generateId();
+    const action = {
+        id,
+        dimId: document.getElementById('growthActionDim').value,
+        title,
+        targetLevel: parseInt(document.getElementById('growthActionTargetLevel').value) || 3,
+        targetDate: document.getElementById('growthActionDate').value || '',
+        steps: document.getElementById('growthActionSteps').value.trim(),
+        support: document.getElementById('growthActionSupport').value.trim(),
+        priority: document.getElementById('growthActionPriority').value || 'medium',
+        status: document.getElementById('growthActionStatus').value || 'not-started',
+        createdAt: new Date().toISOString()
+    };
+
+    let actions = getGrowthActions();
+    const existingIdx = actions.findIndex(a => a.id === id);
+    if (existingIdx >= 0) {
+        action.createdAt = actions[existingIdx].createdAt;
+        actions[existingIdx] = action;
+    } else {
+        actions.push(action);
+    }
+    DB.set('growthActionPlans', actions);
+
+    closeModal('growthActionModal');
+    renderGrowthActionPlans();
+    showToast(existingIdx >= 0 ? 'Action plan updated!' : 'Action plan added!', 'success');
+}
+
+function deleteGrowthAction(id) {
+    if (!confirm('Delete this action plan?')) return;
+    let actions = getGrowthActions();
+    actions = actions.filter(a => a.id !== id);
+    DB.set('growthActionPlans', actions);
+    renderGrowthActionPlans();
+    showToast('Action plan deleted', 'info');
+}
+
+function toggleGrowthAction(id) {
+    let actions = getGrowthActions();
+    const action = actions.find(a => a.id === id);
+    if (!action) return;
+    // Cycle: not-started -> in-progress -> completed -> not-started
+    if (action.status === 'not-started') action.status = 'in-progress';
+    else if (action.status === 'in-progress') action.status = 'completed';
+    else action.status = 'not-started';
+    DB.set('growthActionPlans', actions);
+    renderGrowthActionPlans();
+}
+
+// --- Growth Tips & Suggestions ---
+function renderGrowthTips() {
+    const el = document.getElementById('growthTips');
+    const section = document.getElementById('growthTipsSection');
+    if (!el || !section) return;
+
+    const latest = getLatestAssessment();
+    if (!latest) { section.style.display = 'none'; return; }
+
+    section.style.display = 'block';
+
+    const tipsDB = {
+        dim1: {
+            1: [
+                'Visit at least 2 schools per week and spend time building rapport with teachers.',
+                'Shadow a senior RP during school visits to learn relationship-building techniques.',
+                'Maintain a simple log of all teachers you interact with — name, school, topic discussed.'
+            ],
+            2: [
+                'Use WhatsApp/social media groups to keep in touch with teachers between visits.',
+                'Create a teacher database with their interests, strengths, and challenges.',
+                'Attend community events or school functions to build trust beyond academic settings.'
+            ],
+            3: [
+                'Identify "champion teachers" in each cluster who can help spread your outreach.',
+                'Leverage teacher networks to connect with hard-to-reach teachers.',
+                'Design a mobilization strategy for a block-level teacher engagement drive.'
+            ],
+            4: [
+                'Mentor junior RPs on relationship-building strategies through structured coaching.',
+                'Document your best practices in relationship-building as case studies.',
+                'Develop a framework for measuring relationship depth and quality with teachers.'
+            ]
+        },
+        dim2: {
+            1: [
+                'Volunteer to co-facilitate a session with a senior member this month.',
+                'Study 2-3 well-designed session plans and note the structure, flow, and activities used.',
+                'Practice writing clear session objectives using Bloom\'s taxonomy.'
+            ],
+            2: [
+                'Independently adapt an existing workshop for your block\'s specific context.',
+                'Create engaging handouts or resource sheets for your next facilitation.',
+                'Get feedback from 3 participants after your session and reflect on areas for improvement.'
+            ],
+            3: [
+                'Design a complete 3-day workshop from scratch with detailed session plans.',
+                'Create interactive activities (group work, simulations, gallery walks) for your sessions.',
+                'Conceptualize a series of connected sessions (not standalone) for teacher development.'
+            ],
+            4: [
+                'Review and provide detailed feedback on session plans designed by other RPs.',
+                'Facilitate a difficult session (e.g., sensitive topic, resistant audience) and document your approach.',
+                'Create a session design toolkit or template for other RPs to use.'
+            ]
+        },
+        dim3: {
+            1: [
+                'Read existing teaching-learning material and make notes on what works well.',
+                'Write a brief observation report after every school visit.',
+                'Start a learning journal — write weekly reflections on your readings.'
+            ],
+            2: [
+                'Develop a PowerPoint or handout for a topic you understand well.',
+                'Write a detailed report on a successful school engagement experience.',
+                'Create a set of worksheets for a specific learning outcome in any subject.'
+            ],
+            3: [
+                'Develop a complete module (5+ sessions) for teacher professional development.',
+                'Write a reflective article connecting theory to your field experiences.',
+                'Create exemplar teaching plans for different subject areas.'
+            ],
+            4: [
+                'Review and improve material developed by other team members.',
+                'Write an article or paper based on your field experience suitable for publication.',
+                'Develop a comprehensive resource repository organized by themes.'
+            ]
+        },
+        dim4: {
+            1: [
+                'Plan your school visits in advance with clear objectives for each visit.',
+                'Observe a senior RP\'s classroom engagement and note their strategies.',
+                'Start observing one teacher per visit systematically using an observation tool.'
+            ],
+            2: [
+                'Build comprehensive school observation protocols (beyond just classroom).',
+                'Attempt teacher scaffolding — plan a specific support action for one teacher.',
+                'Engage with students during visits to assess learning levels directly.'
+            ],
+            3: [
+                'Create individualized development plans for at least 3 teachers in your focus schools.',
+                'Conduct a collaborative lesson with a teacher (co-teaching or demonstration).',
+                'Engage with the school principal to align support with school development goals.'
+            ],
+            4: [
+                'Design and implement a whole-school development initiative in a focus school.',
+                'Scaffold teachers with different needs (new vs. experienced, motivated vs. demotivated).',
+                'Document a school transformation case study based on your sustained engagement.'
+            ]
+        },
+        dim5: {
+            1: [
+                'Read at least 2 articles on teacher professional development models this month.',
+                'Discuss your understanding of teacher capacity building with your team.',
+                'Map the existing TPD initiatives in your block/cluster — workshops, TLCs, meetings.'
+            ],
+            2: [
+                'Identify 3 key pedagogical topics most relevant for teachers in your cluster.',
+                'Design a classroom demonstration on a specific topic for teacher learning.',
+                'Connect workshop content back to classroom practice with follow-up activities.'
+            ],
+            3: [
+                'Create a 6-month teacher development plan with forward-backward linkages.',
+                'Categorize teachers in your focus area by expertise and motivation levels.',
+                'Design multiple engagement modes — workshops, TLCs, school visits, peer learning.'
+            ],
+            4: [
+                'Design a comprehensive annual TPD plan for your block with measurable indicators.',
+                'Mentor a junior RP to design and execute a capacity-building series.',
+                'Analyze the impact of your TPD efforts on actual teaching practices and student learning.'
+            ]
+        }
+    };
+
+    el.innerHTML = GROWTH_DIMENSIONS.map(d => {
+        const lvl = latest.levels[d.id] || 1;
+        const tips = tipsDB[d.id]?.[lvl] || [];
+        const levelLabel = lvl >= 4 ? 'Expert' : lvl >= 3 ? 'Proficient' : lvl >= 2 ? 'Developing' : 'Emerging';
+
+        return `<div class="growth-tip-card" style="--dim-color:${d.color}">
+            <div class="growth-tip-header">
+                <div class="growth-tip-icon" style="background:${d.color};"><i class="fas ${d.icon}"></i></div>
+                <div>
+                    <h4>${d.shortName}</h4>
+                    <span class="growth-tip-level">Level ${lvl} — ${levelLabel}</span>
+                </div>
+            </div>
+            <ul class="growth-tip-list">
+                ${tips.map(tip => `<li><i class="fas fa-lightbulb" style="color:${d.color};"></i> ${tip}</li>`).join('')}
+            </ul>
+            ${lvl < 4 ? `<div class="growth-tip-next-preview"><strong>To reach Level ${lvl + 1}:</strong> ${d.levels[lvl].substring(0, 150)}...</div>` : '<div class="growth-tip-mastered"><i class="fas fa-crown"></i> You\'ve reached mastery! Focus on mentoring others.</div>'}
+        </div>`;
+    }).join('');
+}
+
+// --- Print Growth Report ---
+function printGrowthReport() {
+    const latest = getLatestAssessment();
+    const assessments = getGrowthAssessments();
+    if (!latest) { showToast('Take an assessment first', 'info'); return; }
+
+    const totalScore = GROWTH_DIMENSIONS.reduce((s, d) => s + (latest.levels[d.id] || 1), 0);
+    const avgLevel = (totalScore / GROWTH_DIMENSIONS.length).toFixed(1);
+    const levelLabel = avgLevel >= 3.5 ? 'Expert Practitioner' : avgLevel >= 2.5 ? 'Proficient Practitioner' : avgLevel >= 1.5 ? 'Developing Practitioner' : 'Emerging Practitioner';
+
+    const profile = typeof getProfile === 'function' ? getProfile() : null;
+
+    const printContent = `
+    <!DOCTYPE html>
+    <html><head><title>Professional Growth Report</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: 'Segoe UI', sans-serif; padding: 30px; color: #1a1a2e; font-size: 13px; }
+        .print-header { text-align: center; border-bottom: 3px solid #f59e0b; padding-bottom: 16px; margin-bottom: 20px; }
+        .print-header h1 { font-size: 22px; color: #1a1a2e; }
+        .print-header p { color: #666; margin-top: 4px; }
+        .print-summary { display: flex; justify-content: space-between; margin-bottom: 20px; padding: 16px; background: #f8f9fa; border-radius: 8px; }
+        .print-summary-item { text-align: center; }
+        .print-summary-item strong { display: block; font-size: 24px; color: #f59e0b; }
+        .print-summary-item span { font-size: 12px; color: #666; }
+        .print-dim { margin-bottom: 16px; page-break-inside: avoid; border: 1px solid #e5e7eb; border-radius: 8px; padding: 14px; }
+        .print-dim-header { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+        .print-dim-header .dot { width: 12px; height: 12px; border-radius: 50%; }
+        .print-dim-header h3 { font-size: 14px; flex: 1; }
+        .print-dim-header .level { font-weight: 700; font-size: 16px; }
+        .print-dim-desc { color: #444; font-size: 12px; line-height: 1.6; margin-bottom: 8px; }
+        .print-dim-notes { background: #f0f9ff; padding: 8px 10px; border-radius: 6px; font-size: 12px; margin-top: 6px; }
+        .print-dim-notes strong { color: #1e40af; }
+        .print-bar { height: 6px; background: #e5e7eb; border-radius: 3px; margin-top: 6px; }
+        .print-bar-fill { height: 6px; border-radius: 3px; transition: width 0.5s; }
+        .print-history { margin-top: 20px; }
+        .print-history h3 { font-size: 15px; margin-bottom: 10px; border-bottom: 1px solid #e5e7eb; padding-bottom: 6px; }
+        .print-history-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+        .print-history-table th, .print-history-table td { padding: 6px 10px; border: 1px solid #e5e7eb; text-align: center; }
+        .print-history-table th { background: #f8f9fa; font-weight: 600; }
+        .print-actions { margin-top: 20px; }
+        .print-actions h3 { font-size: 15px; margin-bottom: 10px; border-bottom: 1px solid #e5e7eb; padding-bottom: 6px; }
+        .print-action-item { display: flex; gap: 8px; padding: 6px 0; border-bottom: 1px solid #f3f4f6; font-size: 12px; }
+        .print-action-status { width: 14px; height: 14px; border: 2px solid #ccc; border-radius: 50%; flex-shrink: 0; margin-top: 2px; }
+        .print-action-status.done { background: #10b981; border-color: #10b981; }
+        .print-footer { margin-top: 30px; text-align: center; font-size: 11px; color: #999; border-top: 1px solid #e5e7eb; padding-top: 10px; }
+        @media print { body { padding: 15px; } }
+    </style>
+    </head><body>
+        <div class="print-header">
+            <h1>Professional Growth Report</h1>
+            <p>${profile?.name ? profile.name + ' — ' : ''}APF Resource Person${profile?.block ? ' | ' + profile.block : ''}${profile?.cluster ? ', ' + profile.cluster : ''}</p>
+            <p style="font-size:12px;margin-top:4px;">Assessment Date: ${formatDateSetting(latest.date)} | Generated: ${formatDateSetting(new Date().toISOString().split('T')[0])}</p>
+        </div>
+
+        <div class="print-summary">
+            <div class="print-summary-item"><strong>${avgLevel}</strong><span>Average Level</span></div>
+            <div class="print-summary-item"><strong>${levelLabel}</strong><span>Overall Stage</span></div>
+            <div class="print-summary-item"><strong>${totalScore}/${GROWTH_DIMENSIONS.length * 4}</strong><span>Total Score</span></div>
+            <div class="print-summary-item"><strong>${assessments.length}</strong><span>Assessments</span></div>
+        </div>
+
+        ${GROWTH_DIMENSIONS.map(d => {
+            const lvl = latest.levels[d.id] || 1;
+            const notes = latest.notes?.[d.id] || '';
+            const evidence = latest.evidence?.[d.id] || '';
+            return `<div class="print-dim">
+                <div class="print-dim-header">
+                    <div class="dot" style="background:${d.color};"></div>
+                    <h3>${d.name}</h3>
+                    <div class="level" style="color:${d.color};">Level ${lvl}/4</div>
+                </div>
+                <div class="print-dim-desc">${d.levels[lvl - 1]}</div>
+                <div class="print-bar"><div class="print-bar-fill" style="width:${lvl * 25}%;background:${d.color};"></div></div>
+                ${notes ? `<div class="print-dim-notes"><strong>Notes:</strong> ${escapeHtml(notes)}</div>` : ''}
+                ${evidence ? `<div class="print-dim-notes"><strong>Evidence:</strong> ${escapeHtml(evidence)}</div>` : ''}
+            </div>`;
+        }).join('')}
+
+        ${assessments.length > 1 ? `
+            <div class="print-history">
+                <h3>Assessment History</h3>
+                <table class="print-history-table">
+                    <tr><th>Date</th>${GROWTH_DIMENSIONS.map(d => `<th>${d.shortName}</th>`).join('')}<th>Average</th></tr>
+                    ${[...assessments].sort((a, b) => (b.date || '').localeCompare(a.date || '')).map(a => {
+                        const avg = (GROWTH_DIMENSIONS.reduce((s, d) => s + (a.levels[d.id] || 1), 0) / GROWTH_DIMENSIONS.length).toFixed(1);
+                        return `<tr><td>${formatDateSetting(a.date)}</td>${GROWTH_DIMENSIONS.map(d => `<td>L${a.levels[d.id] || 1}</td>`).join('')}<td><strong>${avg}</strong></td></tr>`;
+                    }).join('')}
+                </table>
+            </div>
+        ` : ''}
+
+        ${(() => {
+            const actions = getGrowthActions();
+            if (actions.length === 0) return '';
+            return `<div class="print-actions">
+                <h3>Growth Action Plans</h3>
+                ${actions.map(a => {
+                    const dim = GROWTH_DIMENSIONS.find(d => d.id === a.dimId);
+                    return `<div class="print-action-item">
+                        <div class="print-action-status ${a.status === 'completed' ? 'done' : ''}"></div>
+                        <div><strong>${escapeHtml(a.title)}</strong> — ${dim ? dim.shortName : ''} (Target L${a.targetLevel || '?'})${a.targetDate ? ' | Due: ' + formatDateSetting(a.targetDate) : ''}</div>
+                    </div>`;
+                }).join('')}
+            </div>`;
+        })()}
+
+        <div class="print-footer">Professional Growth Framework — APF Resource Person Dashboard</div>
+    </body></html>`;
+
+    const printWin = window.open('', '_blank', 'width=900,height=700');
+    if (!printWin) { showToast('Popup blocked — please allow popups for this site', 'error'); return; }
+    printWin.document.write(printContent);
+    printWin.document.close();
+    setTimeout(() => printWin.print(), 400);
+}
+
 // ===== SAMPLE DATA =====
+// ===== USER PROFILE =====
+function getProfile() {
+    try {
+        // Read from DB first (synced with encrypted file / Drive)
+        const dbProfile = DB.get('userProfile');
+        if (dbProfile.length > 0) return dbProfile[0];
+        // Fallback: localStorage (for backward compat)
+        const raw = localStorage.getItem('apf_user_profile');
+        if (raw) {
+            const p = JSON.parse(raw);
+            // Migrate to DB so it gets included in encrypted saves
+            if (p && p.name) {
+                _originalDBSet('userProfile', [p]);
+            }
+            return p;
+        }
+        return {};
+    } catch(e) { return {}; }
+}
+
+function saveProfileData(profileObj) {
+    // Save to DB (triggers auto-save to .apf file, IndexedDB cache, Google Drive, localStorage fallback)
+    DB.set('userProfile', [profileObj]);
+    // Also save directly to localStorage for instant access on next load
+    localStorage.setItem('apf_user_profile', JSON.stringify(profileObj));
+    applyProfileToUI();
+}
+
+function applyProfileToUI() {
+    const p = getProfile();
+    const nameEl = document.getElementById('userName');
+    const orgEl = document.getElementById('userOrg');
+    const avatarEl = document.getElementById('userAvatarIcon');
+
+    if (nameEl) nameEl.textContent = p.name || 'Resource Person';
+    if (orgEl) orgEl.textContent = p.organization || 'Azim Premji Foundation';
+    if (avatarEl && p.name) {
+        const initials = p.name.split(' ').map(w => w[0]).join('').substring(0, 2).toUpperCase();
+        avatarEl.innerHTML = `<span style="font-size:14px;font-weight:700;">${initials}</span>`;
+    }
+    // Keep localStorage in sync for instant access on next load
+    if (p.name) {
+        try { localStorage.setItem('apf_user_profile', JSON.stringify(p)); } catch(e) {}
+    }
+}
+
+function openProfileModal() {
+    const p = getProfile();
+    document.getElementById('profileName').value = p.name || '';
+    document.getElementById('profileDesignation').value = p.designation || 'Resource Person';
+    document.getElementById('profileOrg').value = p.organization || 'Azim Premji Foundation';
+    document.getElementById('profileDistrict').value = p.district || '';
+    document.getElementById('profileBlock').value = p.block || '';
+    document.getElementById('profileState').value = p.state || '';
+    document.getElementById('profilePhone').value = p.phone || '';
+    document.getElementById('profileEmail').value = p.email || '';
+
+    // Update avatar preview
+    const avatarLg = document.getElementById('profileAvatarLarge');
+    if (avatarLg && p.name) {
+        const initials = p.name.split(' ').map(w => w[0]).join('').substring(0, 2).toUpperCase();
+        avatarLg.innerHTML = `<span>${initials}</span>`;
+    } else if (avatarLg) {
+        avatarLg.innerHTML = '<i class="fas fa-user"></i>';
+    }
+
+    openModal('profileModal');
+}
+
+function saveProfile(e) {
+    e.preventDefault();
+    const profile = {
+        name: document.getElementById('profileName').value.trim(),
+        designation: document.getElementById('profileDesignation').value,
+        organization: document.getElementById('profileOrg').value.trim() || 'Azim Premji Foundation',
+        district: document.getElementById('profileDistrict').value.trim(),
+        block: document.getElementById('profileBlock').value.trim(),
+        state: document.getElementById('profileState').value.trim(),
+        phone: document.getElementById('profilePhone').value.trim(),
+        email: document.getElementById('profileEmail').value.trim(),
+    };
+    saveProfileData(profile);
+    closeModal('profileModal');
+    // Refresh dashboard greeting if visible
+    if (document.getElementById('section-dashboard')?.classList.contains('active')) {
+        renderDashboard();
+    }
+    showToast('Profile saved! 👤', 'success');
+}
+
+// ===== MONTHLY WORK LOG =====
+function renderWorkLog() {
+    const monthSel = document.getElementById('worklogMonth');
+    // Populate month selector if empty
+    if (monthSel.options.length === 0) {
+        const now = new Date();
+        for (let i = 0; i < 12; i++) {
+            const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+            const val = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+            const label = d.toLocaleString('en-IN', { month: 'long', year: 'numeric' });
+            monthSel.innerHTML += `<option value="${val}">${label}</option>`;
+        }
+    }
+
+    const [year, month] = monthSel.value.split('-').map(Number);
+    const daysInMonth = new Date(year, month, 0).getDate();
+
+    // Get all data for this month
+    const visits = DB.get('visits').filter(v => { const d = new Date(v.date); return d.getMonth() + 1 === month && d.getFullYear() === year; });
+    const trainings = DB.get('trainings').filter(t => { const d = new Date(t.date); return d.getMonth() + 1 === month && d.getFullYear() === year; });
+    const observations = DB.get('observations').filter(o => { const d = new Date(o.date); return d.getMonth() + 1 === month && d.getFullYear() === year; });
+    const worklog = DB.get('worklog').filter(w => { const d = new Date(w.date); return d.getMonth() + 1 === month && d.getFullYear() === year; });
+
+    // Build day-by-day log
+    const dayMap = {};
+    for (let d = 1; d <= daysInMonth; d++) {
+        const dateStr = `${year}-${String(month).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+        const dayDate = new Date(year, month - 1, d);
+        const isSunday = dayDate.getDay() === 0;
+        dayMap[dateStr] = { date: dateStr, dayName: dayDate.toLocaleString('en', { weekday: 'short' }), day: d, isSunday, activities: [] };
+    }
+
+    // Auto-populate from visits
+    visits.forEach(v => {
+        const dateStr = v.date?.substring(0, 10);
+        if (dayMap[dateStr]) {
+            dayMap[dateStr].activities.push({
+                type: 'School Visit',
+                location: v.school || '',
+                description: `${v.purpose || 'Visit'}${v.notes ? ' — ' + v.notes : ''}`,
+                outcome: v.followUp || '',
+                status: v.status,
+                source: 'auto'
+            });
+        }
+    });
+
+    // Auto-populate from trainings
+    trainings.forEach(t => {
+        const dateStr = t.date?.substring(0, 10);
+        if (dayMap[dateStr]) {
+            dayMap[dateStr].activities.push({
+                type: 'Training / Workshop',
+                location: t.venue || '',
+                description: `${t.title}${t.topic ? ' (' + t.topic + ')' : ''} — ${t.attendees || 0} attendees, ${t.duration || 0}h`,
+                outcome: t.feedback || '',
+                source: 'auto'
+            });
+        }
+    });
+
+    // Auto-populate from observations
+    observations.forEach(o => {
+        const dateStr = o.date?.substring(0, 10);
+        if (dayMap[dateStr]) {
+            dayMap[dateStr].activities.push({
+                type: 'Classroom Observation',
+                location: o.school || '',
+                description: `Observed ${o.teacher || 'teacher'} — ${o.subject || ''} ${o.class || ''}${o.topic ? ': ' + o.topic : ''}`,
+                outcome: o.suggestions || '',
+                source: 'auto'
+            });
+        }
+    });
+
+    // Auto-populate from meetings
+    const meetingsMonth = DB.get('meetings').filter(m => { const d = new Date(m.date); return d.getMonth() + 1 === month && d.getFullYear() === year; });
+    meetingsMonth.forEach(m => {
+        const dateStr = m.date?.substring(0, 10);
+        if (dayMap[dateStr]) {
+            const pendingActions = (m.actionItems || []).filter(a => !a.done).length;
+            dayMap[dateStr].activities.push({
+                type: 'Meeting',
+                location: m.location || '',
+                description: `${m.type || 'Meeting'}: ${m.title || ''}${m.organizer ? ' (by ' + m.organizer + ')' : ''}`,
+                outcome: m.decisions ? m.decisions : (pendingActions > 0 ? `${pendingActions} action items pending` : ''),
+                source: 'auto'
+            });
+        }
+    });
+
+    // Add manual worklog entries
+    worklog.forEach(w => {
+        const dateStr = w.date?.substring(0, 10);
+        if (dayMap[dateStr]) {
+            dayMap[dateStr].activities.push({
+                type: w.type || 'Other',
+                location: w.location || '',
+                description: w.description || '',
+                outcome: w.outcome || '',
+                source: 'manual',
+                id: w.id
+            });
+        }
+    });
+
+    // Stats
+    const totalDays = daysInMonth;
+    const activeDays = Object.values(dayMap).filter(d => d.activities.length > 0).length;
+    const totalActivities = Object.values(dayMap).reduce((s, d) => s + d.activities.length, 0);
+    const typeCounts = {};
+    Object.values(dayMap).forEach(d => d.activities.forEach(a => { typeCounts[a.type] = (typeCounts[a.type] || 0) + 1; }));
+
+    document.getElementById('worklogStats').innerHTML = `
+        <div class="worklog-stat-grid">
+            <div class="worklog-stat"><div class="stat-value">${activeDays}</div><div class="stat-label">Working Days</div></div>
+            <div class="worklog-stat"><div class="stat-value">${totalDays - activeDays}</div><div class="stat-label">No Entry</div></div>
+            <div class="worklog-stat"><div class="stat-value">${totalActivities}</div><div class="stat-label">Total Activities</div></div>
+            ${Object.entries(typeCounts).sort((a, b) => b[1] - a[1]).slice(0, 4).map(([type, count]) =>
+                `<div class="worklog-stat"><div class="stat-value">${count}</div><div class="stat-label">${type}</div></div>`
+            ).join('')}
+        </div>
+    `;
+
+    // Render table
+    const days = Object.values(dayMap);
+    const container = document.getElementById('worklogContainer');
+
+    const typeIcons = {
+        'School Visit': 'fa-school', 'Classroom Observation': 'fa-clipboard-check',
+        'Training / Workshop': 'fa-chalkboard-teacher', 'Meeting': 'fa-users',
+        'Desk Work': 'fa-laptop', 'Travel': 'fa-car', 'Data Entry / Reporting': 'fa-file-alt',
+        'Community Engagement': 'fa-hands-helping', 'Material Preparation': 'fa-tools',
+        'Leave': 'fa-bed', 'Holiday': 'fa-flag', 'Other': 'fa-ellipsis-h'
+    };
+
+    const typeColors = {
+        'School Visit': '#8b5cf6', 'Classroom Observation': '#10b981',
+        'Training / Workshop': '#3b82f6', 'Meeting': '#f59e0b',
+        'Desk Work': '#6366f1', 'Travel': '#64748b', 'Data Entry / Reporting': '#06b6d4',
+        'Community Engagement': '#ec4899', 'Material Preparation': '#f97316',
+        'Leave': '#94a3b8', 'Holiday': '#ef4444', 'Other': '#6b7280'
+    };
+
+    container.innerHTML = `
+    <table class="worklog-table">
+        <thead>
+            <tr>
+                <th style="width:45px;">Day</th>
+                <th style="width:50px;">Date</th>
+                <th style="width:140px;">Activity Type</th>
+                <th style="width:140px;">Location</th>
+                <th>Description</th>
+                <th style="width:160px;">Outcome / Remarks</th>
+                <th style="width:50px;"></th>
+            </tr>
+        </thead>
+        <tbody>
+            ${days.map(d => {
+                if (d.activities.length === 0) {
+                    return `<tr class="${d.isSunday ? 'worklog-sunday' : 'worklog-empty'}">
+                        <td><strong>${d.day}</strong><br><small>${d.dayName}</small></td>
+                        <td>${d.date.substring(5)}</td>
+                        <td colspan="4" class="worklog-no-entry">${d.isSunday ? '<i class="fas fa-flag"></i> Sunday' : '<i class="fas fa-minus"></i> No entry'}</td>
+                        <td><button class="btn-icon-sm" onclick="addWorkLogEntry('${d.date}')" title="Add entry"><i class="fas fa-plus"></i></button></td>
+                    </tr>`;
+                }
+                return d.activities.map((a, i) => {
+                    const icon = typeIcons[a.type] || 'fa-ellipsis-h';
+                    const color = typeColors[a.type] || '#6b7280';
+                    return `<tr class="${d.isSunday ? 'worklog-sunday' : ''}">
+                        ${i === 0 ? `<td rowspan="${d.activities.length}"><strong>${d.day}</strong><br><small>${d.dayName}</small></td>
+                        <td rowspan="${d.activities.length}">${d.date.substring(5)}</td>` : ''}
+                        <td><span class="worklog-type-badge" style="background:${color}15;color:${color};border:1px solid ${color}30;"><i class="fas ${icon}"></i> ${escapeHtml(a.type)}</span></td>
+                        <td>${escapeHtml(a.location)}</td>
+                        <td>${escapeHtml(a.description)}</td>
+                        <td>${escapeHtml(a.outcome)}</td>
+                        <td>${a.source === 'manual' ? `<button class="btn-icon-sm" onclick="deleteWorkLogEntry('${a.id}')" title="Delete"><i class="fas fa-trash"></i></button>` :
+                            (i === 0 ? `<button class="btn-icon-sm" onclick="addWorkLogEntry('${d.date}')" title="Add"><i class="fas fa-plus"></i></button>` : '')}</td>
+                    </tr>`;
+                }).join('');
+            }).join('')}
+        </tbody>
+    </table>`;
+}
+
+function addWorkLogEntry(dateStr) {
+    const form = document.getElementById('worklogForm');
+    form.reset();
+    document.getElementById('worklogId').value = '';
+    document.getElementById('worklogDate').value = dateStr || new Date().toISOString().substring(0, 10);
+    document.getElementById('worklogModalTitle').innerHTML = '<i class="fas fa-clipboard-list"></i> Add Work Log Entry';
+    openModal('worklogModal');
+}
+
+function saveWorkLogEntry(e) {
+    e.preventDefault();
+    const worklog = DB.get('worklog');
+    const id = document.getElementById('worklogId').value;
+    const entry = {
+        id: id || DB.generateId(),
+        date: document.getElementById('worklogDate').value,
+        type: document.getElementById('worklogType').value,
+        location: document.getElementById('worklogLocation').value.trim(),
+        description: document.getElementById('worklogDescription').value.trim(),
+        outcome: document.getElementById('worklogOutcome').value.trim(),
+        createdAt: id ? (worklog.find(w => w.id === id) || {}).createdAt || new Date().toISOString() : new Date().toISOString()
+    };
+
+    if (id) {
+        const idx = worklog.findIndex(w => w.id === id);
+        if (idx !== -1) worklog[idx] = entry;
+    } else {
+        worklog.push(entry);
+    }
+
+    DB.set('worklog', worklog);
+    closeModal('worklogModal');
+    renderWorkLog();
+    showToast(id ? 'Entry updated' : 'Work log entry added! 📋');
+}
+
+function deleteWorkLogEntry(id) {
+    if (!confirm('Delete this work log entry?')) return;
+    let worklog = DB.get('worklog');
+    worklog = worklog.filter(w => w.id !== id);
+    DB.set('worklog', worklog);
+    renderWorkLog();
+    showToast('Entry deleted');
+}
+
+function printWorkLog() {
+    const profile = getProfile();
+    const monthSel = document.getElementById('worklogMonth');
+    const monthLabel = monthSel.options[monthSel.selectedIndex]?.text || '';
+    const tableHtml = document.querySelector('.worklog-table')?.outerHTML || '<p>No data</p>';
+
+    const html = `<!DOCTYPE html>
+<html><head><title>Work Log — ${monthLabel}</title>
+<style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: 'Segoe UI', Arial, sans-serif; padding: 20px 30px; color: #1e293b; font-size: 12px; }
+    .header { text-align: center; border-bottom: 3px solid #6366f1; padding-bottom: 12px; margin-bottom: 16px; }
+    .header h1 { font-size: 18px; color: #6366f1; }
+    .header p { color: #64748b; font-size: 11px; margin-top: 4px; }
+    .profile-info { display: flex; justify-content: space-between; margin-bottom: 12px; font-size: 12px; padding: 8px 12px; background: #f8fafc; border-radius: 6px; }
+    .profile-info div { line-height: 1.6; }
+    table { width: 100%; border-collapse: collapse; font-size: 11px; }
+    th { background: #6366f1; color: white; padding: 6px 8px; text-align: left; font-size: 10px; text-transform: uppercase; }
+    td { padding: 5px 8px; border-bottom: 1px solid #e2e8f0; vertical-align: top; }
+    tr:nth-child(even) { background: #f8fafc; }
+    .worklog-sunday td { background: #fef2f2; }
+    .worklog-empty td { color: #94a3b8; }
+    .worklog-type-badge { font-size: 10px; padding: 2px 6px; border-radius: 4px; }
+    .footer { text-align: center; margin-top: 20px; font-size: 10px; color: #94a3b8; border-top: 1px solid #e2e8f0; padding-top: 8px; }
+    .signature { display: flex; justify-content: space-between; margin-top: 40px; padding-top: 20px; }
+    .sig-box { text-align: center; width: 200px; }
+    .sig-line { border-top: 1px solid #334155; margin-top: 40px; padding-top: 4px; font-size: 11px; color: #64748b; }
+    @media print { body { padding: 10px; } }
+</style></head><body>
+<div class="header">
+    <h1>Monthly Work Log — ${monthLabel}</h1>
+    <p>Azim Premji Foundation — Field Activity Diary</p>
+</div>
+<div class="profile-info">
+    <div><strong>Name:</strong> ${escapeHtml(profile.name || 'N/A')} &nbsp;&nbsp; <strong>Designation:</strong> ${escapeHtml(profile.designation || 'Resource Person')}</div>
+    <div><strong>District:</strong> ${escapeHtml(profile.district || 'N/A')} &nbsp;&nbsp; <strong>Block:</strong> ${escapeHtml(profile.block || 'N/A')}</div>
+</div>
+${tableHtml}
+<div class="signature">
+    <div class="sig-box"><div class="sig-line">Signature of ${escapeHtml(profile.designation || 'Resource Person')}</div></div>
+    <div class="sig-box"><div class="sig-line">Signature of Supervisor</div></div>
+</div>
+<div class="footer">Generated by ${escapeHtml(profile.name || 'APF Resource Person')} — APF Dashboard — ${new Date().toLocaleDateString('en-IN')}</div>
+</body></html>`;
+
+    const w = window.open('', '_blank', 'width=1000,height=800');
+    if (!w) { showToast('Popup blocked — please allow popups for this site', 'error'); return; }
+    w.document.write(html);
+    w.document.close();
+    setTimeout(() => w.print(), 500);
+}
+
 function loadSampleData() {
     // Load sample data into in-memory store (no localStorage)
 
@@ -8007,8 +10853,8 @@ function renderDashboardAlerts() {
     const today = now.toISOString().split('T')[0];
 
     // 1. Overdue follow-ups
-    const followupStatus = DB.get('followupStatus') || {};
-    const pendingFollowups = visits.filter(v => v.followUp && v.followUp.trim() && !followupStatus[v.id]);
+    const followupStatusArr = DB.get('followupStatus') || [];
+    const pendingFollowups = visits.filter(v => v.followUp && v.followUp.trim() && !followupStatusArr.find(f => f.id === v.id && f.done));
     if (pendingFollowups.length > 0) {
         alerts.push({
             icon: 'fa-clipboard-list', color: '#f59e0b', rgb: '245,158,11',
@@ -8073,6 +10919,37 @@ function renderDashboardAlerts() {
             icon: 'fa-tasks', color: '#8b5cf6', rgb: '139,92,246',
             title: 'Overdue Tasks', desc: 'Planner tasks past due',
             count: overdueTasks.length, section: 'planner'
+        });
+    }
+
+    // 6. Growth assessment due
+    const growthAssessments = getGrowthAssessments();
+    if (growthAssessments.length === 0) {
+        alerts.push({
+            icon: 'fa-seedling', color: '#10b981', rgb: '16,185,129',
+            title: 'Growth Assessment', desc: 'Take your first growth self-assessment',
+            count: '!', section: 'growth'
+        });
+    } else {
+        const latestGrowth = growthAssessments.sort((a, b) => (b.date || '').localeCompare(a.date || ''))[0];
+        const daysSince = Math.floor((now - new Date(latestGrowth.date)) / 86400000);
+        if (daysSince > 30) {
+            alerts.push({
+                icon: 'fa-seedling', color: '#10b981', rgb: '16,185,129',
+                title: 'Growth Overdue', desc: `Last assessment ${daysSince} days ago`,
+                count: 1, section: 'growth'
+            });
+        }
+    }
+
+    // 7. Overdue growth action plans
+    const growthActions = typeof getGrowthActions === 'function' ? getGrowthActions() : [];
+    const overdueActions = growthActions.filter(a => a.status !== 'completed' && a.targetDate && a.targetDate < today);
+    if (overdueActions.length > 0) {
+        alerts.push({
+            icon: 'fa-bullseye', color: '#ef4444', rgb: '239,68,68',
+            title: 'Growth Actions Due', desc: 'Action plans past target date',
+            count: overdueActions.length, section: 'growth'
         });
     }
 
@@ -8366,7 +11243,7 @@ function printObsFeedback(id) {
 </style></head><body>
 <div class="header">
     <h1>Classroom Observation Feedback</h1>
-    <p>Azim Premji Foundation — APF Resource Person Dashboard</p>
+    <p>Azim Premji Foundation — ${getProfile().name || 'APF Resource Person Dashboard'}</p>
 </div>
 <div class="info-grid">
     <div class="info-item"><strong>Teacher:</strong> ${escapeHtml(o.teacher || 'N/A')}</div>
@@ -8389,10 +11266,11 @@ ${o.strengths ? `<div class="section"><h3>Strengths Observed</h3><p>${escapeHtml
 ${o.areas ? `<div class="section"><h3>Areas for Improvement</h3><p>${escapeHtml(o.areas)}</p></div>` : ''}
 ${o.suggestions ? `<div class="section"><h3>Suggestions / Action Points</h3><p>${escapeHtml(o.suggestions)}</p></div>` : ''}
 ${o.notes ? `<div class="section"><h3>Additional Notes</h3><p>${escapeHtml(o.notes)}</p></div>` : ''}
-<div class="footer">Generated from APF Resource Person Dashboard — ${new Date().toLocaleDateString('en-IN')}</div>
+<div class="footer">Generated by ${getProfile().name || 'APF Resource Person'} — APF Dashboard — ${new Date().toLocaleDateString('en-IN')}</div>
 </body></html>`;
 
     const w = window.open('', '_blank', 'width=800,height=900');
+    if (!w) { showToast('Popup blocked — please allow popups for this site', 'error'); return; }
     w.document.write(html);
     w.document.close();
     setTimeout(() => w.print(), 500);
@@ -8518,6 +11396,12 @@ function initApp() {
     // Restore theme preference
     restoreTheme();
 
+    // Apply app settings (accent color, font size, compact mode)
+    applyAppSettings();
+
+    // Load user profile into sidebar
+    applyProfileToUI();
+
     // Close modals on overlay click
     document.querySelectorAll('.modal-overlay').forEach(overlay => {
         overlay.addEventListener('click', (e) => {
@@ -8562,8 +11446,14 @@ function initApp() {
     // Init auto-lock
     initAutoLock();
 
-    // Render everything
-    renderDashboard();
+    // Navigate to start page from settings
+    const startPage = getAppSettings().startPage;
+    if (startPage && startPage !== 'dashboard') {
+        navigateTo(startPage);
+    } else {
+        // Render everything
+        renderDashboard();
+    }
 }
 
 // ===== Welcome Screen (File-Only Storage) =====
@@ -8653,6 +11543,9 @@ function welcomeStartFresh(withSampleData) {
     DB.clear();
     if (withSampleData) {
         loadSampleData();
+    } else {
+        // Try to restore from localStorage fallback
+        restoreFromLocalStorage();
     }
     hideWelcomeScreen();
     isAppUnlocked = true;
@@ -8708,7 +11601,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 if (!loaded && EncryptedCache.exists()) {
                     try {
                         const data = await EncryptedCache.load(savedPwd);
-                        if (data._meta && data._meta.app === 'APF Dashboard') {
+                        if (data && data._meta && data._meta.app === 'APF Dashboard') {
                             DB.clear();
                             ENCRYPTED_DATA_KEYS.forEach(k => {
                                 if (data[k] !== undefined && Array.isArray(data[k])) _originalDBSet(k, data[k]);
@@ -8737,6 +11630,15 @@ document.addEventListener('DOMContentLoaded', async () => {
         EncryptedCache.clear();
         showWelcomeScreen();
     } else {
+        // Check localStorage fallback for previously saved data (no password scenario)
+        const restoredCount = restoreFromLocalStorage();
+        if (restoredCount > 0) {
+            hideWelcomeScreen();
+            isAppUnlocked = true;
+            initApp();
+            showToast(`Restored your data from local backup (${restoredCount} categories). Set a password for secure saving!`, 'info');
+            return;
+        }
         showWelcomeScreen();
     }
 });

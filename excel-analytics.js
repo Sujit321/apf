@@ -3388,72 +3388,7 @@ function renderDataTable() {
     }
 }
 
-// ===== Data Export =====
-function exportAllDataToExcel() {
-    const wb = XLSX.utils.book_new();
-
-    // Visits
-    const visits = DB.get('visits');
-    if (visits.length > 0) {
-        const ws = XLSX.utils.json_to_sheet(visits.map(v => ({
-            School: v.school, Block: v.block, Date: v.date, Status: v.status,
-            Purpose: v.purpose, Notes: v.notes, 'Follow Up': v.followUp
-        })));
-        XLSX.utils.book_append_sheet(wb, ws, 'Visits');
-    }
-
-    // Trainings
-    const trainings = DB.get('trainings');
-    if (trainings.length > 0) {
-        const ws = XLSX.utils.json_to_sheet(trainings.map(t => ({
-            Title: t.title, Topic: t.topic, Date: t.date, Duration: t.duration,
-            Venue: t.venue, Status: t.status, Attendees: t.attendees,
-            Target: t.target, Notes: t.notes, Feedback: t.feedback
-        })));
-        XLSX.utils.book_append_sheet(wb, ws, 'Trainings');
-    }
-
-    // Observations
-    const observations = DB.get('observations');
-    if (observations.length > 0) {
-        const ws = XLSX.utils.json_to_sheet(observations.map(o => ({
-            School: o.school, Teacher: o.teacher, Date: o.date,
-            Class: o.class, Subject: o.subject, Topic: o.topic,
-            'Engagement Rating': o.engagement, 'Methodology Rating': o.methodology,
-            'TLM Usage Rating': o.tlm, Strengths: o.strengths,
-            'Areas of Improvement': o.areas, Suggestions: o.suggestions
-        })));
-        XLSX.utils.book_append_sheet(wb, ws, 'Observations');
-    }
-
-    // Resources
-    const resources = DB.get('resources');
-    if (resources.length > 0) {
-        const ws = XLSX.utils.json_to_sheet(resources.map(r => ({
-            Title: r.title, Type: r.type, Subject: r.subject,
-            Grade: r.grade, Source: r.source, Description: r.description,
-            Tags: (r.tags || []).join(', ')
-        })));
-        XLSX.utils.book_append_sheet(wb, ws, 'Resources');
-    }
-
-    // Notes
-    const notes = DB.get('notes');
-    if (notes.length > 0) {
-        const ws = XLSX.utils.json_to_sheet(notes.map(n => ({
-            Title: n.title, Content: n.content, Color: n.color, 'Created At': n.createdAt
-        })));
-        XLSX.utils.book_append_sheet(wb, ws, 'Notes');
-    }
-
-    if (wb.SheetNames.length === 0) {
-        showToast('No data to export', 'error');
-        return;
-    }
-
-    XLSX.writeFile(wb, `APF_Dashboard_Export_${new Date().toISOString().split('T')[0]}.xlsx`);
-    showToast('Dashboard data exported successfully!');
-}
+// Note: exportAllDataToExcel() is defined in app.js — do not duplicate here
 
 // ===== Smart Report Generator =====
 function generateSmartReport() {

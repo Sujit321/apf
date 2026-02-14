@@ -7,6 +7,8 @@
     <title>APF Resource Person Dashboard</title>
     <meta name="description"
         content="Productivity dashboard for Resource Persons at Azim Premji Foundation — manage school visits, teacher training, observations, reports, and resources.">
+    <meta http-equiv="X-Content-Type-Options" content="nosniff">
+    <meta name="referrer" content="no-referrer">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap"
         rel="stylesheet">
@@ -152,25 +154,37 @@
             <a href="#" class="nav-item" data-section="reflections" id="nav-reflections" data-tooltip="Reflections">
                 <i class="fas fa-journal-whills"></i><span>Reflections</span>
             </a>
+            <a href="#" class="nav-item" data-section="growth" id="nav-growth" data-tooltip="Growth Framework">
+                <i class="fas fa-seedling"></i><span>Growth Framework</span>
+            </a>
             <a href="#" class="nav-item" data-section="contacts" id="nav-contacts" data-tooltip="Contacts">
                 <i class="fas fa-address-book"></i><span>Contacts</span>
+            </a>
+            <a href="#" class="nav-item" data-section="meetings" id="nav-meetings" data-tooltip="Meetings">
+                <i class="fas fa-handshake"></i><span>Meetings</span>
             </a>
             <a href="#" class="nav-item" data-section="livesync" id="nav-livesync" data-tooltip="Live Sync">
                 <i class="fas fa-sync-alt"></i><span>Live Sync</span>
                 <span class="sync-status-dot" id="syncNavDot" title="Offline"></span>
             </a>
+            <a href="#" class="nav-item" data-section="worklog" id="nav-worklog" data-tooltip="Work Log">
+                <i class="fas fa-clipboard-list"></i><span>Work Log</span>
+            </a>
             <a href="#" class="nav-item" data-section="backup" id="nav-backup" data-tooltip="Data & Security">
                 <i class="fas fa-shield-alt"></i><span>Data & Security</span>
             </a>
+            <a href="#" class="nav-item" data-section="settings" id="nav-settings" data-tooltip="Settings">
+                <i class="fas fa-cog"></i><span>Settings</span>
+            </a>
         </nav>
         <div class="sidebar-footer">
-            <div class="user-info">
-                <div class="user-avatar"><i class="fas fa-user"></i></div>
+            <div class="user-info" onclick="openProfileModal()" style="cursor:pointer;" title="Click to edit your profile">
+                <div class="user-avatar" id="userAvatarIcon"><i class="fas fa-user"></i></div>
                 <div class="user-details">
                     <span class="user-name" id="userName">Resource Person</span>
-                    <span class="user-role">Azim Premji Foundation</span>
+                    <span class="user-role" id="userOrg">Azim Premji Foundation</span>
                 </div>
-                <button class="theme-toggle-btn" id="themeToggle" onclick="toggleTheme()" title="Switch theme">
+                <button class="theme-toggle-btn" id="themeToggle" onclick="event.stopPropagation(); toggleTheme()" title="Switch theme">
                     <i class="fas fa-moon" id="themeIcon"></i>
                 </button>
             </div>
@@ -193,7 +207,7 @@
         <section class="content-section active" id="section-dashboard">
             <div class="section-header">
                 <div>
-                    <h1>Welcome back! 👋</h1>
+                    <h1 id="dashboardGreeting">Welcome back! 👋</h1>
                     <p class="section-subtitle" id="dashboardDate"></p>
                 </div>
                 <div class="header-actions">
@@ -410,8 +424,9 @@
                             <button onclick="triggerDMTImport('replace')"><i class="fas fa-sync-alt"></i> Import DMT (Replace all)</button>
                             <button onclick="triggerFilteredImport()"><i class="fas fa-filter"></i> Import DMT (Filtered — State/Block/Observer/Cluster)</button>
                             <div class="obs-import-menu-divider"></div>
-                            <div class="obs-menu-label"><i class="fas fa-address-book"></i> Contacts</div>
+                            <div class="obs-menu-label"><i class="fas fa-address-book"></i> Contacts & Schools</div>
                             <button onclick="extractContactsFromObservations()"><i class="fas fa-user-plus"></i> Extract Contacts from Observations</button>
+                            <button onclick="triggerSchoolProfileImport()"><i class="fas fa-school"></i> Import School Profiles from Excel</button>
                             <div class="obs-import-menu-divider"></div>
                             <div class="obs-menu-label"><i class="fas fa-upload"></i> Unload</div>
                             <button onclick="openUnloadModal()"><i class="fas fa-filter"></i> Unload by Filter (State/Block/Observer/Cluster)</button>
@@ -1422,6 +1437,13 @@
                     <p class="section-subtitle">Complete history of every school you work with</p>
                 </div>
                 <div class="header-actions">
+                    <button class="btn btn-outline" onclick="triggerSchoolProfileImport()" title="Import school profiles from DMT Excel">
+                        <i class="fas fa-file-excel"></i> Import from Excel
+                    </button>
+                    <button class="btn btn-danger-outline" onclick="openBulkDeleteSchools()" title="Delete multiple schools">
+                        <i class="fas fa-trash-alt"></i> Delete Schools
+                    </button>
+                    <input type="file" id="schoolProfileImportFile" accept=".xlsx,.xls,.csv" style="display:none" onchange="loadSchoolProfileImportPreview(event)">
                     <input type="text" id="schoolSearchInput" class="filter-input" placeholder="Search schools..." oninput="renderSchoolProfiles()">
                 </div>
             </div>
@@ -1471,6 +1493,73 @@
             <div id="reflectionsContainer"></div>
         </section>
 
+        <!-- ==================== GROWTH FRAMEWORK SECTION ==================== -->
+        <section class="content-section" id="section-growth">
+            <div class="section-header">
+                <div>
+                    <h1><i class="fas fa-seedling"></i> Professional Growth Framework</h1>
+                    <p class="section-subtitle">Track your developmental journey across 5 dimensions — self-assess, set goals &amp; grow</p>
+                </div>
+                <div class="header-actions">
+                    <button class="btn btn-outline" onclick="printGrowthReport()">
+                        <i class="fas fa-print"></i> Print
+                    </button>
+                    <button class="btn btn-outline" onclick="exportGrowthReport()">
+                        <i class="fas fa-file-export"></i> Export
+                    </button>
+                    <button class="btn btn-primary" onclick="openGrowthAssessment()">
+                        <i class="fas fa-pen-ruler"></i> Self-Assess
+                    </button>
+                </div>
+            </div>
+
+            <!-- Overall Growth Score -->
+            <div class="growth-overview" id="growthOverview"></div>
+
+            <!-- Radar Chart + Journey Insights Row -->
+            <div class="growth-chart-row">
+                <div class="growth-radar-card">
+                    <h3><i class="fas fa-chart-radar"></i> Competency Map</h3>
+                    <canvas id="growthRadarChart" width="350" height="350"></canvas>
+                </div>
+                <div class="growth-journey-card" id="growthJourneyCard"></div>
+            </div>
+
+            <!-- Growth Line Chart (Trend Over Time) -->
+            <div class="growth-trend-section" id="growthTrendSection" style="display:none;">
+                <div class="growth-trend-card">
+                    <h3><i class="fas fa-chart-line"></i> Growth Trend Over Time</h3>
+                    <canvas id="growthTrendChart" height="200"></canvas>
+                </div>
+            </div>
+
+            <!-- Dimension Cards -->
+            <div class="growth-dimensions" id="growthDimensions"></div>
+
+            <!-- Action Plans -->
+            <div class="growth-action-plans-section" id="growthActionPlansSection">
+                <div class="growth-action-plans-header">
+                    <h3><i class="fas fa-tasks"></i> Growth Action Plans</h3>
+                    <button class="btn btn-outline btn-sm" onclick="openGrowthActionPlan()">
+                        <i class="fas fa-plus"></i> Add Action
+                    </button>
+                </div>
+                <div id="growthActionPlans"></div>
+            </div>
+
+            <!-- Dimension Wise Tips -->
+            <div class="growth-tips-section" id="growthTipsSection" style="display:none;">
+                <h3><i class="fas fa-lightbulb"></i> Growth Suggestions &amp; Recommended Actions</h3>
+                <div id="growthTips" class="growth-tips-grid"></div>
+            </div>
+
+            <!-- Growth Timeline -->
+            <div class="growth-timeline-section">
+                <h3><i class="fas fa-history"></i> Assessment History</h3>
+                <div id="growthTimeline"></div>
+            </div>
+        </section>
+
         <!-- ==================== CONTACTS SECTION ==================== -->
         <section class="content-section" id="section-contacts">
             <div class="section-header">
@@ -1494,8 +1583,8 @@
                     <button class="btn btn-outline" onclick="extractContactsFromObservations()" title="Extract teacher contacts from imported DMT observations">
                         <i class="fas fa-file-import"></i> Extract from Observations
                     </button>
-                    <button class="btn btn-outline tc-search-btn" onclick="openTruecallerSearch()" title="Search any phone number on Truecaller">
-                        <i class="fas fa-search-plus"></i> Truecaller Search
+                    <button class="btn btn-danger-outline" onclick="openBulkDeleteContacts()" title="Delete multiple contacts by filter">
+                        <i class="fas fa-trash-alt"></i> Bulk Delete
                     </button>
                     <button class="btn btn-primary" onclick="openContactModal()">
                         <i class="fas fa-plus"></i> Add Contact
@@ -1630,6 +1719,59 @@
                     <span>Data travels directly between your devices (peer-to-peer). Nothing is stored on any server. All data is encrypted end-to-end.</span>
                 </div>
             </div>
+        </section>
+
+        <!-- ==================== MONTHLY WORK LOG SECTION ==================== -->
+        <section class="content-section" id="section-worklog">
+            <div class="section-header">
+                <div>
+                    <h1><i class="fas fa-clipboard-list"></i> Monthly Work Log</h1>
+                    <p class="section-subtitle">Daily field diary — auto-generated from your data</p>
+                </div>
+                <div class="header-actions">
+                    <select id="worklogMonth" class="filter-select" onchange="renderWorkLog()"></select>
+                    <button class="btn btn-outline" onclick="printWorkLog()">
+                        <i class="fas fa-print"></i> Print
+                    </button>
+                    <button class="btn btn-primary" onclick="addWorkLogEntry()">
+                        <i class="fas fa-plus"></i> Add Entry
+                    </button>
+                </div>
+            </div>
+            <!-- Work Log Stats -->
+            <div class="worklog-stats" id="worklogStats"></div>
+            <!-- Work Log Table -->
+            <div class="worklog-table-container" id="worklogContainer"></div>
+        </section>
+
+        <!-- ==================== MEETING TRACKER SECTION ==================== -->
+        <section class="content-section" id="section-meetings">
+            <div class="section-header">
+                <div>
+                    <h1><i class="fas fa-handshake"></i> Meeting Tracker</h1>
+                    <p class="section-subtitle">Track BRC, cluster, district, and other meetings with action items</p>
+                </div>
+                <div class="header-actions">
+                    <select id="meetingFilter" class="filter-select" onchange="renderMeetings()">
+                        <option value="all">All Types</option>
+                        <option value="BRC Meeting">BRC Meeting</option>
+                        <option value="Cluster Meeting">Cluster Meeting</option>
+                        <option value="District Meeting">District Meeting</option>
+                        <option value="SDMC Meeting">SDMC Meeting</option>
+                        <option value="Parent-Teacher Meeting">Parent-Teacher</option>
+                        <option value="Convergence Meeting">Convergence</option>
+                        <option value="Review Meeting">Review Meeting</option>
+                        <option value="Other">Other</option>
+                    </select>
+                    <button class="btn btn-primary" onclick="openMeetingModal()">
+                        <i class="fas fa-plus"></i> Add Meeting
+                    </button>
+                </div>
+            </div>
+            <!-- Meeting Stats -->
+            <div class="meeting-stats" id="meetingStats"></div>
+            <!-- Meeting List -->
+            <div class="meeting-list" id="meetingList"></div>
         </section>
 
         <!-- ==================== BACKUP & RESTORE SECTION ==================== -->
@@ -1905,6 +2047,296 @@ function getOrCreateFolder() {
                         </div>
                     </div>
                 </div>
+            </div>
+        </section>
+
+        <!-- ==================== SETTINGS SECTION ==================== -->
+        <section class="content-section" id="section-settings">
+            <div class="section-header">
+                <div>
+                    <h1><i class="fas fa-cog"></i> App Settings</h1>
+                    <p class="section-subtitle">Customize your dashboard experience — appearance, defaults &amp; preferences</p>
+                </div>
+            </div>
+
+            <div class="settings-grid">
+
+                <!-- Appearance -->
+                <div class="settings-card">
+                    <div class="settings-card-header">
+                        <div class="settings-card-icon" style="background:linear-gradient(135deg,#8b5cf6,#7c3aed);"><i class="fas fa-palette"></i></div>
+                        <div>
+                            <h3>Appearance</h3>
+                            <p>Theme, accent color &amp; font size</p>
+                        </div>
+                    </div>
+                    <div class="settings-card-body">
+                        <div class="settings-row">
+                            <div class="settings-label">
+                                <i class="fas fa-moon"></i>
+                                <div><strong>Theme</strong><span>Switch between dark and light mode</span></div>
+                            </div>
+                            <div class="settings-control">
+                                <label class="settings-toggle">
+                                    <input type="checkbox" id="settingThemeToggle" onchange="toggleThemeFromSettings(this.checked)">
+                                    <span class="settings-toggle-slider"></span>
+                                    <span class="settings-toggle-label" id="settingThemeLabel">Dark</span>
+                                </label>
+                            </div>
+                        </div>
+                        <div class="settings-row">
+                            <div class="settings-label">
+                                <i class="fas fa-tint"></i>
+                                <div><strong>Accent Color</strong><span>Primary color for buttons &amp; highlights</span></div>
+                            </div>
+                            <div class="settings-control">
+                                <div class="settings-color-grid" id="settingAccentColors"></div>
+                            </div>
+                        </div>
+                        <div class="settings-row">
+                            <div class="settings-label">
+                                <i class="fas fa-text-height"></i>
+                                <div><strong>Font Size</strong><span>Adjust base font size across the app</span></div>
+                            </div>
+                            <div class="settings-control">
+                                <div class="settings-btn-group">
+                                    <button class="settings-size-btn" onclick="setAppFontSize('small')">A<sup>-</sup></button>
+                                    <button class="settings-size-btn active" onclick="setAppFontSize('default')">A</button>
+                                    <button class="settings-size-btn" onclick="setAppFontSize('large')">A<sup>+</sup></button>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="settings-row">
+                            <div class="settings-label">
+                                <i class="fas fa-expand"></i>
+                                <div><strong>Compact Mode</strong><span>Reduce padding and spacing for more content</span></div>
+                            </div>
+                            <div class="settings-control">
+                                <label class="settings-toggle">
+                                    <input type="checkbox" id="settingCompactMode" onchange="toggleCompactMode(this.checked)">
+                                    <span class="settings-toggle-slider"></span>
+                                </label>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Default Values -->
+                <div class="settings-card">
+                    <div class="settings-card-header">
+                        <div class="settings-card-icon" style="background:linear-gradient(135deg,#3b82f6,#1d4ed8);"><i class="fas fa-sliders-h"></i></div>
+                        <div>
+                            <h3>Default Values</h3>
+                            <p>Pre-fill common fields to save time</p>
+                        </div>
+                    </div>
+                    <div class="settings-card-body">
+                        <div class="settings-row">
+                            <div class="settings-label">
+                                <i class="fas fa-map-marker-alt"></i>
+                                <div><strong>Default Block</strong><span>Auto-fill in visit &amp; observation forms</span></div>
+                            </div>
+                            <div class="settings-control settings-control-wide">
+                                <input type="text" id="settingDefaultBlock" class="settings-input" placeholder="e.g. Anekal" onchange="saveAppSettings()">
+                            </div>
+                        </div>
+                        <div class="settings-row">
+                            <div class="settings-label">
+                                <i class="fas fa-layer-group"></i>
+                                <div><strong>Default Cluster</strong><span>Auto-fill in visit &amp; observation forms</span></div>
+                            </div>
+                            <div class="settings-control settings-control-wide">
+                                <input type="text" id="settingDefaultCluster" class="settings-input" placeholder="e.g. Sarjapura" onchange="saveAppSettings()">
+                            </div>
+                        </div>
+                        <div class="settings-row">
+                            <div class="settings-label">
+                                <i class="fas fa-map"></i>
+                                <div><strong>Default District</strong><span>Auto-fill in visit forms</span></div>
+                            </div>
+                            <div class="settings-control settings-control-wide">
+                                <input type="text" id="settingDefaultDistrict" class="settings-input" placeholder="e.g. Bengaluru Urban" onchange="saveAppSettings()">
+                            </div>
+                        </div>
+                        <div class="settings-row">
+                            <div class="settings-label">
+                                <i class="fas fa-building"></i>
+                                <div><strong>Default State</strong><span>Auto-fill in forms &amp; reports</span></div>
+                            </div>
+                            <div class="settings-control settings-control-wide">
+                                <input type="text" id="settingDefaultState" class="settings-input" placeholder="e.g. Karnataka" onchange="saveAppSettings()">
+                            </div>
+                        </div>
+                        <div class="settings-row">
+                            <div class="settings-label">
+                                <i class="fas fa-calendar-alt"></i>
+                                <div><strong>Date Format</strong><span>How dates appear throughout the app</span></div>
+                            </div>
+                            <div class="settings-control">
+                                <select id="settingDateFormat" class="settings-select" onchange="saveAppSettings()">
+                                    <option value="dd-mmm-yyyy">15-Feb-2026</option>
+                                    <option value="dd/mm/yyyy">15/02/2026</option>
+                                    <option value="mm/dd/yyyy">02/15/2026</option>
+                                    <option value="yyyy-mm-dd">2026-02-15</option>
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Dashboard Preferences -->
+                <div class="settings-card">
+                    <div class="settings-card-header">
+                        <div class="settings-card-icon" style="background:linear-gradient(135deg,#10b981,#059669);"><i class="fas fa-tachometer-alt"></i></div>
+                        <div>
+                            <h3>Dashboard</h3>
+                            <p>Customize your dashboard view</p>
+                        </div>
+                    </div>
+                    <div class="settings-card-body">
+                        <div class="settings-row">
+                            <div class="settings-label">
+                                <i class="fas fa-bell"></i>
+                                <div><strong>Smart Alerts</strong><span>Show reminders &amp; insights on dashboard</span></div>
+                            </div>
+                            <div class="settings-control">
+                                <label class="settings-toggle">
+                                    <input type="checkbox" id="settingSmartAlerts" checked onchange="saveAppSettings()">
+                                    <span class="settings-toggle-slider"></span>
+                                </label>
+                            </div>
+                        </div>
+                        <div class="settings-row">
+                            <div class="settings-label">
+                                <i class="fas fa-chart-line"></i>
+                                <div><strong>Dashboard Charts</strong><span>Show charts on dashboard overview</span></div>
+                            </div>
+                            <div class="settings-control">
+                                <label class="settings-toggle">
+                                    <input type="checkbox" id="settingDashCharts" checked onchange="saveAppSettings()">
+                                    <span class="settings-toggle-slider"></span>
+                                </label>
+                            </div>
+                        </div>
+                        <div class="settings-row">
+                            <div class="settings-label">
+                                <i class="fas fa-history"></i>
+                                <div><strong>Recent Activity</strong><span>Show recent entries on dashboard</span></div>
+                            </div>
+                            <div class="settings-control">
+                                <label class="settings-toggle">
+                                    <input type="checkbox" id="settingRecentActivity" checked onchange="saveAppSettings()">
+                                    <span class="settings-toggle-slider"></span>
+                                </label>
+                            </div>
+                        </div>
+                        <div class="settings-row">
+                            <div class="settings-label">
+                                <i class="fas fa-home"></i>
+                                <div><strong>Start Page</strong><span>Which section opens when you launch the app</span></div>
+                            </div>
+                            <div class="settings-control">
+                                <select id="settingStartPage" class="settings-select" onchange="saveAppSettings()">
+                                    <option value="dashboard">Dashboard</option>
+                                    <option value="visits">School Visits</option>
+                                    <option value="observations">Observations</option>
+                                    <option value="planner">Weekly Planner</option>
+                                    <option value="notes">Quick Notes</option>
+                                    <option value="growth">Growth Framework</option>
+                                    <option value="worklog">Work Log</option>
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Notifications & Reminders -->
+                <div class="settings-card">
+                    <div class="settings-card-header">
+                        <div class="settings-card-icon" style="background:linear-gradient(135deg,#f59e0b,#d97706);"><i class="fas fa-bell"></i></div>
+                        <div>
+                            <h3>Notifications</h3>
+                            <p>Control reminders &amp; auto-actions</p>
+                        </div>
+                    </div>
+                    <div class="settings-card-body">
+                        <div class="settings-row">
+                            <div class="settings-label">
+                                <i class="fas fa-clipboard-check"></i>
+                                <div><strong>Follow-up Reminders</strong><span>Alert when follow-ups are due</span></div>
+                            </div>
+                            <div class="settings-control">
+                                <label class="settings-toggle">
+                                    <input type="checkbox" id="settingFollowupReminder" checked onchange="saveAppSettings()">
+                                    <span class="settings-toggle-slider"></span>
+                                </label>
+                            </div>
+                        </div>
+                        <div class="settings-row">
+                            <div class="settings-label">
+                                <i class="fas fa-calendar-check"></i>
+                                <div><strong>Planned Visit Alerts</strong><span>Remind about upcoming planned visits</span></div>
+                            </div>
+                            <div class="settings-control">
+                                <label class="settings-toggle">
+                                    <input type="checkbox" id="settingVisitReminder" checked onchange="saveAppSettings()">
+                                    <span class="settings-toggle-slider"></span>
+                                </label>
+                            </div>
+                        </div>
+                        <div class="settings-row">
+                            <div class="settings-label">
+                                <i class="fas fa-book"></i>
+                                <div><strong>Work Log Auto-Add</strong><span>Auto-populate work log from daily entries</span></div>
+                            </div>
+                            <div class="settings-control">
+                                <label class="settings-toggle">
+                                    <input type="checkbox" id="settingWorklogAuto" checked onchange="saveAppSettings()">
+                                    <span class="settings-toggle-slider"></span>
+                                </label>
+                            </div>
+                        </div>
+                        <div class="settings-row">
+                            <div class="settings-label">
+                                <i class="fas fa-save"></i>
+                                <div><strong>Auto-Save Indicator</strong><span>Show save confirmation toasts</span></div>
+                            </div>
+                            <div class="settings-control">
+                                <label class="settings-toggle">
+                                    <input type="checkbox" id="settingSaveToast" checked onchange="saveAppSettings()">
+                                    <span class="settings-toggle-slider"></span>
+                                </label>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Data & Storage Info -->
+                <div class="settings-card" style="grid-column: 1 / -1;">
+                    <div class="settings-card-header">
+                        <div class="settings-card-icon" style="background:linear-gradient(135deg,#ef4444,#dc2626);"><i class="fas fa-database"></i></div>
+                        <div>
+                            <h3>Data &amp; Storage</h3>
+                            <p>View data usage and manage storage</p>
+                        </div>
+                    </div>
+                    <div class="settings-card-body">
+                        <div class="settings-data-stats" id="settingsDataStats"></div>
+                        <div class="settings-actions-row">
+                            <button class="btn btn-outline" onclick="exportSettingsJSON()">
+                                <i class="fas fa-download"></i> Export Settings
+                            </button>
+                            <button class="btn btn-outline" onclick="document.getElementById('importSettingsFile').click()">
+                                <i class="fas fa-upload"></i> Import Settings
+                                <input type="file" id="importSettingsFile" accept=".json" onchange="importSettingsJSON(event)" style="display:none">
+                            </button>
+                            <button class="btn btn-outline" onclick="resetAppSettings()" style="color:#ef4444;border-color:#ef4444;">
+                                <i class="fas fa-undo"></i> Reset to Defaults
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
             </div>
         </section>
 
@@ -2515,41 +2947,6 @@ function getOrCreateFolder() {
         </div>
     </div>
 
-    <!-- Truecaller Search Modal -->
-    <div class="modal-overlay" id="truecallerModal">
-        <div class="modal modal-sm">
-            <div class="modal-header">
-                <h2><i class="fas fa-phone-square-alt" style="color:#2196F3"></i> Truecaller Lookup</h2>
-                <button class="modal-close" onclick="closeModal('truecallerModal')"><i class="fas fa-times"></i></button>
-            </div>
-            <div class="modal-body">
-                <div class="tc-search-box">
-                    <div class="form-group" style="margin-bottom:12px">
-                        <label for="tcSearchPhone">Phone Number</label>
-                        <div class="tc-input-row">
-                            <select id="tcCountryCode" style="width:90px;padding:10px 8px;background:var(--bg-secondary);color:var(--text-primary);border:1px solid var(--border);border-radius:var(--radius) 0 0 var(--radius);font-size:14px;">
-                                <option value="IN" selected>+91</option>
-                                <option value="US">+1</option>
-                                <option value="GB">+44</option>
-                                <option value="AE">+971</option>
-                                <option value="SA">+966</option>
-                                <option value="BD">+880</option>
-                                <option value="NP">+977</option>
-                                <option value="PK">+92</option>
-                                <option value="LK">+94</option>
-                            </select>
-                            <input type="tel" id="tcSearchPhone" placeholder="Enter phone number..." style="flex:1;border-radius:0 var(--radius) var(--radius) 0;border-left:none;">
-                        </div>
-                    </div>
-                    <button class="btn btn-primary" onclick="truecallerSearch()" id="tcSearchBtn" style="width:100%;background:linear-gradient(135deg,#2196F3,#1565C0);">
-                        <i class="fas fa-search"></i> Search on Truecaller
-                    </button>
-                </div>
-                <div id="tcSearchResult" class="tc-result-area"></div>
-            </div>
-        </div>
-    </div>
-
     <!-- Contact Modal -->
     <div class="modal-overlay" id="contactModal">
         <div class="modal modal-sm">
@@ -2593,9 +2990,15 @@ function getOrCreateFolder() {
                             <input type="email" id="contactEmail" placeholder="e.g. name@email.com">
                         </div>
                     </div>
-                    <div class="form-group">
-                        <label for="contactBlock">Block / District</label>
-                        <input type="text" id="contactBlock" placeholder="e.g. Anekal Block">
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="contactBlock">Block / District</label>
+                            <input type="text" id="contactBlock" placeholder="e.g. Anekal Block">
+                        </div>
+                        <div class="form-group">
+                            <label for="contactCluster">Cluster</label>
+                            <input type="text" id="contactCluster" placeholder="e.g. Anekal Cluster">
+                        </div>
                     </div>
                     <div class="form-group">
                         <label for="contactNotes">Notes</label>
@@ -2605,6 +3008,290 @@ function getOrCreateFolder() {
                 <div class="modal-footer">
                     <button type="button" class="btn btn-ghost" onclick="closeModal('contactModal')">Cancel</button>
                     <button type="submit" class="btn btn-primary"><i class="fas fa-save"></i> Save Contact</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Bulk Delete Contacts Modal -->
+    <div class="modal-overlay" id="bulkDeleteContactsModal">
+        <div class="modal" style="max-width:680px;">
+            <div class="modal-header">
+                <h2><i class="fas fa-trash-alt"></i> Bulk Delete Contacts</h2>
+                <button class="modal-close" onclick="closeModal('bulkDeleteContactsModal')"><i class="fas fa-times"></i></button>
+            </div>
+            <div class="modal-body">
+                <p class="bulk-delete-desc">Check the items you want to filter by. Only checked contacts will be deleted. All filters are combined (AND logic).</p>
+                <div class="bulk-delete-filters">
+                    <div class="bulk-filter-group">
+                        <div class="bulk-filter-header">
+                            <label><i class="fas fa-user-tag"></i> Role</label>
+                            <div class="bulk-filter-actions">
+                                <button type="button" onclick="bulkFilterToggle('bulkDelRole', true)">All</button>
+                                <button type="button" onclick="bulkFilterToggle('bulkDelRole', false)">None</button>
+                            </div>
+                        </div>
+                        <div class="bulk-filter-checkboxes" id="bulkDelRole"></div>
+                    </div>
+                    <div class="bulk-filter-group">
+                        <div class="bulk-filter-header">
+                            <label><i class="fas fa-map-marker-alt"></i> Block / District</label>
+                            <div class="bulk-filter-actions">
+                                <button type="button" onclick="bulkFilterToggle('bulkDelBlock', true)">All</button>
+                                <button type="button" onclick="bulkFilterToggle('bulkDelBlock', false)">None</button>
+                            </div>
+                        </div>
+                        <div class="bulk-filter-checkboxes" id="bulkDelBlock"></div>
+                    </div>
+                    <div class="bulk-filter-group">
+                        <div class="bulk-filter-header">
+                            <label><i class="fas fa-layer-group"></i> Cluster</label>
+                            <div class="bulk-filter-actions">
+                                <button type="button" onclick="bulkFilterToggle('bulkDelCluster', true)">All</button>
+                                <button type="button" onclick="bulkFilterToggle('bulkDelCluster', false)">None</button>
+                            </div>
+                        </div>
+                        <div class="bulk-filter-checkboxes" id="bulkDelCluster"></div>
+                    </div>
+                    <div class="bulk-filter-group">
+                        <div class="bulk-filter-header">
+                            <label><i class="fas fa-building"></i> School / Organization</label>
+                            <div class="bulk-filter-actions">
+                                <button type="button" onclick="bulkFilterToggle('bulkDelSchool', true)">All</button>
+                                <button type="button" onclick="bulkFilterToggle('bulkDelSchool', false)">None</button>
+                            </div>
+                        </div>
+                        <div class="bulk-filter-checkboxes" id="bulkDelSchool"></div>
+                    </div>
+                    <div class="bulk-filter-group">
+                        <div class="bulk-filter-header">
+                            <label><i class="fas fa-file-import"></i> Source</label>
+                            <div class="bulk-filter-actions">
+                                <button type="button" onclick="bulkFilterToggle('bulkDelSource', true)">All</button>
+                                <button type="button" onclick="bulkFilterToggle('bulkDelSource', false)">None</button>
+                            </div>
+                        </div>
+                        <div class="bulk-filter-checkboxes" id="bulkDelSource"></div>
+                    </div>
+                    <div class="bulk-filter-group">
+                        <div class="bulk-filter-header">
+                            <label><i class="fas fa-phone"></i> Phone Status</label>
+                        </div>
+                        <div class="bulk-filter-checkboxes" id="bulkDelPhone">
+                            <label class="bulk-checkbox"><input type="checkbox" value="with" onchange="previewBulkDelete()" checked> <span>With Phone</span></label>
+                            <label class="bulk-checkbox"><input type="checkbox" value="without" onchange="previewBulkDelete()" checked> <span>Without Phone</span></label>
+                        </div>
+                    </div>
+                </div>
+                <div class="bulk-delete-preview" id="bulkDeletePreview">
+                    <div class="bulk-preview-count">
+                        <i class="fas fa-users"></i>
+                        <span id="bulkDeleteCount">0</span> contacts match
+                    </div>
+                    <div class="bulk-preview-list" id="bulkDeleteList"></div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-ghost" onclick="closeModal('bulkDeleteContactsModal')">Cancel</button>
+                <button type="button" class="btn btn-danger" id="bulkDeleteConfirmBtn" onclick="executeBulkDeleteContacts()" disabled>
+                    <i class="fas fa-trash"></i> Delete <span id="bulkDeleteBtnCount">0</span> Contacts
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Profile Modal -->
+    <div class="modal-overlay" id="profileModal">
+        <div class="modal modal-sm">
+            <div class="modal-header">
+                <h2><i class="fas fa-user-circle"></i> My Profile</h2>
+                <button class="modal-close" onclick="closeModal('profileModal')"><i class="fas fa-times"></i></button>
+            </div>
+            <form id="profileForm" onsubmit="saveProfile(event)">
+                <div class="modal-body">
+                    <div class="profile-avatar-section">
+                        <div class="profile-avatar-large" id="profileAvatarLarge"><i class="fas fa-user"></i></div>
+                    </div>
+                    <div class="form-group">
+                        <label for="profileName">Full Name *</label>
+                        <input type="text" id="profileName" required placeholder="e.g. Rajesh Kumar S">
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="profileDesignation">Designation</label>
+                            <select id="profileDesignation">
+                                <option value="Resource Person">Resource Person</option>
+                                <option value="Block Resource Person">Block Resource Person (BRP)</option>
+                                <option value="Cluster Resource Person">Cluster Resource Person (CRP)</option>
+                                <option value="District Resource Person">District Resource Person</option>
+                                <option value="Academic Coordinator">Academic Coordinator</option>
+                                <option value="Fellow">Fellow</option>
+                                <option value="Other">Other</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label for="profileOrg">Organization</label>
+                            <input type="text" id="profileOrg" placeholder="Azim Premji Foundation" value="Azim Premji Foundation">
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="profileDistrict">District</label>
+                            <input type="text" id="profileDistrict" placeholder="e.g. Bengaluru Urban">
+                        </div>
+                        <div class="form-group">
+                            <label for="profileBlock">Block</label>
+                            <input type="text" id="profileBlock" placeholder="e.g. Anekal">
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="profileState">State</label>
+                            <input type="text" id="profileState" placeholder="e.g. Karnataka">
+                        </div>
+                        <div class="form-group">
+                            <label for="profilePhone">Phone</label>
+                            <input type="tel" id="profilePhone" placeholder="e.g. 9876543210">
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label for="profileEmail">Email</label>
+                        <input type="email" id="profileEmail" placeholder="e.g. name@azimpremjifoundation.org">
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-ghost" onclick="closeModal('profileModal')">Cancel</button>
+                    <button type="submit" class="btn btn-primary"><i class="fas fa-save"></i> Save Profile</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Work Log Entry Modal -->
+    <div class="modal-overlay" id="worklogModal">
+        <div class="modal modal-sm">
+            <div class="modal-header">
+                <h2 id="worklogModalTitle"><i class="fas fa-clipboard-list"></i> Add Work Log Entry</h2>
+                <button class="modal-close" onclick="closeModal('worklogModal')"><i class="fas fa-times"></i></button>
+            </div>
+            <form id="worklogForm" onsubmit="saveWorkLogEntry(event)">
+                <div class="modal-body">
+                    <input type="hidden" id="worklogId">
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="worklogDate">Date *</label>
+                            <input type="date" id="worklogDate" required>
+                        </div>
+                        <div class="form-group">
+                            <label for="worklogType">Activity Type *</label>
+                            <select id="worklogType" required>
+                                <option value="School Visit">School Visit</option>
+                                <option value="Classroom Observation">Classroom Observation</option>
+                                <option value="Training / Workshop">Training / Workshop</option>
+                                <option value="Meeting">Meeting (BRC/CRC/Staff)</option>
+                                <option value="Desk Work">Desk Work / Planning</option>
+                                <option value="Travel">Travel</option>
+                                <option value="Data Entry / Reporting">Data Entry / Reporting</option>
+                                <option value="Community Engagement">Community Engagement</option>
+                                <option value="Material Preparation">Material / TLM Preparation</option>
+                                <option value="Leave">Leave</option>
+                                <option value="Holiday">Holiday</option>
+                                <option value="Other">Other</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label for="worklogLocation">Location / School</label>
+                        <input type="text" id="worklogLocation" placeholder="e.g. GPS Anekal / Block Office">
+                    </div>
+                    <div class="form-group">
+                        <label for="worklogDescription">Description / Key Activities</label>
+                        <textarea id="worklogDescription" rows="3" placeholder="Describe what you did today..."></textarea>
+                    </div>
+                    <div class="form-group">
+                        <label for="worklogOutcome">Outcome / Remarks</label>
+                        <textarea id="worklogOutcome" rows="2" placeholder="Key outcomes or follow-ups..."></textarea>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-ghost" onclick="closeModal('worklogModal')">Cancel</button>
+                    <button type="submit" class="btn btn-primary"><i class="fas fa-save"></i> Save Entry</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Meeting Modal -->
+    <div class="modal-overlay" id="meetingModal">
+        <div class="modal" style="max-width:640px;">
+            <form id="meetingForm" onsubmit="saveMeeting(event)">
+                <div class="modal-header">
+                    <h2 id="meetingModalTitle"><i class="fas fa-handshake"></i> New Meeting</h2>
+                    <button type="button" class="modal-close" onclick="closeModal('meetingModal')"><i class="fas fa-times"></i></button>
+                </div>
+                <div class="modal-body" style="max-height:65vh;overflow-y:auto;">
+                    <input type="hidden" id="meetingId">
+                    <div class="form-group">
+                        <label for="meetingTitle">Meeting Title *</label>
+                        <input type="text" id="meetingTitle" required placeholder="e.g. Monthly BRC Review Meeting">
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="meetingType">Meeting Type *</label>
+                            <select id="meetingType" required>
+                                <option value="BRC Meeting">BRC Meeting</option>
+                                <option value="Cluster Meeting">Cluster Meeting</option>
+                                <option value="District Meeting">District Meeting</option>
+                                <option value="SDMC Meeting">SDMC Meeting</option>
+                                <option value="Parent-Teacher Meeting">Parent-Teacher Meeting</option>
+                                <option value="Convergence Meeting">Convergence Meeting</option>
+                                <option value="Review Meeting">Review Meeting</option>
+                                <option value="Other">Other</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label for="meetingDate">Date *</label>
+                            <input type="date" id="meetingDate" required>
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="meetingLocation">Location / Venue</label>
+                            <input type="text" id="meetingLocation" placeholder="e.g. Block Resource Centre">
+                        </div>
+                        <div class="form-group">
+                            <label for="meetingOrganizer">Organizer</label>
+                            <input type="text" id="meetingOrganizer" placeholder="e.g. BEO / BRC Coordinator">
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label for="meetingAttendees">Attendees</label>
+                        <input type="text" id="meetingAttendees" placeholder="e.g. All RPs, BRC, CRC coordinators (15 members)">
+                    </div>
+                    <div class="form-group">
+                        <label for="meetingAgenda">Agenda</label>
+                        <textarea id="meetingAgenda" rows="2" placeholder="Key discussion points..."></textarea>
+                    </div>
+                    <div class="form-group">
+                        <label for="meetingDecisions">Decisions Made</label>
+                        <textarea id="meetingDecisions" rows="2" placeholder="Key decisions and outcomes..."></textarea>
+                    </div>
+                    <div class="form-group">
+                        <label for="meetingKeyTakeaways">Key Takeaways</label>
+                        <textarea id="meetingKeyTakeaways" rows="2" placeholder="Important points to remember..."></textarea>
+                    </div>
+                    <div class="form-group">
+                        <label>Action Items <button type="button" class="btn btn-sm btn-outline" onclick="addMeetingActionItem()" style="margin-left:8px;padding:2px 8px;font-size:11px;"><i class="fas fa-plus"></i> Add</button></label>
+                        <div id="meetingActionItemsContainer"></div>
+                    </div>
+                    <div class="form-group">
+                        <label for="meetingNextDate">Next Meeting Date</label>
+                        <input type="date" id="meetingNextDate">
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-ghost" onclick="closeModal('meetingModal')">Cancel</button>
+                    <button type="submit" class="btn btn-primary"><i class="fas fa-save"></i> Save Meeting</button>
                 </div>
             </form>
         </div>
@@ -2740,6 +3427,229 @@ function getOrCreateFolder() {
                 <button type="button" class="btn btn-primary" id="filteredImportConfirmBtn" onclick="executeFilteredImport()" disabled>
                     <i class="fas fa-download"></i> Import <span id="filteredImportCount">0</span> Records
                 </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- School Profile Import Modal -->
+    <div class="modal-overlay" id="schoolProfileImportModal">
+        <div class="modal" style="max-width:720px;">
+            <div class="modal-header">
+                <h2><i class="fas fa-school"></i> Import School Profiles from Excel</h2>
+                <button class="modal-close" onclick="closeModal('schoolProfileImportModal')"><i class="fas fa-times"></i></button>
+            </div>
+            <div class="modal-body">
+                <div id="schoolImportLoading" class="filtered-import-loading">
+                    <i class="fas fa-spinner fa-spin"></i> Reading Excel and extracting schools...
+                </div>
+                <div id="schoolImportContent" style="display:none">
+                    <p class="unload-modal-desc"><i class="fas fa-file-excel"></i> <strong id="schoolImportFileName"></strong> — <span id="schoolImportTotalSchools">0</span> unique schools found. Use filters to select which schools to import as visits.</p>
+                    <div class="unload-filters-grid">
+                        <div class="form-group">
+                            <label for="schoolImportFilterState"><i class="fas fa-flag"></i> State</label>
+                            <select id="schoolImportFilterState" onchange="previewSchoolProfileImport()"><option value="all">All States</option></select>
+                        </div>
+                        <div class="form-group">
+                            <label for="schoolImportFilterBlock"><i class="fas fa-map-marker-alt"></i> Block</label>
+                            <select id="schoolImportFilterBlock" onchange="previewSchoolProfileImport()"><option value="all">All Blocks</option></select>
+                        </div>
+                        <div class="form-group">
+                            <label><i class="fas fa-layer-group"></i> Cluster</label>
+                            <div class="cluster-checkbox-wrap" id="schoolImportFilterCluster">
+                                <div class="cluster-cb-header">
+                                    <label class="cluster-select-all"><input type="checkbox" checked onchange="toggleAllClusters('schoolImportFilterCluster', this.checked); previewSchoolProfileImport()"> Select All</label>
+                                    <span class="cluster-cb-count" id="schoolImportClusterCount">0 selected</span>
+                                </div>
+                                <div class="cluster-cb-search"><input type="text" placeholder="Search clusters..." oninput="filterClusterCheckboxes('schoolImportFilterCluster', this.value)"></div>
+                                <div class="cluster-cb-list" id="schoolImportClusterList"></div>
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label for="schoolImportFilterObserver"><i class="fas fa-user-tie"></i> Observer</label>
+                            <select id="schoolImportFilterObserver" onchange="previewSchoolProfileImport()"><option value="all">All Observers</option></select>
+                        </div>
+                    </div>
+                    <div class="unload-preview" id="schoolImportPreview"></div>
+                    <div id="schoolImportSchoolList" class="school-import-list"></div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-ghost" onclick="closeModal('schoolProfileImportModal')">Cancel</button>
+                <button type="button" class="btn btn-primary" id="schoolImportConfirmBtn" onclick="executeSchoolProfileImport()" disabled>
+                    <i class="fas fa-download"></i> Import <span id="schoolImportCount">0</span> School Profiles
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Bulk Delete Schools Modal -->
+    <div class="modal-overlay" id="bulkDeleteSchoolsModal">
+        <div class="modal" style="max-width:640px;">
+            <div class="modal-header">
+                <h2><i class="fas fa-trash-alt" style="color:#ef4444;"></i> Delete School Profiles</h2>
+                <button class="modal-close" onclick="closeModal('bulkDeleteSchoolsModal')"><i class="fas fa-times"></i></button>
+            </div>
+            <div class="modal-body" style="max-height:65vh;overflow-y:auto;">
+                <!-- Filter panel -->
+                <div class="bulk-del-filter-section">
+                    <div class="bulk-filter-group">
+                        <div class="bulk-filter-header"><span><i class="fas fa-filter"></i> Source</span>
+                            <div class="bulk-filter-actions"><button onclick="schoolDelFilterToggle('source','all')">All</button><button onclick="schoolDelFilterToggle('source','none')">None</button></div>
+                        </div>
+                        <div class="bulk-checkbox-list" id="schoolDelSourceList"></div>
+                    </div>
+                    <div class="bulk-filter-group">
+                        <div class="bulk-filter-header"><span><i class="fas fa-map-marker-alt"></i> Block</span>
+                            <div class="bulk-filter-actions"><button onclick="schoolDelFilterToggle('block','all')">All</button><button onclick="schoolDelFilterToggle('block','none')">None</button></div>
+                        </div>
+                        <div class="bulk-checkbox-list" id="schoolDelBlockList"></div>
+                    </div>
+                    <div class="bulk-filter-group">
+                        <div class="bulk-filter-header"><span><i class="fas fa-layer-group"></i> Cluster</span>
+                            <div class="bulk-filter-actions"><button onclick="schoolDelFilterToggle('cluster','all')">All</button><button onclick="schoolDelFilterToggle('cluster','none')">None</button></div>
+                        </div>
+                        <div class="bulk-checkbox-list" id="schoolDelClusterList"></div>
+                    </div>
+                    <div class="bulk-filter-group">
+                        <div class="bulk-filter-header"><span><i class="fas fa-info-circle"></i> Status</span>
+                            <div class="bulk-filter-actions"><button onclick="schoolDelFilterToggle('status','all')">All</button><button onclick="schoolDelFilterToggle('status','none')">None</button></div>
+                        </div>
+                        <div class="bulk-checkbox-list" id="schoolDelStatusList"></div>
+                    </div>
+                </div>
+                <!-- Preview -->
+                <div class="bulk-del-preview" id="schoolDelPreview"></div>
+                <!-- School list -->
+                <div id="schoolDelList" class="school-del-list"></div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-ghost" onclick="closeModal('bulkDeleteSchoolsModal')">Cancel</button>
+                <button type="button" class="btn btn-danger" id="schoolDelConfirmBtn" onclick="executeBulkDeleteSchools()" disabled>
+                    <i class="fas fa-trash-alt"></i> Delete <span id="schoolDelCount">0</span> Schools
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Growth Self-Assessment Modal -->
+    <div class="modal-overlay" id="growthAssessModal">
+        <div class="modal" style="max-width:780px;">
+            <div class="modal-header">
+                <h2 id="growthAssessModalTitle"><i class="fas fa-pen-ruler"></i> Self-Assessment</h2>
+                <button class="modal-close" onclick="closeModal('growthAssessModal')"><i class="fas fa-times"></i></button>
+            </div>
+            <div class="modal-body" style="max-height:70vh;overflow-y:auto;">
+                <div class="growth-assess-mode-toggle" id="growthAssessModeToggle">
+                    <button class="growth-mode-btn active" onclick="setGrowthAssessMode('self', event)"><i class="fas fa-user"></i> Self-Assessment</button>
+                    <button class="growth-mode-btn" onclick="setGrowthAssessMode('mentor', event)"><i class="fas fa-user-tie"></i> Mentor Assessment</button>
+                </div>
+                <div id="growthMentorFields" style="display:none;">
+                    <div class="form-row" style="margin-bottom:14px;">
+                        <div class="form-group">
+                            <label><i class="fas fa-user-tie"></i> Mentor/Assessor Name</label>
+                            <input type="text" id="growthMentorName" class="settings-input" placeholder="Name of the mentor/assessor">
+                        </div>
+                        <div class="form-group">
+                            <label><i class="fas fa-tag"></i> Assessment Type</label>
+                            <select id="growthMentorType" class="settings-select" style="width:100%;">
+                                <option value="Quarterly Review">Quarterly Review</option>
+                                <option value="Annual Review">Annual Review</option>
+                                <option value="Peer Review">Peer Review</option>
+                                <option value="Senior Feedback">Senior Feedback</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+                <p style="color:var(--text-muted);font-size:13px;margin-bottom:16px;" id="growthAssessHelpText">
+                    <i class="fas fa-info-circle"></i> Honestly assess your current level (1-4) for each dimension. Add notes/evidence to support your self-rating.
+                </p>
+                <div id="growthAssessForm"></div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-ghost" onclick="closeModal('growthAssessModal')">Cancel</button>
+                <button type="button" class="btn btn-primary" onclick="saveGrowthAssessment()">
+                    <i class="fas fa-save"></i> Save Assessment
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Growth Action Plan Modal -->
+    <div class="modal-overlay" id="growthActionModal">
+        <div class="modal" style="max-width:600px;">
+            <div class="modal-header">
+                <h2><i class="fas fa-tasks"></i> Growth Action Plan</h2>
+                <button class="modal-close" onclick="closeModal('growthActionModal')"><i class="fas fa-times"></i></button>
+            </div>
+            <div class="modal-body">
+                <input type="hidden" id="growthActionId">
+                <div class="form-group">
+                    <label><i class="fas fa-layer-group"></i> Dimension *</label>
+                    <select id="growthActionDim" class="settings-select" style="width:100%;" required></select>
+                </div>
+                <div class="form-group">
+                    <label><i class="fas fa-bullseye"></i> Goal / Action Item *</label>
+                    <input type="text" id="growthActionTitle" class="settings-input" placeholder="e.g. Independently design a 3-day workshop" required>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label><i class="fas fa-flag"></i> Target Level</label>
+                        <select id="growthActionTargetLevel" class="settings-select" style="width:100%;">
+                            <option value="2">Level 2</option>
+                            <option value="3">Level 3</option>
+                            <option value="4">Level 4</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label><i class="fas fa-calendar"></i> Target Date</label>
+                        <input type="date" id="growthActionDate" class="settings-input">
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label><i class="fas fa-list"></i> Steps / Sub-tasks</label>
+                    <textarea id="growthActionSteps" class="settings-input" style="height:80px;resize:vertical;" placeholder="Break down into small actionable steps..."></textarea>
+                </div>
+                <div class="form-group">
+                    <label><i class="fas fa-hands-helping"></i> Support Needed</label>
+                    <input type="text" id="growthActionSupport" class="settings-input" placeholder="e.g. Co-facilitation with senior member, reading material...">
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label><i class="fas fa-signal"></i> Priority</label>
+                        <select id="growthActionPriority" class="settings-select" style="width:100%;">
+                            <option value="high">High</option>
+                            <option value="medium" selected>Medium</option>
+                            <option value="low">Low</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label><i class="fas fa-info-circle"></i> Status</label>
+                        <select id="growthActionStatus" class="settings-select" style="width:100%;">
+                            <option value="not-started">Not Started</option>
+                            <option value="in-progress">In Progress</option>
+                            <option value="completed">Completed</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-ghost" onclick="closeModal('growthActionModal')">Cancel</button>
+                <button type="button" class="btn btn-primary" onclick="saveGrowthAction()">
+                    <i class="fas fa-save"></i> Save Action Plan
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Growth Dimension Detail Modal -->
+    <div class="modal-overlay" id="growthDimDetailModal">
+        <div class="modal" style="max-width:720px;">
+            <div class="modal-header">
+                <h2 id="growthDimDetailTitle"><i class="fas fa-seedling"></i> Dimension Detail</h2>
+                <button class="modal-close" onclick="closeModal('growthDimDetailModal')"><i class="fas fa-times"></i></button>
+            </div>
+            <div class="modal-body" style="max-height:70vh;overflow-y:auto;">
+                <div id="growthDimDetailContent"></div>
             </div>
         </div>
     </div>
