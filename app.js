@@ -345,6 +345,319 @@ let hasUnsavedChanges = false;
 let lastEncSaveTime = null;
 const ENCRYPTED_DATA_KEYS = ['visits', 'trainings', 'observations', 'resources', 'notes', 'ideas', 'reflections', 'contacts', 'plannerTasks', 'goalTargets', 'followupStatus'];
 
+// ===== Google Drive Auto-Backup (via Google Apps Script) =====
+const GoogleDriveSync = {
+    URL_KEY: 'apf_gdrive_script_url',
+    AUTO_KEY: 'apf_gdrive_auto_backup',
+    LAST_KEY: 'apf_gdrive_last_backup',
+    LAST_SIZE_KEY: 'apf_gdrive_last_size',
+    _busy: false,
+    _autoTimer: null,
+
+    getScriptUrl() { return localStorage.getItem(this.URL_KEY) || ''; },
+    setScriptUrl(url) { localStorage.setItem(this.URL_KEY, url); },
+    clearScriptUrl() { localStorage.removeItem(this.URL_KEY); },
+
+    isConnected() { return !!this.getScriptUrl(); },
+
+    isAutoEnabled() { return localStorage.getItem(this.AUTO_KEY) === '1'; },
+    setAutoEnabled(v) { localStorage.setItem(this.AUTO_KEY, v ? '1' : '0'); },
+
+    getLastBackup() { return localStorage.getItem(this.LAST_KEY) || ''; },
+    setLastBackup(ts) { localStorage.setItem(this.LAST_KEY, ts); },
+
+    getLastSize() { return localStorage.getItem(this.LAST_SIZE_KEY) || ''; },
+    setLastSize(s) { localStorage.setItem(this.LAST_SIZE_KEY, s); },
+
+    // Test connection to the Google Apps Script
+    async testConnection() {
+        const url = this.getScriptUrl();
+        if (!url) return { ok: false, error: 'No URL configured' };
+        try {
+            const resp = await fetch(url + '?action=ping', { method: 'GET', redirect: 'follow' });
+            // Apps Script redirects, so read text
+            const text = await resp.text();
+            let data;
+            try { data = JSON.parse(text); } catch { data = { status: 'ok' }; }
+            return { ok: true, data };
+        } catch (err) {
+            return { ok: false, error: err.message };
+        }
+    },
+
+    // Backup data to Google Drive
+    async backup() {
+        if (this._busy) return { ok: false, error: 'Backup in progress' };
+        if (!_sessionPassword) return { ok: false, error: 'No password available' };
+        const url = this.getScriptUrl();
+        if (!url) return { ok: false, error: 'Google Drive not connected' };
+
+        this._busy = true;
+        this.updateUI('syncing');
+
+        try {
+            // Collect & encrypt
+            const allData = { _meta: { app: 'APF Dashboard', version: 2, backedUpAt: new Date().toISOString() } };
+            ENCRYPTED_DATA_KEYS.forEach(k => { allData[k] = DB.get(k); });
+            const encrypted = await CryptoEngine.encrypt(_sessionPassword, allData);
+            const binary = String.fromCharCode(...encrypted);
+            const b64Data = btoa(binary);
+
+            // Send to Apps Script
+            const resp = await fetch(url, {
+                method: 'POST',
+                redirect: 'follow',
+                headers: { 'Content-Type': 'text/plain' },
+                body: JSON.stringify({ action: 'backup', data: b64Data, timestamp: new Date().toISOString() })
+            });
+            const text = await resp.text();
+            let result;
+            try { result = JSON.parse(text); } catch { result = { success: true }; }
+
+            const now = new Date().toISOString();
+            this.setLastBackup(now);
+            const sizeKB = (b64Data.length / 1024).toFixed(1);
+            this.setLastSize(sizeKB + ' KB');
+            this.updateUI('connected');
+            this._busy = false;
+            return { ok: true, size: sizeKB };
+        } catch (err) {
+            console.error('Google Drive backup failed:', err);
+            this.updateUI('error');
+            this._busy = false;
+            return { ok: false, error: err.message };
+        }
+    },
+
+    // Restore data from Google Drive
+    async restore() {
+        if (this._busy) return { ok: false, error: 'Operation in progress' };
+        if (!_sessionPassword) return { ok: false, error: 'No password available' };
+        const url = this.getScriptUrl();
+        if (!url) return { ok: false, error: 'Google Drive not connected' };
+
+        this._busy = true;
+        this.updateUI('syncing');
+
+        try {
+            const resp = await fetch(url + '?action=restore', { method: 'GET', redirect: 'follow' });
+            const text = await resp.text();
+            let result;
+            try { result = JSON.parse(text); } catch { result = null; }
+
+            if (!result || result.error) {
+                this._busy = false;
+                this.updateUI('connected');
+                return { ok: false, error: result?.error || 'No backup found on Google Drive' };
+            }
+
+            const b64Data = result.data;
+            if (!b64Data) {
+                this._busy = false;
+                this.updateUI('connected');
+                return { ok: false, error: 'No backup data on Google Drive' };
+            }
+
+            // Decrypt
+            const binary = atob(b64Data);
+            const buffer = new Uint8Array(binary.length);
+            for (let i = 0; i < binary.length; i++) buffer[i] = binary.charCodeAt(i);
+            const data = await CryptoEngine.decrypt(_sessionPassword, buffer.buffer);
+
+            if (!data._meta || data._meta.app !== 'APF Dashboard') {
+                this._busy = false;
+                this.updateUI('connected');
+                return { ok: false, error: 'Invalid backup data' };
+            }
+
+            // Apply to DB
+            DB.clear();
+            ENCRYPTED_DATA_KEYS.forEach(k => {
+                if (data[k] !== undefined && Array.isArray(data[k])) _originalDBSet(k, data[k]);
+            });
+            markUnsavedChanges();
+
+            // Re-render
+            const active = document.querySelector('.nav-item.active');
+            if (active) navigateTo(active.dataset.section);
+
+            this._busy = false;
+            this.updateUI('connected');
+            return { ok: true, meta: data._meta };
+        } catch (err) {
+            console.error('Google Drive restore failed:', err);
+            this._busy = false;
+            this.updateUI('error');
+            return { ok: false, error: err.message.includes('Decryption') || err.message.includes('decrypt') ? 'Wrong password — backup was encrypted with a different password' : err.message };
+        }
+    },
+
+    // Get backup info from Google Drive
+    async getBackupInfo() {
+        const url = this.getScriptUrl();
+        if (!url) return null;
+        try {
+            const resp = await fetch(url + '?action=info', { method: 'GET', redirect: 'follow' });
+            const text = await resp.text();
+            return JSON.parse(text);
+        } catch { return null; }
+    },
+
+    // Auto-backup (debounced — 10s after last change)
+    scheduleAutoBackup() {
+        if (!this.isConnected() || !this.isAutoEnabled()) return;
+        if (this._autoTimer) clearTimeout(this._autoTimer);
+        this._autoTimer = setTimeout(() => {
+            this.backup().then(r => {
+                if (r.ok) console.log('Auto-backup to Google Drive: ' + r.size + ' KB');
+                else console.warn('Auto-backup to Google Drive failed:', r.error);
+            });
+        }, 10000); // 10 seconds debounce
+    },
+
+    // Update UI elements
+    updateUI(state) {
+        const statusEl = document.getElementById('gdriveStatus');
+        const dotEl = document.getElementById('gdriveDot');
+        const actionsEl = document.getElementById('gdriveActions');
+        const infoEl = document.getElementById('gdriveInfo');
+        const connectBtn = document.getElementById('gdriveConnectBtn');
+        const disconnectArea = document.getElementById('gdriveDisconnectArea');
+
+        if (!statusEl) return;
+
+        const states = {
+            disconnected: { dot: '#64748b', icon: 'fa-cloud', label: 'Not Connected', detail: 'Connect to auto-backup your data to Google Drive', color: '' },
+            connected: { dot: '#22c55e', icon: 'fa-check-circle', label: 'Connected', detail: 'Encrypted backups syncing to Google Drive', color: 'gdrive-connected' },
+            syncing: { dot: '#f59e0b', icon: 'fa-sync fa-spin', label: 'Syncing...', detail: 'Uploading encrypted data to Google Drive', color: 'gdrive-syncing' },
+            error: { dot: '#ef4444', icon: 'fa-exclamation-triangle', label: 'Error', detail: 'Failed to connect — check your script URL', color: 'gdrive-error' }
+        };
+        const s = states[state] || states.disconnected;
+
+        if (dotEl) dotEl.style.background = s.dot;
+        statusEl.className = 'gdrive-status ' + s.color;
+        statusEl.innerHTML = `<i class="fas ${s.icon}"></i><div><strong>${s.label}</strong><span>${s.detail}</span></div>`;
+
+        if (connectBtn) connectBtn.style.display = state === 'disconnected' ? '' : 'none';
+        if (disconnectArea) disconnectArea.style.display = state !== 'disconnected' ? '' : 'none';
+        if (actionsEl) actionsEl.style.display = state !== 'disconnected' ? '' : 'none';
+
+        // Update info
+        if (infoEl && state !== 'disconnected') {
+            const last = this.getLastBackup();
+            const size = this.getLastSize();
+            let infoHTML = '';
+            if (last) {
+                const d = new Date(last);
+                infoHTML += `<div class="gdrive-info-row"><i class="fas fa-clock"></i> Last backup: <strong>${d.toLocaleDateString('en-IN', {day:'2-digit',month:'short',year:'numeric'})} ${d.toLocaleTimeString('en-IN', {hour:'2-digit',minute:'2-digit'})}</strong></div>`;
+            }
+            if (size) {
+                infoHTML += `<div class="gdrive-info-row"><i class="fas fa-weight-hanging"></i> Backup size: <strong>${size}</strong></div>`;
+            }
+            infoEl.innerHTML = infoHTML || '<div class="gdrive-info-row"><i class="fas fa-info-circle"></i> No backup yet — click "Backup Now"</div>';
+        }
+
+        // Auto toggle
+        const autoToggle = document.getElementById('gdriveAutoToggle');
+        if (autoToggle) autoToggle.checked = this.isAutoEnabled();
+    },
+
+    // Disconnect
+    disconnect() {
+        this.clearScriptUrl();
+        localStorage.removeItem(this.AUTO_KEY);
+        localStorage.removeItem(this.LAST_KEY);
+        localStorage.removeItem(this.LAST_SIZE_KEY);
+        if (this._autoTimer) clearTimeout(this._autoTimer);
+        this.updateUI('disconnected');
+    }
+};
+
+// Public Google Drive functions
+async function connectGoogleDrive() {
+    const url = document.getElementById('gdriveScriptURL')?.value?.trim();
+    if (!url) {
+        showToast('Please enter your Google Apps Script URL', 'error');
+        return;
+    }
+    if (!url.startsWith('https://script.google.com/')) {
+        showToast('Invalid URL — must start with https://script.google.com/', 'error');
+        return;
+    }
+
+    const btn = document.getElementById('gdriveConnectBtn');
+    if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Testing...'; }
+
+    GoogleDriveSync.setScriptUrl(url);
+    const result = await GoogleDriveSync.testConnection();
+
+    if (result.ok) {
+        GoogleDriveSync.setAutoEnabled(true);
+        GoogleDriveSync.updateUI('connected');
+        showToast('Google Drive connected!', 'success');
+        // Do initial backup
+        const bkp = await GoogleDriveSync.backup();
+        if (bkp.ok) showToast('Initial backup complete (' + bkp.size + ' KB)', 'success');
+    } else {
+        GoogleDriveSync.clearScriptUrl();
+        GoogleDriveSync.updateUI('disconnected');
+        showToast('Connection failed: ' + result.error, 'error');
+    }
+    if (btn) { btn.disabled = false; btn.innerHTML = '<i class="fas fa-plug"></i> Connect'; }
+}
+
+function disconnectGoogleDrive() {
+    if (!confirm('Disconnect Google Drive backup? Your data on Drive will remain intact.')) return;
+    GoogleDriveSync.disconnect();
+    showToast('Google Drive disconnected', 'info');
+}
+
+async function gdriveBackupNow() {
+    const btn = document.getElementById('gdriveBackupBtn');
+    if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Backing up...'; }
+    const result = await GoogleDriveSync.backup();
+    if (result.ok) {
+        showToast('Backed up to Google Drive (' + result.size + ' KB)', 'success');
+    } else {
+        showToast('Backup failed: ' + result.error, 'error');
+    }
+    if (btn) { btn.disabled = false; btn.innerHTML = '<i class="fas fa-cloud-upload-alt"></i> Backup Now'; }
+}
+
+async function gdriveRestoreNow() {
+    if (!confirm('Restore data from Google Drive? This will REPLACE all current data with the backup.')) return;
+    const btn = document.getElementById('gdriveRestoreBtn');
+    if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Restoring...'; }
+    const result = await GoogleDriveSync.restore();
+    if (result.ok) {
+        showToast('Data restored from Google Drive!', 'success');
+        if (result.meta?.backedUpAt) {
+            const d = new Date(result.meta.backedUpAt);
+            showToast('Backup was from: ' + d.toLocaleDateString('en-IN') + ' ' + d.toLocaleTimeString('en-IN'), 'info');
+        }
+    } else {
+        showToast('Restore failed: ' + result.error, 'error');
+    }
+    if (btn) { btn.disabled = false; btn.innerHTML = '<i class="fas fa-cloud-download-alt"></i> Restore from Drive'; }
+}
+
+function toggleGdriveAuto(checked) {
+    GoogleDriveSync.setAutoEnabled(checked);
+    showToast(checked ? 'Auto-backup to Google Drive enabled' : 'Auto-backup disabled', 'info');
+}
+
+function toggleGdriveSetup() {
+    const el = document.getElementById('gdriveSetupGuide');
+    if (el) el.style.display = el.style.display === 'none' ? '' : 'none';
+}
+
+function copyAppsScriptCode() {
+    const code = document.getElementById('gdriveScriptCode')?.textContent;
+    if (!code) return;
+    navigator.clipboard.writeText(code).then(() => showToast('Script code copied!', 'success'))
+        .catch(() => showToast('Please copy manually', 'info'));
+}
+
 function markUnsavedChanges() {
     hasUnsavedChanges = true;
     const badge = document.getElementById('encUnsavedBadge');
@@ -375,6 +688,8 @@ async function performAutoSave() {
         await EncryptedCache.save(_sessionPassword);
         clearUnsavedChanges();
         updateEncryptedFileStatus();
+        // 3. Schedule Google Drive backup if enabled
+        GoogleDriveSync.scheduleAutoBackup();
     } catch (err) {
         console.error('Auto-save failed:', err);
     }
@@ -990,6 +1305,7 @@ function refreshSection(section) {
         case 'schools': renderSchoolProfiles(); break;
         case 'reflections': initReflectionMonthFilter(); renderReflections(); break;
         case 'contacts': renderContacts(); break;
+        case 'livesync': break;
         case 'backup': renderBackupInfo(); break;
     }
 }
@@ -1042,6 +1358,474 @@ function restoreSidebarState() {
         }
     } catch(e) {}
 }
+
+// ===== Theme Toggle (Light/Dark Mode) =====
+function toggleTheme() {
+    const body = document.body;
+    const isLight = body.classList.toggle('light-mode');
+    const icon = document.getElementById('themeIcon');
+    if (icon) {
+        icon.className = isLight ? 'fas fa-sun' : 'fas fa-moon';
+    }
+    const btn = document.getElementById('themeToggle');
+    if (btn) btn.title = isLight ? 'Switch to dark mode' : 'Switch to light mode';
+    try { localStorage.setItem('apf_theme', isLight ? 'light' : 'dark'); } catch(e) {}
+}
+
+function restoreTheme() {
+    try {
+        const saved = localStorage.getItem('apf_theme');
+        if (saved === 'light') {
+            document.body.classList.add('light-mode');
+            const icon = document.getElementById('themeIcon');
+            if (icon) icon.className = 'fas fa-sun';
+            const btn = document.getElementById('themeToggle');
+            if (btn) btn.title = 'Switch to dark mode';
+        }
+    } catch(e) {}
+}
+
+// ===== Live Sync — Peer-to-Peer Real-Time Data Sync =====
+const LiveSync = {
+    peer: null,
+    connections: [],       // Active DataConnection objects
+    roomCode: null,
+    isHost: false,
+    deviceId: null,
+    _syncLog: [],
+    _autoSyncEnabled: true,
+
+    // Generate a short readable room code
+    generateRoomCode() {
+        const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+        let code = '';
+        for (let i = 0; i < 6; i++) code += chars[Math.floor(Math.random() * chars.length)];
+        return code;
+    },
+
+    // Get device fingerprint for display
+    getDeviceName() {
+        const ua = navigator.userAgent;
+        if (/iPhone|iPad|iPod/.test(ua)) return '📱 iOS Device';
+        if (/Android/.test(ua)) return '📱 Android Device';
+        if (/Mac/.test(ua)) return '💻 Mac';
+        if (/Linux/.test(ua)) return '💻 Linux PC';
+        if (/Windows/.test(ua)) return '💻 Windows PC';
+        return '🖥️ Device';
+    },
+
+    // Build a unique peer ID from room code
+    getPeerId(code, isHost) {
+        return 'apf-sync-' + code + (isHost ? '-host' : '-' + Date.now().toString(36));
+    },
+
+    // Collect all app data for sync
+    collectData() {
+        const allData = { _meta: { app: 'APF Dashboard', version: 2, syncedAt: new Date().toISOString(), device: this.getDeviceName() } };
+        ENCRYPTED_DATA_KEYS.forEach(k => { allData[k] = DB.get(k); });
+        return allData;
+    },
+
+    // Apply received data to local DB
+    applyData(data) {
+        if (!data || !data._meta || data._meta.app !== 'APF Dashboard') {
+            this.log('Rejected invalid sync data', 'error');
+            return false;
+        }
+        // Use _originalDBSet to avoid triggering auto-save loop during sync
+        ENCRYPTED_DATA_KEYS.forEach(k => {
+            if (data[k] !== undefined && Array.isArray(data[k])) {
+                _originalDBSet(k, data[k]);
+            }
+        });
+        // Trigger save
+        markUnsavedChanges();
+        // Re-render current section
+        const active = document.querySelector('.nav-item.active');
+        if (active) navigateTo(active.dataset.section);
+        return true;
+    },
+
+    // Log sync activity
+    log(msg, type = 'info') {
+        const time = new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        const icons = { info: 'ℹ️', success: '✅', error: '❌', send: '📤', receive: '📥', connect: '🔗', disconnect: '🔌' };
+        this._syncLog.unshift({ time, msg, type, icon: icons[type] || 'ℹ️' });
+        if (this._syncLog.length > 50) this._syncLog.pop();
+        this.renderLog();
+    },
+
+    renderLog() {
+        const el = document.getElementById('syncLog');
+        if (!el) return;
+        if (this._syncLog.length === 0) {
+            el.innerHTML = '<div class="sync-log-empty">No activity yet</div>';
+            return;
+        }
+        el.innerHTML = this._syncLog.map(l =>
+            `<div class="sync-log-item sync-log-${l.type}"><span class="sync-log-icon">${l.icon}</span><span class="sync-log-msg">${l.msg}</span><span class="sync-log-time">${l.time}</span></div>`
+        ).join('');
+    },
+
+    // Update connection status UI
+    updateStatus(state, detail) {
+        const banner = document.getElementById('syncStatusBanner');
+        const icon = document.getElementById('syncStatusIcon');
+        const label = document.getElementById('syncStatusLabel');
+        const detailEl = document.getElementById('syncStatusDetail');
+        const dot = document.getElementById('syncNavDot');
+
+        if (!banner) return;
+
+        banner.className = 'sync-status-banner sync-' + state;
+        const states = {
+            offline: { icon: 'fa-wifi-slash', label: 'Not Connected', cls: '' },
+            connecting: { icon: 'fa-spinner fa-spin', label: 'Connecting...', cls: 'connecting' },
+            online: { icon: 'fa-check-circle', label: 'Connected & Syncing', cls: 'online' },
+            error: { icon: 'fa-exclamation-triangle', label: 'Connection Error', cls: 'error' }
+        };
+        const s = states[state] || states.offline;
+        icon.innerHTML = `<i class="fas ${s.icon}"></i>`;
+        label.textContent = s.label;
+        if (detail) detailEl.textContent = detail;
+        if (dot) {
+            dot.className = 'sync-status-dot' + (s.cls ? ' ' + s.cls : '');
+            dot.title = s.label;
+        }
+    },
+
+    // Update connected devices list
+    updateDevices() {
+        const list = document.getElementById('syncDevicesList');
+        const count = document.getElementById('syncPeerCount');
+        if (!list) return;
+
+        const conns = this.connections.filter(c => c.open);
+        if (count) count.innerHTML = `<i class="fas fa-users"></i> ${conns.length} device${conns.length !== 1 ? 's' : ''}`;
+
+        if (conns.length === 0) {
+            list.innerHTML = '<div class="sync-no-devices">No other devices connected yet</div>';
+            return;
+        }
+        list.innerHTML = conns.map((c, i) => {
+            const name = c._deviceName || '🖥️ Device';
+            const id = c.peer.split('-').pop().substring(0, 6);
+            return `<div class="sync-device-item">
+                <div class="sync-device-icon"><i class="fas fa-${name.includes('📱') ? 'mobile-alt' : 'laptop'}"></i></div>
+                <div class="sync-device-info">
+                    <span class="sync-device-name">${name}</span>
+                    <span class="sync-device-id">${id}</span>
+                </div>
+                <span class="sync-device-status online"><i class="fas fa-circle"></i> Connected</span>
+            </div>`;
+        }).join('');
+    },
+
+    // Show/hide panels based on connection state
+    updatePanels(connected) {
+        const createCard = document.getElementById('syncCreateCard');
+        const joinCard = document.getElementById('syncJoinCard');
+        const activePanel = document.getElementById('syncActivePanel');
+        const howItWorks = document.getElementById('syncHowItWorks');
+
+        if (createCard) createCard.style.display = connected ? 'none' : '';
+        if (joinCard) joinCard.style.display = connected ? 'none' : '';
+        if (activePanel) activePanel.style.display = connected ? '' : 'none';
+        if (howItWorks) howItWorks.style.display = connected ? 'none' : '';
+
+        if (connected) {
+            const codeDisplay = document.getElementById('syncRoomCodeDisplay');
+            const roleEl = document.getElementById('syncRoomRole');
+            if (codeDisplay) codeDisplay.textContent = this.roomCode;
+            if (roleEl) roleEl.innerHTML = this.isHost
+                ? '<i class="fas fa-broadcast-tower"></i> Host'
+                : '<i class="fas fa-sign-in-alt"></i> Guest';
+        }
+    },
+
+    // Handle incoming data from peer
+    handleMessage(data, conn) {
+        if (!data || !data.type) return;
+
+        switch (data.type) {
+            case 'hello':
+                conn._deviceName = data.device || '🖥️ Device';
+                this.updateDevices();
+                this.log(`${conn._deviceName} connected`, 'connect');
+                // Auto-send data to newly connected device if host
+                if (this.isHost && this._autoSyncEnabled) {
+                    setTimeout(() => {
+                        const syncData = this.collectData();
+                        conn.send({ type: 'sync-data', data: syncData });
+                        this.log(`Auto-synced data to ${conn._deviceName}`, 'send');
+                        this.updateLastSync();
+                    }, 500);
+                }
+                break;
+
+            case 'sync-data':
+                this.log(`Receiving data from ${conn._deviceName || 'peer'}...`, 'receive');
+                const applied = this.applyData(data.data);
+                if (applied) {
+                    this.log('Data synced successfully! All sections updated.', 'success');
+                    this.updateLastSync();
+                    showToast('Data synced from connected device!', 'success');
+                } else {
+                    this.log('Failed to apply received data', 'error');
+                }
+                break;
+
+            case 'sync-request':
+                this.log(`${conn._deviceName || 'Peer'} requested data`, 'info');
+                const outData = this.collectData();
+                conn.send({ type: 'sync-data', data: outData });
+                this.log('Data sent in response to request', 'send');
+                this.updateLastSync();
+                break;
+
+            case 'data-changed':
+                // Real-time change notification
+                if (data.key && data.value !== undefined) {
+                    _originalDBSet(data.key, data.value);
+                    const active = document.querySelector('.nav-item.active');
+                    if (active) navigateTo(active.dataset.section);
+                    this.log(`Real-time update: ${data.key}`, 'receive');
+                    this.updateLastSync();
+                }
+                break;
+
+            case 'ping':
+                conn.send({ type: 'pong' });
+                break;
+
+            case 'pong':
+                break;
+        }
+    },
+
+    // Setup connection event handlers
+    setupConnection(conn) {
+        conn.on('open', () => {
+            this.connections.push(conn);
+            // Send hello with device info
+            conn.send({ type: 'hello', device: this.getDeviceName() });
+            this.updateDevices();
+            this.updateStatus('online', `Connected to ${this.connections.filter(c => c.open).length} device(s)`);
+        });
+
+        conn.on('data', (data) => {
+            this.handleMessage(data, conn);
+        });
+
+        conn.on('close', () => {
+            const name = conn._deviceName || 'Device';
+            this.connections = this.connections.filter(c => c !== conn);
+            this.updateDevices();
+            this.log(`${name} disconnected`, 'disconnect');
+            if (this.connections.filter(c => c.open).length === 0) {
+                this.updateStatus('online', 'Room active — waiting for devices');
+            } else {
+                this.updateStatus('online', `Connected to ${this.connections.filter(c => c.open).length} device(s)`);
+            }
+        });
+
+        conn.on('error', (err) => {
+            console.error('Connection error:', err);
+            this.log('Connection error: ' + err.message, 'error');
+        });
+    },
+
+    updateLastSync() {
+        const el = document.getElementById('syncLastSync');
+        if (el) {
+            const time = new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
+            el.innerHTML = `<i class="fas fa-clock"></i> Last sync: ${time}`;
+        }
+    },
+
+    // Destroy peer and all connections
+    destroy() {
+        this.connections.forEach(c => { try { c.close(); } catch(e) {} });
+        this.connections = [];
+        if (this.peer) { try { this.peer.destroy(); } catch(e) {} }
+        this.peer = null;
+        this.roomCode = null;
+        this.isHost = false;
+        this.updateStatus('offline', 'Create or join a sync room to start');
+        this.updatePanels(false);
+        this.updateDevices();
+    }
+};
+
+// ===== Live Sync Public Functions =====
+
+function createSyncRoom() {
+    if (LiveSync.peer) {
+        showToast('Already in a sync session. Disconnect first.', 'error');
+        return;
+    }
+
+    const code = LiveSync.generateRoomCode();
+    LiveSync.roomCode = code;
+    LiveSync.isHost = true;
+    LiveSync.updateStatus('connecting', 'Creating room...');
+    LiveSync.log('Creating sync room: ' + code, 'info');
+
+    const peerId = LiveSync.getPeerId(code, true);
+    const peer = new Peer(peerId, { debug: 0 });
+    LiveSync.peer = peer;
+
+    peer.on('open', (id) => {
+        LiveSync.updateStatus('online', 'Room active — waiting for devices to join');
+        LiveSync.updatePanels(true);
+        LiveSync.log('Room created! Share code: ' + code, 'success');
+        showToast('Sync room created! Code: ' + code, 'success');
+    });
+
+    peer.on('connection', (conn) => {
+        LiveSync.setupConnection(conn);
+    });
+
+    peer.on('error', (err) => {
+        console.error('Peer error:', err);
+        if (err.type === 'unavailable-id') {
+            LiveSync.log('Room code already in use. Try again.', 'error');
+            showToast('Room code in use. Try again.', 'error');
+            LiveSync.destroy();
+        } else {
+            LiveSync.updateStatus('error', err.message);
+            LiveSync.log('Error: ' + err.message, 'error');
+        }
+    });
+
+    peer.on('disconnected', () => {
+        LiveSync.updateStatus('error', 'Disconnected from signaling server — trying to reconnect...');
+        LiveSync.log('Connection lost, attempting reconnect...', 'error');
+        try { peer.reconnect(); } catch(e) {}
+    });
+}
+
+function joinSyncRoom() {
+    const input = document.getElementById('syncJoinCode');
+    const code = (input?.value || '').trim().toUpperCase();
+
+    if (!code || code.length < 4) {
+        showToast('Enter a valid room code', 'error');
+        if (input) input.focus();
+        return;
+    }
+
+    if (LiveSync.peer) {
+        showToast('Already in a sync session. Disconnect first.', 'error');
+        return;
+    }
+
+    LiveSync.roomCode = code;
+    LiveSync.isHost = false;
+    LiveSync.updateStatus('connecting', 'Joining room ' + code + '...');
+    LiveSync.log('Joining sync room: ' + code, 'info');
+
+    const peerId = LiveSync.getPeerId(code, false);
+    const peer = new Peer(peerId, { debug: 0 });
+    LiveSync.peer = peer;
+
+    peer.on('open', () => {
+        // Connect to host
+        const hostId = LiveSync.getPeerId(code, true);
+        const conn = peer.connect(hostId, { reliable: true });
+
+        conn.on('open', () => {
+            LiveSync.connections.push(conn);
+            conn.send({ type: 'hello', device: LiveSync.getDeviceName() });
+            LiveSync.updateStatus('online', 'Connected to host device');
+            LiveSync.updatePanels(true);
+            LiveSync.updateDevices();
+            LiveSync.log('Connected to host!', 'success');
+            showToast('Connected! Data will sync automatically.', 'success');
+        });
+
+        conn.on('data', (data) => {
+            LiveSync.handleMessage(data, conn);
+        });
+
+        conn.on('close', () => {
+            LiveSync.log('Host disconnected', 'disconnect');
+            LiveSync.connections = LiveSync.connections.filter(c => c !== conn);
+            LiveSync.updateDevices();
+            LiveSync.updateStatus('error', 'Host disconnected');
+        });
+
+        conn.on('error', (err) => {
+            LiveSync.log('Connection error: ' + err.message, 'error');
+            LiveSync.updateStatus('error', err.message);
+        });
+    });
+
+    peer.on('error', (err) => {
+        console.error('Peer error:', err);
+        if (err.type === 'peer-unavailable') {
+            LiveSync.log('Room not found. Check the code and try again.', 'error');
+            showToast('Room not found. Check the code.', 'error');
+            LiveSync.destroy();
+        } else {
+            LiveSync.updateStatus('error', err.message);
+            LiveSync.log('Error: ' + err.message, 'error');
+        }
+    });
+}
+
+function sendSyncData() {
+    const conns = LiveSync.connections.filter(c => c.open);
+    if (conns.length === 0) {
+        showToast('No devices connected', 'error');
+        return;
+    }
+    const data = LiveSync.collectData();
+    conns.forEach(c => c.send({ type: 'sync-data', data }));
+    LiveSync.log(`Data pushed to ${conns.length} device(s)`, 'send');
+    LiveSync.updateLastSync();
+    showToast(`Data synced to ${conns.length} device(s)!`, 'success');
+}
+
+function requestSyncData() {
+    const conns = LiveSync.connections.filter(c => c.open);
+    if (conns.length === 0) {
+        showToast('No devices connected', 'error');
+        return;
+    }
+    conns[0].send({ type: 'sync-request' });
+    LiveSync.log('Requested data from connected device', 'info');
+    showToast('Requesting data...', 'info');
+}
+
+function disconnectSync() {
+    LiveSync.log('Disconnected from sync room', 'disconnect');
+    LiveSync.destroy();
+    showToast('Disconnected from sync room', 'info');
+}
+
+function copySyncCode() {
+    const code = LiveSync.roomCode;
+    if (!code) return;
+    navigator.clipboard.writeText(code).then(() => {
+        showToast('Room code copied: ' + code, 'success');
+    }).catch(() => {
+        showToast('Code: ' + code, 'info');
+    });
+}
+
+// Real-time change broadcast — hook into DB.set
+const _syncOriginalDBSet = DB.set;
+DB.set = function(key, data) {
+    _syncOriginalDBSet(key, data);
+    // Broadcast change to connected peers
+    if (LiveSync.connections.length > 0 && ENCRYPTED_DATA_KEYS.includes(key)) {
+        const conns = LiveSync.connections.filter(c => c.open);
+        conns.forEach(c => {
+            try { c.send({ type: 'data-changed', key, value: DB.get(key) }); } catch(e) {}
+        });
+    }
+};
 
 // ===== Toast Notifications =====
 function showToast(message, type = 'success') {
@@ -3792,6 +4576,15 @@ function renderBackupInfo() {
 
     updatePasswordUI();
     updateEncryptedFileStatus();
+
+    // Google Drive status
+    if (GoogleDriveSync.isConnected()) {
+        GoogleDriveSync.updateUI('connected');
+        const urlInput = document.getElementById('gdriveScriptURL');
+        if (urlInput) urlInput.value = GoogleDriveSync.getScriptUrl();
+    } else {
+        GoogleDriveSync.updateUI('disconnected');
+    }
 }
 
 function downloadBackup() {
@@ -4067,6 +4860,9 @@ function initApp() {
     // Restore desktop sidebar collapsed state
     restoreSidebarState();
 
+    // Restore theme preference
+    restoreTheme();
+
     // Close modals on overlay click
     document.querySelectorAll('.modal-overlay').forEach(overlay => {
         overlay.addEventListener('click', (e) => {
@@ -4223,6 +5019,9 @@ window.addEventListener('beforeunload', (e) => {
 });
 
 document.addEventListener('DOMContentLoaded', async () => {
+    // Restore theme immediately to prevent flash
+    restoreTheme();
+
     // Restore persisted file handle from IndexedDB
     if (FileLink.isSupported()) {
         await FileLink.restoreHandle();

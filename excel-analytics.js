@@ -133,6 +133,18 @@ function buildChartToolbar(canvasId, chartType) {
             title="${t.label}" onclick="switchChartType('${canvasId}','${t.type}')">
             <i class="fas ${t.icon}"></i></button>`).join('')}
         <div class="chart-tool-sep"></div>
+        <div class="chart-limit-ctrl">
+            <select id="chartLimit-${canvasId}" onchange="changeChartLimit('${canvasId}')" title="Data limit">
+                <option value="10">Top 10</option>
+                <option value="15">Top 15</option>
+                <option value="25" selected>Top 25</option>
+                <option value="50">Top 50</option>
+                <option value="100">Top 100</option>
+                <option value="all">View All</option>
+            </select>
+        </div>
+        <button class="chart-tool-btn" title="Filter" onclick="toggleChartFilter('${canvasId}')">
+            <i class="fas fa-filter"></i></button>
         <button class="chart-tool-btn" title="Axes" onclick="toggleAxisBar('${canvasId}')">
             <i class="fas fa-sliders-h"></i></button>
         <button class="chart-tool-btn" title="Labels" onclick="toggleChartLabels('${canvasId}')">
@@ -148,12 +160,11 @@ function buildChartToolbar(canvasId, chartType) {
 
 function buildChartAxisBar(canvasId, xCol, yCol, agg) {
     const allCols = excelColumns || [];
-    const numCols = getNumericColumns();
     const xOptions = allCols.map(c =>
         `<option value="${c}" ${c === xCol ? 'selected' : ''}>${c.length > 20 ? c.substring(0,17)+'...' : c}</option>`
     ).join('');
     const yOptions = `<option value="_count" ${(!yCol || agg === 'count') ? 'selected' : ''}>Count</option>` +
-        numCols.map(c =>
+        allCols.map(c =>
             `<option value="${c}" ${c === yCol ? 'selected' : ''}>${c.length > 20 ? c.substring(0,17)+'...' : c}</option>`
         ).join('');
     return `<div class="chart-axis-bar" id="axisBar-${canvasId}" style="display:none;">
@@ -480,23 +491,240 @@ function fullscreenChart(canvasId) {
 }
 
 function registerChart(canvasId, chart, title, meta) {
-    chartRegistry[canvasId] = { chart, title, meta: meta || {} };
+    chartRegistry[canvasId] = { chart, title, meta: meta || {}, filters: {}, limit: 25 };
 }
 
-function changeChartAxis(canvasId) {
+function changeChartLimit(canvasId) {
+    const reg = chartRegistry[canvasId];
+    if (!reg) return;
+    const sel = document.getElementById(`chartLimit-${canvasId}`);
+    if (!sel) return;
+    reg.limit = sel.value === 'all' ? 'all' : parseInt(sel.value);
+    rebuildChartWithFilters(canvasId);
+}
+
+function getChartLimit(canvasId) {
+    const reg = chartRegistry[canvasId];
+    if (!reg) return 25;
+    return reg.limit || 25;
+}
+
+// ===== Chart Filter System =====
+function buildChartFilterBar(canvasId) {
+    const allCols = excelColumns || [];
+    const colOptions = allCols.map(c =>
+        `<option value="${c}">${c.length > 25 ? c.substring(0,22)+'...' : c}</option>`
+    ).join('');
+    return `<div class="chart-filter-bar" id="filterBar-${canvasId}" style="display:none;">
+        <div class="filter-bar-row">
+            <div class="filter-col-select">
+                <span class="axis-label"><i class="fas fa-filter"></i> Filter By</span>
+                <select id="filterCol-${canvasId}" onchange="loadFilterValues('${canvasId}')">
+                    <option value="">Select Column</option>
+                    ${colOptions}
+                </select>
+            </div>
+            <div class="filter-values-wrap" id="filterValuesWrap-${canvasId}"></div>
+            <div class="filter-actions">
+                <button class="filter-apply-btn" onclick="applyChartFilter('${canvasId}')" title="Apply Filter">
+                    <i class="fas fa-check"></i> Apply
+                </button>
+                <button class="filter-clear-btn" onclick="clearChartFilter('${canvasId}')" title="Clear Filters">
+                    <i class="fas fa-times"></i> Clear
+                </button>
+            </div>
+        </div>
+        <div class="active-filters" id="activeFilters-${canvasId}"></div>
+    </div>`;
+}
+
+function toggleChartFilter(canvasId) {
+    let bar = document.getElementById('filterBar-' + canvasId);
+    if (!bar) {
+        const canvas = document.getElementById(canvasId);
+        if (!canvas) return;
+        const filterHtml = buildChartFilterBar(canvasId);
+        canvas.insertAdjacentHTML('beforebegin', filterHtml);
+        bar = document.getElementById('filterBar-' + canvasId);
+        if (!bar) return;
+    }
+    const isVisible = bar.style.display !== 'none';
+    bar.style.display = isVisible ? 'none' : 'block';
+    const card = document.getElementById(canvasId)?.closest('.excel-chart-card, .dist-chart-card, .trend-chart-card');
+    if (card) {
+        const btn = card.querySelector('[title="Filter"]');
+        if (btn) btn.classList.toggle('active', !isVisible);
+    }
+}
+
+function loadFilterValues(canvasId) {
+    const col = document.getElementById(`filterCol-${canvasId}`)?.value;
+    const wrap = document.getElementById(`filterValuesWrap-${canvasId}`);
+    if (!wrap) return;
+    if (!col) { wrap.innerHTML = ''; return; }
+
+    // Get unique values for the column
+    const freq = {};
+    excelData.forEach(r => {
+        const v = r[col];
+        if (v === null || v === undefined || v === '') return;
+        const s = String(v).trim();
+        freq[s] = (freq[s] || 0) + 1;
+    });
+    const sorted = Object.entries(freq).sort((a, b) => b[1] - a[1]);
+    if (sorted.length === 0) { wrap.innerHTML = '<span class="filter-no-data">No values found</span>'; return; }
+
+    // Check existing filters
+    const reg = chartRegistry[canvasId];
+    const existingFilters = reg?.filters?.[col] || [];
+
+    const searchId = `filterSearch-${canvasId}`;
+    let html = `<div class="filter-values-container">`;
+    html += `<input type="text" class="filter-value-search" id="${searchId}" placeholder="Search values..." oninput="searchFilterValues('${canvasId}')">` ;
+    html += `<div class="filter-select-all">`;
+    html += `<label><input type="checkbox" id="filterSelectAll-${canvasId}" onchange="toggleAllFilterValues('${canvasId}')" checked> Select All (${sorted.length})</label>`;
+    html += `</div>`;
+    html += `<div class="filter-values-list" id="filterValuesList-${canvasId}">`;
+    sorted.forEach(([val, count]) => {
+        const checked = existingFilters.length === 0 || existingFilters.includes(val) ? 'checked' : '';
+        const escaped = val.replace(/'/g, "\\'").replace(/"/g, '&quot;');
+        html += `<label class="filter-value-item" data-value="${escaped}">
+            <input type="checkbox" value="${escaped}" ${checked}>
+            <span class="filter-val-text">${val.length > 30 ? val.substring(0,27)+'...' : val}</span>
+            <span class="filter-val-count">${count}</span>
+        </label>`;
+    });
+    html += `</div></div>`;
+    wrap.innerHTML = html;
+}
+
+function searchFilterValues(canvasId) {
+    const search = document.getElementById(`filterSearch-${canvasId}`)?.value?.toLowerCase() || '';
+    const list = document.getElementById(`filterValuesList-${canvasId}`);
+    if (!list) return;
+    list.querySelectorAll('.filter-value-item').forEach(item => {
+        const val = item.dataset.value?.toLowerCase() || '';
+        item.style.display = val.includes(search) ? '' : 'none';
+    });
+}
+
+function toggleAllFilterValues(canvasId) {
+    const selectAll = document.getElementById(`filterSelectAll-${canvasId}`);
+    const list = document.getElementById(`filterValuesList-${canvasId}`);
+    if (!list || !selectAll) return;
+    const checked = selectAll.checked;
+    list.querySelectorAll('input[type="checkbox"]').forEach(cb => {
+        if (cb.closest('.filter-value-item').style.display !== 'none') cb.checked = checked;
+    });
+}
+
+function applyChartFilter(canvasId) {
+    const reg = chartRegistry[canvasId];
+    if (!reg) return;
+
+    const col = document.getElementById(`filterCol-${canvasId}`)?.value;
+    if (!col) return;
+
+    const list = document.getElementById(`filterValuesList-${canvasId}`);
+    if (!list) return;
+
+    const selectedValues = [];
+    list.querySelectorAll('input[type="checkbox"]:checked').forEach(cb => {
+        selectedValues.push(cb.value);
+    });
+
+    const allValues = [];
+    list.querySelectorAll('input[type="checkbox"]').forEach(cb => {
+        allValues.push(cb.value);
+    });
+
+    // If all selected, remove filter for this column; else store selected values
+    if (selectedValues.length === allValues.length || selectedValues.length === 0) {
+        delete reg.filters[col];
+    } else {
+        reg.filters[col] = selectedValues;
+    }
+
+    // Show active filters
+    renderActiveFilters(canvasId);
+
+    // Re-render chart with filters applied
+    rebuildChartWithFilters(canvasId);
+}
+
+function clearChartFilter(canvasId) {
+    const reg = chartRegistry[canvasId];
+    if (!reg) return;
+    reg.filters = {};
+    renderActiveFilters(canvasId);
+
+    // Reset checkboxes
+    const list = document.getElementById(`filterValuesList-${canvasId}`);
+    if (list) list.querySelectorAll('input[type="checkbox"]').forEach(cb => cb.checked = true);
+    const selectAll = document.getElementById(`filterSelectAll-${canvasId}`);
+    if (selectAll) selectAll.checked = true;
+
+    rebuildChartWithFilters(canvasId);
+}
+
+function renderActiveFilters(canvasId) {
+    const reg = chartRegistry[canvasId];
+    const container = document.getElementById(`activeFilters-${canvasId}`);
+    if (!container || !reg) { if (container) container.innerHTML = ''; return; }
+
+    const entries = Object.entries(reg.filters || {});
+    if (entries.length === 0) { container.innerHTML = ''; return; }
+
+    container.innerHTML = entries.map(([col, vals]) =>
+        `<span class="active-filter-chip">
+            <i class="fas fa-filter"></i> ${col}: ${vals.length <= 2 ? vals.join(', ') : vals.length + ' selected'}
+            <button onclick="removeChartFilterCol('${canvasId}','${col.replace(/'/g, "\\'")}')" title="Remove">×</button>
+        </span>`
+    ).join('');
+}
+
+function removeChartFilterCol(canvasId, col) {
+    const reg = chartRegistry[canvasId];
+    if (!reg) return;
+    delete reg.filters[col];
+    renderActiveFilters(canvasId);
+
+    // If the current filter dropdown is showing this column, reset checkboxes
+    const filterCol = document.getElementById(`filterCol-${canvasId}`);
+    if (filterCol?.value === col) loadFilterValues(canvasId);
+
+    rebuildChartWithFilters(canvasId);
+}
+
+function rebuildChartWithFilters(canvasId) {
     const reg = chartRegistry[canvasId];
     if (!reg || !reg.chart) return;
 
-    const xCol = document.getElementById(`axisX-${canvasId}`)?.value;
-    const yCol = document.getElementById(`axisY-${canvasId}`)?.value;
-    const agg = document.getElementById(`axisAgg-${canvasId}`)?.value || 'count';
+    const meta = reg.meta || {};
+    const xCol = document.getElementById(`axisX-${canvasId}`)?.value || meta.labelCol;
+    const yCol = document.getElementById(`axisY-${canvasId}`)?.value || meta.valueCol;
+    const agg = document.getElementById(`axisAgg-${canvasId}`)?.value || meta.agg || 'count';
     if (!xCol) return;
 
     const useCount = (agg === 'count' || yCol === '_count');
+    const filters = reg.filters || {};
 
-    // Re-aggregate data from excelData
+    // Filter excelData based on active filters
+    let filteredData = excelData;
+    const filterEntries = Object.entries(filters);
+    if (filterEntries.length > 0) {
+        filteredData = excelData.filter(row => {
+            return filterEntries.every(([col, vals]) => {
+                const v = row[col];
+                if (v === null || v === undefined || v === '') return false;
+                return vals.includes(String(v).trim());
+            });
+        });
+    }
+
+    // Re-aggregate
     const freq = {};
-    excelData.forEach(row => {
+    filteredData.forEach(row => {
         const label = String(row[xCol] ?? '').trim();
         if (!label) return;
         if (useCount) {
@@ -520,7 +748,98 @@ function changeChartAxis(canvasId) {
         }).sort((a, b) => b[1] - a[1]);
     }
 
-    entries = entries.slice(0, 25);
+    const limit = getChartLimit(canvasId);
+    if (limit !== 'all') entries = entries.slice(0, limit);
+    if (entries.length === 0) {
+        // No data after filtering — show empty state
+        const chart = reg.chart;
+        chart.data.labels = ['No data'];
+        chart.data.datasets[0].data = [0];
+        chart.update();
+        return;
+    }
+
+    const labels = entries.map(e => e[0].length > 25 ? e[0].substring(0, 22) + '...' : e[0]);
+    const values = entries.map(e => typeof e[1] === 'object' ? (e[1].count || e[1].sum) : e[1]);
+
+    const chart = reg.chart;
+    const chartType = chart.config.type;
+    const isPie = ['doughnut', 'pie', 'polarArea'].includes(chartType);
+
+    if (chart.data.datasets.length > 1) chart.data.datasets.length = 1;
+
+    chart.data.labels = labels;
+    chart.data.datasets[0].data = values;
+    chart.data.datasets[0].label = useCount ? 'Count' : `${agg} of ${yCol}`;
+    chart.data.datasets[0].backgroundColor = isPie ? getColors(values.length).map(c => c + 'cc') : getColors(values.length).map(c => c + '99');
+    chart.data.datasets[0].borderColor = isPie ? '#1e2230' : getColors(values.length);
+
+    chart.update();
+
+    // Update title with filter indicator
+    const card = document.getElementById(canvasId)?.closest('.excel-chart-card, .dist-chart-card, .trend-chart-card');
+    if (card) {
+        const h4 = card.querySelector('h4');
+        const yLabel = useCount ? 'Count' : `${agg} of ${yCol}`;
+        const filterCount = Object.keys(filters).length;
+        const filterBadge = filterCount > 0 ? ` <span class="filter-badge">${filterCount} filter${filterCount > 1 ? 's' : ''}</span>` : '';
+        if (h4) h4.innerHTML = `${yLabel} by ${xCol}${filterBadge}`;
+    }
+}
+
+function changeChartAxis(canvasId) {
+    const reg = chartRegistry[canvasId];
+    if (!reg || !reg.chart) return;
+
+    const xCol = document.getElementById(`axisX-${canvasId}`)?.value;
+    const yCol = document.getElementById(`axisY-${canvasId}`)?.value;
+    const agg = document.getElementById(`axisAgg-${canvasId}`)?.value || 'count';
+    if (!xCol) return;
+
+    const useCount = (agg === 'count' || yCol === '_count');
+
+    // Apply active filters
+    const filters = reg.filters || {};
+    const filterEntries = Object.entries(filters);
+    let sourceData = excelData;
+    if (filterEntries.length > 0) {
+        sourceData = excelData.filter(row => {
+            return filterEntries.every(([col, vals]) => {
+                const v = row[col];
+                if (v === null || v === undefined || v === '') return false;
+                return vals.includes(String(v).trim());
+            });
+        });
+    }
+
+    // Re-aggregate data
+    const freq = {};
+    sourceData.forEach(row => {
+        const label = String(row[xCol] ?? '').trim();
+        if (!label) return;
+        if (useCount) {
+            freq[label] = (freq[label] || 0) + 1;
+        } else {
+            const val = parseFloat(row[yCol]);
+            if (isNaN(val)) return;
+            if (!freq[label]) freq[label] = { sum: 0, count: 0 };
+            freq[label].sum += val;
+            freq[label].count++;
+        }
+    });
+
+    let entries;
+    if (useCount) {
+        entries = Object.entries(freq).sort((a, b) => b[1] - a[1]);
+    } else {
+        entries = Object.entries(freq).map(([k, v]) => {
+            let aggVal = agg === 'average' ? v.sum / v.count : v.sum;
+            return [k, Math.round(aggVal * 100) / 100];
+        }).sort((a, b) => b[1] - a[1]);
+    }
+
+    const limit = getChartLimit(canvasId);
+    if (limit !== 'all') entries = entries.slice(0, limit);
     if (entries.length === 0) return;
 
     const labels = entries.map(e => e[0].length > 25 ? e[0].substring(0, 22) + '...' : e[0]);
@@ -705,6 +1024,7 @@ function processFile(file) {
             document.getElementById('excelFileInfo').textContent = `${sheetNames.length} sheet${sheetNames.length > 1 ? 's' : ''} • ${fileSize} KB`;
             document.getElementById('excelSheetSelector').style.display = 'flex';
             document.getElementById('clearExcelBtn').style.display = '';
+            document.getElementById('generateReportBtn').style.display = '';
 
             // Sheet tabs
             const tabsEl = document.getElementById('excelSheetTabs');
@@ -772,6 +1092,7 @@ function clearExcelData() {
     document.getElementById('excelDashboard').style.display = 'none';
     document.getElementById('excelSheetSelector').style.display = 'none';
     document.getElementById('clearExcelBtn').style.display = 'none';
+    document.getElementById('generateReportBtn').style.display = 'none';
     document.getElementById('excelUploadZone').style.display = '';
     document.getElementById('excelFileInput').value = '';
     showToast('Data cleared', 'info');
@@ -3059,6 +3380,11 @@ function renderDataTable() {
             tablePage = 0;
             renderDataTable();
         });
+        // Restore focus and cursor position after re-render
+        if (tableSearchTerm) {
+            searchEl.focus();
+            searchEl.setSelectionRange(searchEl.value.length, searchEl.value.length);
+        }
     }
 }
 
@@ -3127,4 +3453,397 @@ function exportAllDataToExcel() {
 
     XLSX.writeFile(wb, `APF_Dashboard_Export_${new Date().toISOString().split('T')[0]}.xlsx`);
     showToast('Dashboard data exported successfully!');
+}
+
+// ===== Smart Report Generator =====
+function generateSmartReport() {
+    if (!excelData || excelData.length === 0) {
+        showToast('No data loaded for report', 'error');
+        return;
+    }
+
+    const nums = getNumericColumns();
+    const cats = getCategoricalColumns();
+    const dates = getDateColumns();
+    const fileName = document.getElementById('excelFileName')?.textContent || 'Data';
+    const now = new Date();
+    const dateStr = now.toLocaleDateString('en-IN', { day: '2-digit', month: 'long', year: 'numeric' });
+    const timeStr = now.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
+    const fmt = v => typeof v === 'number' ? (Number.isInteger(v) ? v.toLocaleString() : v.toFixed(2)) : v;
+
+    // Data completeness
+    const filled = excelData.reduce((s, row) => s + excelColumns.filter(c => row[c] !== null && row[c] !== undefined && row[c] !== '').length, 0);
+    const totalCells = excelData.length * excelColumns.length;
+    const completeness = ((filled / totalCells) * 100).toFixed(1);
+    const missingCells = totalCells - filled;
+
+    // Duplicates
+    const rowKeys = excelData.map(r => excelColumns.map(c => String(r[c] ?? '')).join('|'));
+    const uniqueRows = new Set(rowKeys).size;
+    const dupes = excelData.length - uniqueRows;
+
+    // Per-column missing
+    const colMissing = {};
+    excelColumns.forEach(col => {
+        const missing = excelData.filter(r => r[col] === null || r[col] === undefined || r[col] === '').length;
+        colMissing[col] = missing;
+    });
+
+    // Numeric stats
+    const numStats = {};
+    nums.forEach(col => {
+        const vals = excelData.map(r => parseFloat(r[col])).filter(v => !isNaN(v));
+        if (vals.length === 0) return;
+        const sorted = [...vals].sort((a, b) => a - b);
+        const sum = vals.reduce((a, b) => a + b, 0);
+        const mean = sum / vals.length;
+        const min = sorted[0], max = sorted[sorted.length - 1];
+        const median = sorted.length % 2 === 0 ? (sorted[sorted.length / 2 - 1] + sorted[sorted.length / 2]) / 2 : sorted[Math.floor(sorted.length / 2)];
+        const sd = Math.sqrt(vals.reduce((s, v) => s + (v - mean) ** 2, 0) / vals.length);
+        const q1 = sorted[Math.floor(sorted.length * 0.25)];
+        const q3 = sorted[Math.floor(sorted.length * 0.75)];
+        const iqr = q3 - q1;
+        const outliers = vals.filter(v => v < q1 - 1.5 * iqr || v > q3 + 1.5 * iqr).length;
+        const cv = mean !== 0 ? ((sd / Math.abs(mean)) * 100).toFixed(1) : 'N/A';
+        const skewness = vals.length > 2 ? (vals.reduce((s, v) => s + ((v - mean) / sd) ** 3, 0) / vals.length).toFixed(2) : 'N/A';
+        numStats[col] = { count: vals.length, sum, mean, median, min, max, sd, q1, q3, iqr, outliers, cv, skewness, range: max - min };
+    });
+
+    // Categorical stats
+    const catStats = {};
+    cats.forEach(col => {
+        const freq = {};
+        let total = 0;
+        excelData.forEach(r => {
+            const v = r[col];
+            if (v === null || v === undefined || v === '') return;
+            const s = String(v).trim();
+            freq[s] = (freq[s] || 0) + 1;
+            total++;
+        });
+        const sorted = Object.entries(freq).sort((a, b) => b[1] - a[1]);
+        catStats[col] = { unique: sorted.length, total, top5: sorted.slice(0, 5), mode: sorted[0]?.[0] || 'N/A', modeCount: sorted[0]?.[1] || 0 };
+    });
+
+    // Correlation (top pairs)
+    const corrPairs = [];
+    for (let i = 0; i < nums.length; i++) {
+        for (let j = i + 1; j < nums.length; j++) {
+            const col1 = nums[i], col2 = nums[j];
+            const pairs = excelData.map(r => [parseFloat(r[col1]), parseFloat(r[col2])]).filter(p => !isNaN(p[0]) && !isNaN(p[1]));
+            if (pairs.length < 3) continue;
+            const n = pairs.length;
+            const sumX = pairs.reduce((s, p) => s + p[0], 0), sumY = pairs.reduce((s, p) => s + p[1], 0);
+            const sumXY = pairs.reduce((s, p) => s + p[0] * p[1], 0);
+            const sumX2 = pairs.reduce((s, p) => s + p[0] ** 2, 0), sumY2 = pairs.reduce((s, p) => s + p[1] ** 2, 0);
+            const denom = Math.sqrt((n * sumX2 - sumX ** 2) * (n * sumY2 - sumY ** 2));
+            if (denom === 0) continue;
+            const r = (n * sumXY - sumX * sumY) / denom;
+            corrPairs.push({ col1, col2, r: Math.round(r * 1000) / 1000 });
+        }
+    }
+    corrPairs.sort((a, b) => Math.abs(b.r) - Math.abs(a.r));
+    const strongCorrs = corrPairs.filter(p => Math.abs(p.r) >= 0.5);
+
+    // APF fields
+    const apfFields = detectAPFFields(excelColumns);
+
+    // Build chart images from existing canvases
+    const chartImages = [];
+    Object.entries(chartRegistry).forEach(([id, reg]) => {
+        if (!reg.chart) return;
+        try {
+            const canvas = document.getElementById(id);
+            if (canvas) chartImages.push({ title: reg.title || 'Chart', src: canvas.toDataURL('image/png', 0.9) });
+        } catch(e) {}
+    });
+
+    // === BUILD HTML REPORT ===
+    let html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Smart Report — ${fileName}</title>
+<style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+    *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: 'Inter', sans-serif; background: #f8fafc; color: #1e293b; line-height: 1.6; }
+    .report { max-width: 960px; margin: 0 auto; padding: 40px 32px; }
+    @media print { body { background: #fff; } .report { padding: 20px; } .no-print { display: none !important; } .page-break { page-break-before: always; } }
+
+    /* Header */
+    .report-header { text-align: center; padding: 40px 20px; background: linear-gradient(135deg, #1e293b, #334155); color: #fff; border-radius: 16px; margin-bottom: 32px; position: relative; overflow: hidden; }
+    .report-header::before { content: ''; position: absolute; top: -50%; right: -20%; width: 300px; height: 300px; background: rgba(245,158,11,0.1); border-radius: 50%; }
+    .report-header h1 { font-size: 28px; font-weight: 800; margin-bottom: 4px; }
+    .report-header .subtitle { font-size: 14px; color: #94a3b8; }
+    .report-header .meta { display: flex; justify-content: center; gap: 24px; margin-top: 16px; flex-wrap: wrap; }
+    .report-header .meta span { font-size: 12px; color: #cbd5e1; display: flex; align-items: center; gap: 6px; }
+
+    /* Action bar */
+    .action-bar { display: flex; gap: 10px; justify-content: flex-end; margin-bottom: 20px; }
+    .action-btn { padding: 10px 20px; border: none; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; font-family: inherit; display: flex; align-items: center; gap: 6px; transition: all 0.2s; }
+    .action-btn.primary { background: #f59e0b; color: #000; }
+    .action-btn.primary:hover { background: #d97706; }
+    .action-btn.secondary { background: #e2e8f0; color: #475569; }
+    .action-btn.secondary:hover { background: #cbd5e1; }
+
+    /* Section */
+    .section { background: #fff; border: 1px solid #e2e8f0; border-radius: 12px; padding: 24px; margin-bottom: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.04); }
+    .section-title { font-size: 16px; font-weight: 700; color: #1e293b; margin-bottom: 16px; display: flex; align-items: center; gap: 8px; padding-bottom: 10px; border-bottom: 2px solid #f1f5f9; }
+    .section-title .icon { width: 28px; height: 28px; border-radius: 6px; display: flex; align-items: center; justify-content: center; font-size: 12px; flex-shrink: 0; }
+    .icon-amber { background: #fef3c7; color: #d97706; }
+    .icon-blue { background: #dbeafe; color: #2563eb; }
+    .icon-green { background: #d1fae5; color: #059669; }
+    .icon-purple { background: #ede9fe; color: #7c3aed; }
+    .icon-red { background: #fee2e2; color: #dc2626; }
+    .icon-teal { background: #ccfbf1; color: #0d9488; }
+
+    /* KPI Grid */
+    .kpi-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; margin-bottom: 20px; }
+    .kpi { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 10px; padding: 16px; text-align: center; }
+    .kpi .value { font-size: 28px; font-weight: 800; color: #1e293b; }
+    .kpi .label { font-size: 11px; color: #64748b; text-transform: uppercase; letter-spacing: 0.5px; font-weight: 600; margin-top: 2px; }
+
+    /* Table */
+    .data-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+    .data-table th { background: #f1f5f9; color: #475569; font-weight: 700; text-transform: uppercase; font-size: 10px; letter-spacing: 0.5px; padding: 10px 12px; text-align: left; border-bottom: 2px solid #e2e8f0; }
+    .data-table td { padding: 8px 12px; border-bottom: 1px solid #f1f5f9; color: #334155; }
+    .data-table tbody tr:hover { background: #fefce8; }
+    .data-table .num { text-align: right; font-variant-numeric: tabular-nums; }
+
+    /* Bar */
+    .bar-wrap { display: flex; align-items: center; gap: 8px; }
+    .bar-track { flex: 1; height: 8px; background: #f1f5f9; border-radius: 4px; overflow: hidden; }
+    .bar-fill { height: 100%; border-radius: 4px; background: linear-gradient(90deg, #f59e0b, #f97316); }
+    .bar-fill.blue { background: linear-gradient(90deg, #3b82f6, #6366f1); }
+    .bar-fill.green { background: linear-gradient(90deg, #10b981, #059669); }
+    .bar-fill.red { background: linear-gradient(90deg, #ef4444, #dc2626); }
+
+    /* Insight chip */
+    .insight-chip { display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border-radius: 8px; font-size: 12px; font-weight: 500; margin: 3px; }
+    .chip-green { background: #d1fae5; color: #065f46; }
+    .chip-amber { background: #fef3c7; color: #92400e; }
+    .chip-red { background: #fee2e2; color: #991b1b; }
+    .chip-blue { background: #dbeafe; color: #1e40af; }
+    .chip-purple { background: #ede9fe; color: #5b21b6; }
+
+    /* Correlation badge */
+    .corr-badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 700; }
+    .corr-strong-pos { background: #d1fae5; color: #059669; }
+    .corr-strong-neg { background: #fee2e2; color: #dc2626; }
+    .corr-moderate { background: #fef3c7; color: #d97706; }
+
+    /* Charts grid */
+    .charts-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 16px; margin-top: 16px; }
+    .chart-img-card { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 10px; padding: 12px; text-align: center; }
+    .chart-img-card img { max-width: 100%; height: auto; border-radius: 6px; }
+    .chart-img-card .chart-label { font-size: 12px; font-weight: 600; color: #475569; margin-top: 8px; }
+
+    /* Footer */
+    .report-footer { text-align: center; padding: 24px; color: #94a3b8; font-size: 11px; margin-top: 20px; }
+</style>
+</head>
+<body>
+<div class="report">`;
+
+    // Action bar
+    html += `<div class="action-bar no-print">
+        <button class="action-btn secondary" onclick="window.print()">🖨️ Print / Save PDF</button>
+        <button class="action-btn primary" onclick="downloadReportHTML()">⬇️ Download HTML</button>
+    </div>`;
+
+    // Header
+    html += `<div class="report-header">
+        <h1>📊 Smart Data Report</h1>
+        <div class="subtitle">${fileName}</div>
+        <div class="meta">
+            <span>📅 ${dateStr} at ${timeStr}</span>
+            <span>📋 ${excelData.length.toLocaleString()} records</span>
+            <span>📐 ${excelColumns.length} columns</span>
+        </div>
+    </div>`;
+
+    // 1. Dataset Overview
+    html += `<div class="section">
+        <div class="section-title"><span class="icon icon-amber">📋</span> Dataset Overview</div>
+        <div class="kpi-grid">
+            <div class="kpi"><div class="value">${excelData.length.toLocaleString()}</div><div class="label">Total Rows</div></div>
+            <div class="kpi"><div class="value">${excelColumns.length}</div><div class="label">Columns</div></div>
+            <div class="kpi"><div class="value">${nums.length}</div><div class="label">Numeric</div></div>
+            <div class="kpi"><div class="value">${cats.length}</div><div class="label">Categorical</div></div>
+            <div class="kpi"><div class="value">${dates.length}</div><div class="label">Date</div></div>
+            <div class="kpi"><div class="value">${completeness}%</div><div class="label">Completeness</div></div>
+        </div>
+        <div style="margin-top:10px;">
+            ${dupes > 0 ? `<span class="insight-chip chip-amber">⚠️ ${dupes} duplicate rows found</span>` : `<span class="insight-chip chip-green">✅ No duplicate rows</span>`}
+            ${missingCells > 0 ? `<span class="insight-chip chip-red">🔴 ${missingCells.toLocaleString()} missing cells</span>` : `<span class="insight-chip chip-green">✅ No missing data</span>`}
+            <span class="insight-chip chip-blue">📊 ${nums.length} numeric, ${cats.length} categorical, ${dates.length} date columns</span>
+        </div>
+    </div>`;
+
+    // 2. Column Profile
+    html += `<div class="section">
+        <div class="section-title"><span class="icon icon-blue">📐</span> Column Profile</div>
+        <table class="data-table">
+            <thead><tr><th>#</th><th>Column Name</th><th>Type</th><th>Filled</th><th>Missing</th><th>Completeness</th></tr></thead>
+            <tbody>`;
+    excelColumns.forEach((col, i) => {
+        const miss = colMissing[col];
+        const total = excelData.length;
+        const pct = ((total - miss) / total * 100).toFixed(1);
+        const barColor = pct >= 90 ? 'green' : pct >= 70 ? '' : 'red';
+        html += `<tr>
+            <td>${i + 1}</td>
+            <td><strong>${col}</strong></td>
+            <td>${excelColumnTypes[col] || 'unknown'}</td>
+            <td class="num">${(total - miss).toLocaleString()}</td>
+            <td class="num">${miss > 0 ? miss.toLocaleString() : '—'}</td>
+            <td><div class="bar-wrap"><div class="bar-track"><div class="bar-fill ${barColor}" style="width:${pct}%"></div></div><span style="font-size:11px;font-weight:600;min-width:40px;text-align:right;">${pct}%</span></div></td>
+        </tr>`;
+    });
+    html += `</tbody></table></div>`;
+
+    // 3. Numeric Statistics
+    if (nums.length > 0) {
+        html += `<div class="section page-break">
+            <div class="section-title"><span class="icon icon-green">📈</span> Numeric Statistics</div>
+            <table class="data-table">
+                <thead><tr><th>Column</th><th class="num">Count</th><th class="num">Min</th><th class="num">Max</th><th class="num">Mean</th><th class="num">Median</th><th class="num">Std Dev</th><th class="num">CV%</th><th class="num">Outliers</th></tr></thead>
+                <tbody>`;
+        nums.forEach(col => {
+            const s = numStats[col];
+            if (!s) return;
+            html += `<tr>
+                <td><strong>${col}</strong></td>
+                <td class="num">${s.count.toLocaleString()}</td>
+                <td class="num">${fmt(s.min)}</td>
+                <td class="num">${fmt(s.max)}</td>
+                <td class="num">${fmt(s.mean)}</td>
+                <td class="num">${fmt(s.median)}</td>
+                <td class="num">${fmt(s.sd)}</td>
+                <td class="num">${s.cv}%</td>
+                <td class="num">${s.outliers > 0 ? `<span style="color:#dc2626;font-weight:700;">${s.outliers}</span>` : '0'}</td>
+            </tr>`;
+        });
+        html += `</tbody></table></div>`;
+    }
+
+    // 4. Categorical Summary
+    if (cats.length > 0) {
+        html += `<div class="section">
+            <div class="section-title"><span class="icon icon-purple">🏷️</span> Categorical Summary</div>`;
+        cats.forEach(col => {
+            const s = catStats[col];
+            if (!s) return;
+            html += `<div style="margin-bottom:20px;">
+                <h4 style="font-size:13px;font-weight:700;color:#334155;margin-bottom:8px;">${col} <span style="font-size:11px;font-weight:500;color:#94a3b8;">(${s.unique} unique values)</span></h4>
+                <table class="data-table" style="max-width:500px;">
+                    <thead><tr><th>Value</th><th class="num">Count</th><th>Share</th></tr></thead>
+                    <tbody>`;
+            s.top5.forEach(([val, count]) => {
+                const pct = ((count / s.total) * 100).toFixed(1);
+                html += `<tr><td>${val.length > 40 ? val.substring(0,37)+'...' : val}</td><td class="num">${count.toLocaleString()}</td>
+                    <td><div class="bar-wrap"><div class="bar-track"><div class="bar-fill blue" style="width:${pct}%"></div></div><span style="font-size:11px;font-weight:600;min-width:40px;text-align:right;">${pct}%</span></div></td></tr>`;
+            });
+            if (s.unique > 5) html += `<tr><td colspan="3" style="color:#94a3b8;font-style:italic;">... and ${s.unique - 5} more values</td></tr>`;
+            html += `</tbody></table></div>`;
+        });
+        html += `</div>`;
+    }
+
+    // 5. Correlation Analysis
+    if (strongCorrs.length > 0) {
+        html += `<div class="section">
+            <div class="section-title"><span class="icon icon-teal">🔗</span> Notable Correlations</div>
+            <table class="data-table" style="max-width:600px;">
+                <thead><tr><th>Variable 1</th><th>Variable 2</th><th class="num">Correlation (r)</th><th>Strength</th></tr></thead>
+                <tbody>`;
+        strongCorrs.slice(0, 10).forEach(p => {
+            const abs = Math.abs(p.r);
+            const cls = p.r >= 0.7 ? 'corr-strong-pos' : p.r <= -0.7 ? 'corr-strong-neg' : 'corr-moderate';
+            const label = abs >= 0.8 ? 'Strong' : abs >= 0.6 ? 'Moderate' : 'Notable';
+            const dir = p.r > 0 ? '↑ Positive' : '↓ Negative';
+            html += `<tr><td>${p.col1}</td><td>${p.col2}</td><td class="num"><span class="corr-badge ${cls}">${p.r.toFixed(3)}</span></td><td>${label} ${dir}</td></tr>`;
+        });
+        html += `</tbody></table></div>`;
+    }
+
+    // 6. Key Findings & Recommendations
+    html += `<div class="section">
+        <div class="section-title"><span class="icon icon-amber">💡</span> Key Findings & Recommendations</div>
+        <div style="display:flex;flex-direction:column;gap:8px;">`;
+
+    // Auto-generate findings
+    if (completeness < 80) {
+        html += `<span class="insight-chip chip-red">⚠️ Data completeness is ${completeness}% — consider cleaning missing values before analysis</span>`;
+    } else if (completeness >= 95) {
+        html += `<span class="insight-chip chip-green">✅ Excellent data quality — ${completeness}% completeness</span>`;
+    }
+
+    if (dupes > 0) {
+        html += `<span class="insight-chip chip-amber">🔁 ${dupes} duplicate rows (${((dupes/excelData.length)*100).toFixed(1)}%) — review for potential data entry errors</span>`;
+    }
+
+    nums.forEach(col => {
+        const s = numStats[col];
+        if (!s) return;
+        if (s.outliers > 0 && s.outliers / s.count > 0.05) {
+            html += `<span class="insight-chip chip-red">📊 "${col}" has ${s.outliers} outliers (${((s.outliers/s.count)*100).toFixed(1)}%) — may need investigation</span>`;
+        }
+        if (parseFloat(s.cv) > 100) {
+            html += `<span class="insight-chip chip-amber">📉 "${col}" has very high variability (CV: ${s.cv}%)</span>`;
+        }
+    });
+
+    strongCorrs.slice(0, 3).forEach(p => {
+        const dir = p.r > 0 ? 'positively' : 'negatively';
+        html += `<span class="insight-chip chip-blue">🔗 "${p.col1}" and "${p.col2}" are ${dir} correlated (r = ${p.r.toFixed(2)})</span>`;
+    });
+
+    excelColumns.forEach(col => {
+        if (colMissing[col] / excelData.length > 0.3) {
+            html += `<span class="insight-chip chip-amber">⚠️ "${col}" has ${((colMissing[col]/excelData.length)*100).toFixed(0)}% missing values</span>`;
+        }
+    });
+
+    html += `</div></div>`;
+
+    // 7. Charts
+    if (chartImages.length > 0) {
+        html += `<div class="section page-break">
+            <div class="section-title"><span class="icon icon-blue">📊</span> Charts & Visualizations</div>
+            <div class="charts-grid">`;
+        chartImages.slice(0, 12).forEach(img => {
+            html += `<div class="chart-img-card"><img src="${img.src}" alt="${img.title}"><div class="chart-label">${img.title}</div></div>`;
+        });
+        html += `</div></div>`;
+    }
+
+    // Footer
+    html += `<div class="report-footer">
+        Generated by <strong>APF Resource Person Dashboard</strong> — Smart Report Engine<br>
+        ${dateStr} at ${timeStr} • ${excelData.length.toLocaleString()} records analyzed
+    </div>`;
+
+    // Download script
+    html += `<script>
+    function downloadReportHTML() {
+        const blob = new Blob([document.documentElement.outerHTML], { type: 'text/html' });
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = 'Smart_Report_${fileName.replace(/[^a-zA-Z0-9]/g, '_')}_${now.toISOString().split('T')[0]}.html';
+        a.click();
+        URL.revokeObjectURL(a.href);
+    }
+    <\/script>`;
+
+    html += `</div></body></html>`;
+
+    // Open in new tab
+    const blob = new Blob([html], { type: 'text/html' });
+    const url = URL.createObjectURL(blob);
+    window.open(url, '_blank');
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
+    showToast('Smart Report generated — opened in new tab!', 'success');
 }

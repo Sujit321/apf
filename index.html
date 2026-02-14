@@ -14,6 +14,7 @@
     <link rel="stylesheet" href="styles.css">
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
 </head>
 
 <body>
@@ -151,6 +152,10 @@
             <a href="#" class="nav-item" data-section="contacts" id="nav-contacts" data-tooltip="Contacts">
                 <i class="fas fa-address-book"></i><span>Contacts</span>
             </a>
+            <a href="#" class="nav-item" data-section="livesync" id="nav-livesync" data-tooltip="Live Sync">
+                <i class="fas fa-sync-alt"></i><span>Live Sync</span>
+                <span class="sync-status-dot" id="syncNavDot" title="Offline"></span>
+            </a>
             <a href="#" class="nav-item" data-section="backup" id="nav-backup" data-tooltip="Data & Security">
                 <i class="fas fa-shield-alt"></i><span>Data & Security</span>
             </a>
@@ -162,6 +167,9 @@
                     <span class="user-name" id="userName">Resource Person</span>
                     <span class="user-role">Azim Premji Foundation</span>
                 </div>
+                <button class="theme-toggle-btn" id="themeToggle" onclick="toggleTheme()" title="Switch theme">
+                    <i class="fas fa-moon" id="themeIcon"></i>
+                </button>
             </div>
         </div>
     </aside>
@@ -510,6 +518,9 @@
                     <p class="section-subtitle">Upload any spreadsheet — get instant dashboards, charts &amp; insights</p>
                 </div>
                 <div class="header-actions">
+                    <button class="btn btn-primary" onclick="generateSmartReport()" id="generateReportBtn" style="display:none;">
+                        <i class="fas fa-file-alt"></i> Smart Report
+                    </button>
                     <button class="btn btn-outline" onclick="clearExcelData()" id="clearExcelBtn" style="display:none;">
                         <i class="fas fa-times"></i> Clear Data
                     </button>
@@ -1215,6 +1226,132 @@
             <div id="contactsContainer"></div>
         </section>
 
+        <!-- ==================== LIVE SYNC SECTION ==================== -->
+        <section class="content-section" id="section-livesync">
+            <div class="section-header">
+                <div>
+                    <h1><i class="fas fa-sync-alt"></i> Live Sync</h1>
+                    <p class="section-subtitle">Sync data across devices in real-time — like WhatsApp Web</p>
+                </div>
+            </div>
+
+            <!-- Sync Status Banner -->
+            <div class="sync-status-banner" id="syncStatusBanner">
+                <div class="sync-status-icon" id="syncStatusIcon"><i class="fas fa-wifi-slash"></i></div>
+                <div class="sync-status-info">
+                    <span class="sync-status-label" id="syncStatusLabel">Not Connected</span>
+                    <span class="sync-status-detail" id="syncStatusDetail">Create or join a sync room to start</span>
+                </div>
+            </div>
+
+            <div class="sync-grid">
+                <!-- Create Room Card -->
+                <div class="sync-card" id="syncCreateCard">
+                    <div class="sync-card-icon" style="background: linear-gradient(135deg, #f59e0b, #d97706);">
+                        <i class="fas fa-broadcast-tower"></i>
+                    </div>
+                    <h3>Create Sync Room</h3>
+                    <p>Start a sync room on this device. Other devices can join using the room code.</p>
+                    <button class="btn btn-primary" onclick="createSyncRoom()" id="btnCreateRoom" style="background:#f59e0b;">
+                        <i class="fas fa-plus-circle"></i> Create Room
+                    </button>
+                </div>
+
+                <!-- Join Room Card -->
+                <div class="sync-card" id="syncJoinCard">
+                    <div class="sync-card-icon" style="background: linear-gradient(135deg, #3b82f6, #1d4ed8);">
+                        <i class="fas fa-sign-in-alt"></i>
+                    </div>
+                    <h3>Join Sync Room</h3>
+                    <p>Enter the room code from another device to connect and sync.</p>
+                    <div class="sync-join-input">
+                        <input type="text" id="syncJoinCode" placeholder="Enter room code" maxlength="20" autocomplete="off" spellcheck="false">
+                        <button class="btn btn-primary" onclick="joinSyncRoom()" id="btnJoinRoom" style="background:#3b82f6;">
+                            <i class="fas fa-link"></i> Join
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Active Room Panel (shown when connected) -->
+            <div class="sync-active-panel" id="syncActivePanel" style="display:none;">
+                <!-- Room Info -->
+                <div class="sync-room-info">
+                    <div class="sync-room-code-display">
+                        <span class="sync-room-label">Room Code</span>
+                        <span class="sync-room-code" id="syncRoomCodeDisplay">------</span>
+                        <button class="btn-icon-sm" onclick="copySyncCode()" title="Copy code"><i class="fas fa-copy"></i></button>
+                    </div>
+                    <div class="sync-room-meta">
+                        <span id="syncRoomRole" class="sync-role-badge"><i class="fas fa-broadcast-tower"></i> Host</span>
+                        <span id="syncPeerCount" class="sync-peer-count"><i class="fas fa-users"></i> 0 devices</span>
+                        <span id="syncLastSync" class="sync-last-time"><i class="fas fa-clock"></i> —</span>
+                    </div>
+                </div>
+
+                <!-- Connected Devices -->
+                <div class="sync-devices-section">
+                    <h4><i class="fas fa-laptop"></i> Connected Devices</h4>
+                    <div id="syncDevicesList" class="sync-devices-list">
+                        <div class="sync-no-devices">No other devices connected yet</div>
+                    </div>
+                </div>
+
+                <!-- Sync Actions -->
+                <div class="sync-action-bar">
+                    <button class="btn btn-primary" onclick="sendSyncData()" id="btnSendSync">
+                        <i class="fas fa-upload"></i> Push Data to Devices
+                    </button>
+                    <button class="btn btn-outline" onclick="requestSyncData()" id="btnRequestSync">
+                        <i class="fas fa-download"></i> Pull Data from Host
+                    </button>
+                    <button class="btn btn-danger" onclick="disconnectSync()" id="btnDisconnect">
+                        <i class="fas fa-times-circle"></i> Disconnect
+                    </button>
+                </div>
+
+                <!-- Sync Log -->
+                <div class="sync-log-section">
+                    <h4><i class="fas fa-history"></i> Sync Activity</h4>
+                    <div id="syncLog" class="sync-log">
+                        <div class="sync-log-empty">No activity yet</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- How it Works -->
+            <div class="sync-how-it-works" id="syncHowItWorks">
+                <h4><i class="fas fa-question-circle"></i> How Live Sync Works</h4>
+                <div class="sync-steps">
+                    <div class="sync-step">
+                        <div class="sync-step-num">1</div>
+                        <div class="sync-step-text">
+                            <strong>Create a Room</strong>
+                            <span>Open the dashboard on your primary device and create a sync room. You'll get a unique code.</span>
+                        </div>
+                    </div>
+                    <div class="sync-step">
+                        <div class="sync-step-num">2</div>
+                        <div class="sync-step-text">
+                            <strong>Join from Other Devices</strong>
+                            <span>Open the dashboard on your phone/laptop and enter the room code to connect.</span>
+                        </div>
+                    </div>
+                    <div class="sync-step">
+                        <div class="sync-step-num">3</div>
+                        <div class="sync-step-text">
+                            <strong>Data Syncs Instantly</strong>
+                            <span>Changes on any device are instantly pushed to all connected devices — no server, fully encrypted.</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="sync-info-note">
+                    <i class="fas fa-shield-alt"></i>
+                    <span>Data travels directly between your devices (peer-to-peer). Nothing is stored on any server. All data is encrypted end-to-end.</span>
+                </div>
+            </div>
+        </section>
+
         <!-- ==================== BACKUP & RESTORE SECTION ==================== -->
         <section class="content-section" id="section-backup">
             <div class="section-header">
@@ -1264,6 +1401,179 @@
                         <i class="fas fa-shield-alt"></i>
                         <span>Data is encrypted with AES-256-GCM using PBKDF2 key derivation (100K iterations). Auto-saved to linked file &amp; browser cache.</span>
                         <span id="encUnsavedBadge" class="unsaved-badge" style="display:none;">Saving...</span>
+                    </div>
+                </div>
+
+                <!-- Google Drive Auto-Backup -->
+                <div class="backup-card gdrive-card" style="grid-column: 1 / -1;">
+                    <div class="enc-card-top">
+                        <div class="enc-card-icon" style="background: linear-gradient(135deg, #4285f4, #1a73e8);">
+                            <i class="fab fa-google-drive"></i>
+                        </div>
+                        <div class="enc-card-title">
+                            <h3><i class="fab fa-google-drive"></i> Google Drive Auto-Backup</h3>
+                            <p>Automatic encrypted backups to your Google Drive &bull; Free &bull; No API key needed</p>
+                        </div>
+                        <span class="gdrive-dot" id="gdriveDot"></span>
+                    </div>
+
+                    <!-- Connection Status -->
+                    <div class="gdrive-status" id="gdriveStatus">
+                        <i class="fas fa-cloud"></i>
+                        <div>
+                            <strong>Not Connected</strong>
+                            <span>Connect to auto-backup your data to Google Drive</span>
+                        </div>
+                    </div>
+
+                    <!-- Connect Area -->
+                    <div class="gdrive-connect-area" id="gdriveConnectArea">
+                        <div class="gdrive-url-row">
+                            <input type="url" id="gdriveScriptURL" placeholder="Paste your Google Apps Script URL here" class="gdrive-url-input" autocomplete="off" spellcheck="false">
+                            <button class="btn btn-primary" id="gdriveConnectBtn" onclick="connectGoogleDrive()" style="background:#4285f4;">
+                                <i class="fas fa-plug"></i> Connect
+                            </button>
+                        </div>
+                        <button class="gdrive-setup-toggle" onclick="toggleGdriveSetup()">
+                            <i class="fas fa-question-circle"></i> How to set up Google Drive backup (2 min setup)
+                        </button>
+
+                        <!-- Setup Guide (collapsed) -->
+                        <div class="gdrive-setup-guide" id="gdriveSetupGuide" style="display:none;">
+                            <div class="gdrive-setup-steps">
+                                <div class="gdrive-step">
+                                    <div class="gdrive-step-num">1</div>
+                                    <div>
+                                        <strong>Open Google Apps Script</strong>
+                                        <span>Go to <a href="https://script.google.com/home" target="_blank" rel="noopener" style="color:#4285f4;">script.google.com</a> and click <b>New Project</b></span>
+                                    </div>
+                                </div>
+                                <div class="gdrive-step">
+                                    <div class="gdrive-step-num">2</div>
+                                    <div>
+                                        <strong>Paste this code</strong>
+                                        <span>Delete the existing code and paste the code below, then press <b>Ctrl+S</b> to save</span>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="gdrive-code-block">
+                                <div class="gdrive-code-header">
+                                    <span>Google Apps Script Code</span>
+                                    <button class="gdrive-copy-btn" onclick="copyAppsScriptCode()"><i class="fas fa-copy"></i> Copy</button>
+                                </div>
+                                <pre id="gdriveScriptCode">function doPost(e) {
+  var content = JSON.parse(e.postData.contents);
+  if (content.action === 'backup') {
+    var folder = getOrCreateFolder();
+    var files = folder.getFilesByName('APF_Backup.apf');
+    if (files.hasNext()) {
+      files.next().setContent(content.data);
+    } else {
+      folder.createFile('APF_Backup.apf', content.data, 'text/plain');
+    }
+    return ContentService.createTextOutput(
+      JSON.stringify({success:true, timestamp:content.timestamp})
+    ).setMimeType(ContentService.MimeType.JSON);
+  }
+  return ContentService.createTextOutput(
+    JSON.stringify({error:'Unknown action'})
+  ).setMimeType(ContentService.MimeType.JSON);
+}
+
+function doGet(e) {
+  var action = e.parameter.action || 'restore';
+  if (action === 'ping') {
+    return ContentService.createTextOutput(
+      JSON.stringify({status:'ok', app:'APF Dashboard Backup'})
+    ).setMimeType(ContentService.MimeType.JSON);
+  }
+  if (action === 'info') {
+    var folder = getOrCreateFolder();
+    var files = folder.getFilesByName('APF_Backup.apf');
+    if (files.hasNext()) {
+      var f = files.next();
+      return ContentService.createTextOutput(
+        JSON.stringify({exists:true, size:f.getSize(),
+          updated:f.getLastUpdated().toISOString()})
+      ).setMimeType(ContentService.MimeType.JSON);
+    }
+    return ContentService.createTextOutput(
+      JSON.stringify({exists:false})
+    ).setMimeType(ContentService.MimeType.JSON);
+  }
+  if (action === 'restore') {
+    var folder = getOrCreateFolder();
+    var files = folder.getFilesByName('APF_Backup.apf');
+    if (files.hasNext()) {
+      return ContentService.createTextOutput(
+        JSON.stringify({data:files.next().getBlob().getDataAsString()})
+      ).setMimeType(ContentService.MimeType.JSON);
+    }
+    return ContentService.createTextOutput(
+      JSON.stringify({error:'No backup found'})
+    ).setMimeType(ContentService.MimeType.JSON);
+  }
+}
+
+function getOrCreateFolder() {
+  var folders = DriveApp.getFoldersByName('APF Dashboard Backups');
+  if (folders.hasNext()) return folders.next();
+  return DriveApp.createFolder('APF Dashboard Backups');
+}</pre>
+                            </div>
+
+                            <div class="gdrive-setup-steps">
+                                <div class="gdrive-step">
+                                    <div class="gdrive-step-num">3</div>
+                                    <div>
+                                        <strong>Deploy as Web App</strong>
+                                        <span>Click <b>Deploy → New deployment</b> → Select type: <b>Web app</b> → Set "Who has access" to <b>Anyone</b> → Click <b>Deploy</b> → Authorize when prompted</span>
+                                    </div>
+                                </div>
+                                <div class="gdrive-step">
+                                    <div class="gdrive-step-num">4</div>
+                                    <div>
+                                        <strong>Copy the URL</strong>
+                                        <span>Copy the <b>Web app URL</b> (starts with https://script.google.com/...) and paste it above</span>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="gdrive-security-note">
+                                <i class="fas fa-shield-alt"></i>
+                                <span>Your data is AES-256 encrypted <b>before</b> leaving your browser. The script only stores encrypted data — it can never read your actual data. You own the script, you can inspect and delete it anytime.</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Connected Actions -->
+                    <div class="gdrive-connected-actions" id="gdriveActions" style="display:none;">
+                        <div class="gdrive-info" id="gdriveInfo"></div>
+                        <div class="gdrive-buttons">
+                            <button class="btn btn-primary" id="gdriveBackupBtn" onclick="gdriveBackupNow()" style="background:#4285f4;">
+                                <i class="fas fa-cloud-upload-alt"></i> Backup Now
+                            </button>
+                            <button class="btn btn-outline" id="gdriveRestoreBtn" onclick="gdriveRestoreNow()">
+                                <i class="fas fa-cloud-download-alt"></i> Restore from Drive
+                            </button>
+                        </div>
+                        <div class="gdrive-auto-row">
+                            <label class="gdrive-auto-label" for="gdriveAutoToggle">
+                                <i class="fas fa-sync-alt"></i> Auto-backup on every change
+                            </label>
+                            <label class="gdrive-toggle-switch">
+                                <input type="checkbox" id="gdriveAutoToggle" onchange="toggleGdriveAuto(this.checked)" checked>
+                                <span class="gdrive-toggle-slider"></span>
+                            </label>
+                        </div>
+                    </div>
+
+                    <!-- Disconnect -->
+                    <div class="gdrive-disconnect-area" id="gdriveDisconnectArea" style="display:none;">
+                        <button class="gdrive-disconnect-btn" onclick="disconnectGoogleDrive()">
+                            <i class="fas fa-unlink"></i> Disconnect Google Drive
+                        </button>
                     </div>
                 </div>
 
