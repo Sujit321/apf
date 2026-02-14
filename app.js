@@ -374,11 +374,19 @@ const GoogleDriveSync = {
         const url = this.getScriptUrl();
         if (!url) return { ok: false, error: 'No URL configured' };
         try {
-            const resp = await fetch(url + '?action=ping', { method: 'GET', redirect: 'follow' });
-            // Apps Script redirects, so read text
+            const resp = await fetch(url, {
+                method: 'POST',
+                redirect: 'follow',
+                headers: { 'Content-Type': 'text/plain' },
+                body: JSON.stringify({ action: 'ping' })
+            });
             const text = await resp.text();
             let data;
-            try { data = JSON.parse(text); } catch { data = { status: 'ok' }; }
+            try { data = JSON.parse(text); } catch { data = null; }
+            if (data && data.error === 'Unknown action') {
+                return { ok: false, error: 'Outdated script — please copy the latest code from the setup guide below, paste it in your Apps Script, then go to Deploy → Manage deployments → Edit (pencil icon) → Version: New version → Deploy' };
+            }
+            if (!data) return { ok: false, error: 'Invalid response from script' };
             return { ok: true, data };
         } catch (err) {
             return { ok: false, error: err.message };
@@ -414,6 +422,15 @@ const GoogleDriveSync = {
             let result;
             try { result = JSON.parse(text); } catch { result = { success: true }; }
 
+            if (result && result.error) {
+                this._busy = false;
+                this.updateUI('error');
+                const errMsg = result.error === 'Unknown action'
+                    ? 'Outdated script — please update your Apps Script code and re-deploy (Deploy → Manage deployments → Edit → New version → Deploy)'
+                    : result.error;
+                return { ok: false, error: errMsg };
+            }
+
             const now = new Date().toISOString();
             this.setLastBackup(now);
             const sizeKB = (b64Data.length / 1024).toFixed(1);
@@ -440,7 +457,12 @@ const GoogleDriveSync = {
         this.updateUI('syncing');
 
         try {
-            const resp = await fetch(url + '?action=restore', { method: 'GET', redirect: 'follow' });
+            const resp = await fetch(url, {
+                method: 'POST',
+                redirect: 'follow',
+                headers: { 'Content-Type': 'text/plain' },
+                body: JSON.stringify({ action: 'restore' })
+            });
             const text = await resp.text();
             let result;
             try { result = JSON.parse(text); } catch { result = null; }
@@ -448,7 +470,10 @@ const GoogleDriveSync = {
             if (!result || result.error) {
                 this._busy = false;
                 this.updateUI('connected');
-                return { ok: false, error: result?.error || 'No backup found on Google Drive' };
+                const errMsg = result?.error === 'Unknown action'
+                    ? 'Outdated script — please update your Apps Script code and re-deploy (Deploy → Manage deployments → Edit → New version → Deploy)'
+                    : (result?.error || 'No backup found on Google Drive');
+                return { ok: false, error: errMsg };
             }
 
             const b64Data = result.data;
@@ -487,8 +512,13 @@ const GoogleDriveSync = {
         } catch (err) {
             console.error('Google Drive restore failed:', err);
             this._busy = false;
-            this.updateUI('error');
-            return { ok: false, error: err.message.includes('Decryption') || err.message.includes('decrypt') ? 'Wrong password — backup was encrypted with a different password' : err.message };
+            this.updateUI('connected');
+            const isPasswordError = err.name === 'OperationError' ||
+                err.message.includes('Decryption') || err.message.includes('decrypt') ||
+                err.message.includes('operation failed');
+            return { ok: false, error: isPasswordError
+                ? 'Password mismatch — this backup was created with a different password. Please log in with the same password that was used when the backup was made.'
+                : err.message };
         }
     },
 
@@ -497,7 +527,12 @@ const GoogleDriveSync = {
         const url = this.getScriptUrl();
         if (!url) return null;
         try {
-            const resp = await fetch(url + '?action=info', { method: 'GET', redirect: 'follow' });
+            const resp = await fetch(url, {
+                method: 'POST',
+                redirect: 'follow',
+                headers: { 'Content-Type': 'text/plain' },
+                body: JSON.stringify({ action: 'info' })
+            });
             const text = await resp.text();
             return JSON.parse(text);
         } catch { return null; }
@@ -636,7 +671,8 @@ async function gdriveRestoreNow() {
             showToast('Backup was from: ' + d.toLocaleDateString('en-IN') + ' ' + d.toLocaleTimeString('en-IN'), 'info');
         }
     } else {
-        showToast('Restore failed: ' + result.error, 'error');
+        const isPasswordErr = result.error && result.error.toLowerCase().includes('password mismatch');
+        showToast(isPasswordErr ? '🔐 ' + result.error : 'Restore failed: ' + result.error, 'error', isPasswordErr ? 8000 : 4000);
     }
     if (btn) { btn.disabled = false; btn.innerHTML = '<i class="fas fa-cloud-download-alt"></i> Restore from Drive'; }
 }
@@ -839,8 +875,10 @@ async function loadEncryptedFile(event) {
         console.error('Decryption failed:', err);
         if (err.message.includes('Not a valid')) {
             showToast('Not a valid APF encrypted file', 'error');
+        } else if (err.name === 'OperationError' || err.message.includes('operation failed')) {
+            showToast('Password mismatch — this file was encrypted with a different password. Please enter the correct password.', 'error', 6000);
         } else {
-            showToast('Decryption failed — wrong password or corrupted file', 'error');
+            showToast('Decryption failed — file may be corrupted', 'error');
         }
     }
     event.target.value = '';
@@ -1479,7 +1517,7 @@ const LiveSync = {
 
         banner.className = 'sync-status-banner sync-' + state;
         const states = {
-            offline: { icon: 'fa-wifi-slash', label: 'Not Connected', cls: '' },
+            offline: { icon: 'fa-unlink', label: 'Not Connected', cls: '' },
             connecting: { icon: 'fa-spinner fa-spin', label: 'Connecting...', cls: 'connecting' },
             online: { icon: 'fa-check-circle', label: 'Connected & Syncing', cls: 'online' },
             error: { icon: 'fa-exclamation-triangle', label: 'Connection Error', cls: 'error' }
@@ -1828,7 +1866,7 @@ DB.set = function(key, data) {
 };
 
 // ===== Toast Notifications =====
-function showToast(message, type = 'success') {
+function showToast(message, type = 'success', duration = 3000) {
     const container = document.getElementById('toastContainer');
     const icons = { success: 'fa-check-circle', error: 'fa-exclamation-circle', info: 'fa-info-circle' };
     const toast = document.createElement('div');
@@ -1838,7 +1876,7 @@ function showToast(message, type = 'success') {
     setTimeout(() => {
         toast.classList.add('fade-out');
         setTimeout(() => toast.remove(), 300);
-    }, 3000);
+    }, duration);
 }
 
 // ===== Modal Functions =====

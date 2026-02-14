@@ -3,6 +3,7 @@
     /* Colors — Dark mode with warm amber/orange accent */
     --bg-primary: #0f1117;
     --bg-secondary: #1a1d27;
+    --bg-tertiary: #252a3a;
     --bg-card: #1e2230;
     --bg-card-hover: #252a3a;
     --bg-input: #252a3a;
@@ -30,6 +31,7 @@
 
     --border: rgba(255, 255, 255, 0.06);
     --border-light: rgba(255, 255, 255, 0.1);
+    --border-color: rgba(255, 255, 255, 0.08);
     --shadow: 0 4px 24px rgba(0, 0, 0, 0.3);
     --shadow-lg: 0 12px 48px rgba(0, 0, 0, 0.4);
 
@@ -51,6 +53,7 @@
 body.light-mode {
     --bg-primary: #f5f6fa;
     --bg-secondary: #ffffff;
+    --bg-tertiary: #f1f5f9;
     --bg-card: #ffffff;
     --bg-card-hover: #f0f1f5;
     --bg-input: #f0f1f5;
@@ -78,6 +81,7 @@ body.light-mode {
 
     --border: rgba(0, 0, 0, 0.08);
     --border-light: rgba(0, 0, 0, 0.12);
+    --border-color: rgba(0, 0, 0, 0.1);
     --shadow: 0 4px 24px rgba(0, 0, 0, 0.06);
     --shadow-lg: 0 12px 48px rgba(0, 0, 0, 0.1);
 
@@ -7851,6 +7855,7 @@ body.sidebar-collapsed .main-content {
     margin-left: auto;
     flex-shrink: 0;
     transition: background 0.3s;
+    position: relative;
 }
 .sync-status-dot.online {
     background: #22c55e;
@@ -7863,6 +7868,14 @@ body.sidebar-collapsed .main-content {
 }
 .sync-status-dot.error {
     background: #ef4444;
+}
+
+/* Hide dot text in collapsed sidebar but keep dot visible */
+.sidebar.collapsed .sync-status-dot {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    margin-left: 0;
 }
 
 @keyframes syncPulse {
@@ -8309,16 +8322,59 @@ body.sidebar-collapsed .main-content {
 }
 
 /* Light mode overrides for sync */
+body.light-mode .sync-status-banner {
+    background: #f8fafc;
+    border-color: #e2e8f0;
+}
+body.light-mode .sync-status-banner.sync-online {
+    background: rgba(34, 197, 94, 0.06);
+    border-color: rgba(34, 197, 94, 0.25);
+}
+body.light-mode .sync-status-banner.sync-connecting {
+    background: rgba(245, 158, 11, 0.06);
+    border-color: rgba(245, 158, 11, 0.25);
+}
+body.light-mode .sync-status-banner.sync-error {
+    background: rgba(239, 68, 68, 0.06);
+    border-color: rgba(239, 68, 68, 0.25);
+}
+body.light-mode .sync-card {
+    background: #fff;
+    border-color: #e2e8f0;
+}
+body.light-mode .sync-card:hover {
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.08);
+}
 body.light-mode .sync-join-input input {
     background: #fff;
     border-color: #d1d5db;
     color: #1e293b;
 }
+body.light-mode .sync-active-panel {
+    background: #fff;
+    border-color: #e2e8f0;
+}
 body.light-mode .sync-device-item {
     background: #f8fafc;
+    border-color: #e2e8f0;
 }
 body.light-mode .sync-log-item {
     background: #f8fafc;
+}
+body.light-mode .sync-how-it-works {
+    background: #fff;
+    border-color: #e2e8f0;
+}
+body.light-mode .sync-role-badge {
+    background: rgba(245, 158, 11, 0.1);
+}
+body.light-mode .btn-icon-sm {
+    background: #f1f5f9;
+    border-color: #d1d5db;
+}
+body.light-mode .sync-info-note {
+    background: rgba(34, 197, 94, 0.04);
+    border-color: rgba(34, 197, 94, 0.15);
 }
 
 /* Responsive */

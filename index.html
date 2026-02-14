@@ -1237,7 +1237,7 @@
 
             <!-- Sync Status Banner -->
             <div class="sync-status-banner" id="syncStatusBanner">
-                <div class="sync-status-icon" id="syncStatusIcon"><i class="fas fa-wifi-slash"></i></div>
+                <div class="sync-status-icon" id="syncStatusIcon"><i class="fas fa-unlink"></i></div>
                 <div class="sync-status-info">
                     <span class="sync-status-label" id="syncStatusLabel">Not Connected</span>
                     <span class="sync-status-detail" id="syncStatusDetail">Create or join a sync room to start</span>
@@ -1366,7 +1366,7 @@
                     <!-- Top: Icon + Title -->
                     <div class="enc-card-top">
                         <div class="enc-card-icon">
-                            <i class="fas fa-file-shield"></i>
+                            <i class="fas fa-lock"></i>
                         </div>
                         <div class="enc-card-title">
                             <h3><i class="fas fa-lock"></i> Encrypted File Storage</h3>
@@ -1464,7 +1464,13 @@
                                 </div>
                                 <pre id="gdriveScriptCode">function doPost(e) {
   var content = JSON.parse(e.postData.contents);
-  if (content.action === 'backup') {
+  var action = content.action;
+
+  if (action === 'ping') {
+    return send({status:'ok', app:'APF Dashboard Backup'});
+  }
+
+  if (action === 'backup') {
     var folder = getOrCreateFolder();
     var files = folder.getFilesByName('APF_Backup.apf');
     if (files.hasNext()) {
@@ -1472,48 +1478,42 @@
     } else {
       folder.createFile('APF_Backup.apf', content.data, 'text/plain');
     }
-    return ContentService.createTextOutput(
-      JSON.stringify({success:true, timestamp:content.timestamp})
-    ).setMimeType(ContentService.MimeType.JSON);
+    return send({success:true, timestamp:content.timestamp});
   }
-  return ContentService.createTextOutput(
-    JSON.stringify({error:'Unknown action'})
-  ).setMimeType(ContentService.MimeType.JSON);
-}
 
-function doGet(e) {
-  var action = e.parameter.action || 'restore';
-  if (action === 'ping') {
-    return ContentService.createTextOutput(
-      JSON.stringify({status:'ok', app:'APF Dashboard Backup'})
-    ).setMimeType(ContentService.MimeType.JSON);
+  if (action === 'restore') {
+    var folder = getOrCreateFolder();
+    var files = folder.getFilesByName('APF_Backup.apf');
+    if (files.hasNext()) {
+      return send({data:files.next().getBlob().getDataAsString()});
+    }
+    return send({error:'No backup found'});
   }
+
   if (action === 'info') {
     var folder = getOrCreateFolder();
     var files = folder.getFilesByName('APF_Backup.apf');
     if (files.hasNext()) {
       var f = files.next();
-      return ContentService.createTextOutput(
-        JSON.stringify({exists:true, size:f.getSize(),
-          updated:f.getLastUpdated().toISOString()})
-      ).setMimeType(ContentService.MimeType.JSON);
+      return send({exists:true, size:f.getSize(),
+        updated:f.getLastUpdated().toISOString()});
     }
-    return ContentService.createTextOutput(
-      JSON.stringify({exists:false})
-    ).setMimeType(ContentService.MimeType.JSON);
+    return send({exists:false});
   }
-  if (action === 'restore') {
-    var folder = getOrCreateFolder();
-    var files = folder.getFilesByName('APF_Backup.apf');
-    if (files.hasNext()) {
-      return ContentService.createTextOutput(
-        JSON.stringify({data:files.next().getBlob().getDataAsString()})
-      ).setMimeType(ContentService.MimeType.JSON);
-    }
-    return ContentService.createTextOutput(
-      JSON.stringify({error:'No backup found'})
-    ).setMimeType(ContentService.MimeType.JSON);
-  }
+
+  return send({error:'Unknown action'});
+}
+
+function doGet(e) {
+  return ContentService.createTextOutput(
+    JSON.stringify({status:'ok', app:'APF Dashboard Backup'})
+  ).setMimeType(ContentService.MimeType.JSON);
+}
+
+function send(obj) {
+  return ContentService.createTextOutput(
+    JSON.stringify(obj)
+  ).setMimeType(ContentService.MimeType.JSON);
 }
 
 function getOrCreateFolder() {
