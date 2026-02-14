@@ -146,6 +146,9 @@
             <a href="#" class="nav-item" data-section="schools" id="nav-schools" data-tooltip="School Profiles">
                 <i class="fas fa-map-marker-alt"></i><span>School Profiles</span>
             </a>
+            <a href="#" class="nav-item" data-section="teachers" id="nav-teachers" data-tooltip="Teacher Growth">
+                <i class="fas fa-user-graduate"></i><span>Teacher Growth</span>
+            </a>
             <a href="#" class="nav-item" data-section="reflections" id="nav-reflections" data-tooltip="Reflections">
                 <i class="fas fa-journal-whills"></i><span>Reflections</span>
             </a>
@@ -202,6 +205,9 @@
                     </button>
                 </div>
             </div>
+
+            <!-- Smart Alerts -->
+            <div class="dashboard-alerts" id="dashboardAlerts"></div>
 
             <!-- Metric Cards -->
             <div class="metrics-grid">
@@ -302,6 +308,9 @@
                 </div>
             </div>
 
+            <!-- Visit Stats Dashboard -->
+            <div id="visitStatsDash" class="visit-stats-dash"></div>
+
             <!-- Filters -->
             <div class="filter-bar">
                 <div class="filter-group">
@@ -311,7 +320,20 @@
                         <option value="completed">Completed</option>
                         <option value="cancelled">Cancelled</option>
                     </select>
-                    <input type="text" id="visitSearchInput" placeholder="Search schools..." oninput="renderVisits()">
+                    <select id="visitPurposeFilter" onchange="renderVisits()">
+                        <option value="all">All Purposes</option>
+                        <option value="Classroom Observation">Classroom Observation</option>
+                        <option value="Teacher Support">Teacher Support</option>
+                        <option value="Workshop Facilitation">Workshop</option>
+                        <option value="Meeting with HM">Meeting with HM</option>
+                        <option value="Follow-up">Follow-up</option>
+                        <option value="Material Distribution">Material Distribution</option>
+                        <option value="Other">Other</option>
+                    </select>
+                    <select id="visitBlockFilter" onchange="renderVisits()">
+                        <option value="all">All Blocks</option>
+                    </select>
+                    <input type="text" id="visitSearchInput" placeholder="Search schools, clusters..." oninput="renderVisits()">
                 </div>
                 <div class="view-toggles">
                     <button class="view-btn active" data-view="list" onclick="setVisitView('list')"><i
@@ -320,6 +342,9 @@
                             class="fas fa-calendar"></i></button>
                 </div>
             </div>
+
+            <!-- Calendar View -->
+            <div id="visitCalendarView" class="visit-calendar-view" style="display:none"></div>
 
             <!-- Visits List -->
             <div id="visitsContainer" class="visits-list">
@@ -371,20 +396,56 @@
         <section class="content-section" id="section-observations">
             <div class="section-header">
                 <div>
-                    <h1><i class="fas fa-clipboard-check"></i> Observation Notes</h1>
-                    <p class="section-subtitle">Capture classroom observations and feedback</p>
+                    <h1><i class="fas fa-clipboard-check"></i> Field Notes & Observations</h1>
+                    <p class="section-subtitle">Capture classroom observations, teaching practices & field notes</p>
                 </div>
                 <div class="header-actions">
+                    <div class="obs-import-dropdown">
+                        <button class="btn btn-outline" onclick="toggleObsImportMenu()" id="obsImportBtn">
+                            <i class="fas fa-file-excel"></i> Import / Manage <i class="fas fa-caret-down" style="margin-left:4px;font-size:11px"></i>
+                        </button>
+                        <div class="obs-import-menu" id="obsImportMenu">
+                            <div class="obs-menu-label"><i class="fas fa-download"></i> Import</div>
+                            <button onclick="triggerDMTImport('add')"><i class="fas fa-plus-circle"></i> Import DMT (Add to existing)</button>
+                            <button onclick="triggerDMTImport('replace')"><i class="fas fa-sync-alt"></i> Import DMT (Replace all)</button>
+                            <button onclick="triggerFilteredImport()"><i class="fas fa-filter"></i> Import DMT (Filtered — State/Block/Observer/Cluster)</button>
+                            <div class="obs-import-menu-divider"></div>
+                            <div class="obs-menu-label"><i class="fas fa-address-book"></i> Contacts</div>
+                            <button onclick="extractContactsFromObservations()"><i class="fas fa-user-plus"></i> Extract Contacts from Observations</button>
+                            <div class="obs-import-menu-divider"></div>
+                            <div class="obs-menu-label"><i class="fas fa-upload"></i> Unload</div>
+                            <button onclick="openUnloadModal()"><i class="fas fa-filter"></i> Unload by Filter (State/Block/Observer/Cluster)</button>
+                            <button onclick="unloadImportedData()" class="obs-menu-danger"><i class="fas fa-eraser"></i> Unload All Imported Data</button>
+                            <div class="obs-import-menu-divider"></div>
+                            <button onclick="clearAllObservations()" class="obs-menu-danger"><i class="fas fa-trash-alt"></i> Clear All Observations</button>
+                        </div>
+                    </div>
+                    <input type="file" id="dmtImportFile" accept=".xlsx,.xls,.csv" style="display:none" onchange="importDMTExcel(event)">
+                    <input type="file" id="dmtFilteredImportFile" accept=".xlsx,.xls,.csv" style="display:none" onchange="loadFilteredImportPreview(event)">
                     <button class="btn btn-primary" onclick="openObservationModal()">
                         <i class="fas fa-plus"></i> New Observation
                     </button>
                 </div>
             </div>
 
-            <div class="filter-bar">
+            <!-- Summary Stats Bar -->
+            <div class="obs-stats-bar" id="obsStatsBar">
+                <div class="obs-stat-pill"><i class="fas fa-clipboard-list"></i> <span id="obsStatTotal">0</span> Total</div>
+                <div class="obs-stat-pill"><i class="fas fa-school"></i> <span id="obsStatSchools">0</span> Schools</div>
+                <div class="obs-stat-pill"><i class="fas fa-chalkboard-teacher"></i> <span id="obsStatTeachers">0</span> Teachers</div>
+                <div class="obs-stat-pill"><i class="fas fa-eye"></i> <span id="obsStatObserved">0</span> Observed</div>
+                <div class="obs-stat-pill engagement"><i class="fas fa-fire"></i> <span id="obsStatEngaged">0%</span> Engaged</div>
+            </div>
+
+            <!-- Filter Bar -->
+            <div class="filter-bar obs-filter-bar">
                 <div class="filter-group">
                     <select id="observationSubjectFilter" onchange="renderObservations()">
                         <option value="all">All Subjects</option>
+                        <option value="Math">Math</option>
+                        <option value="Hindi">Hindi</option>
+                        <option value="English">English</option>
+                        <option value="ECE">ECE</option>
                         <option value="Mathematics">Mathematics</option>
                         <option value="Science">Science</option>
                         <option value="Language">Language</option>
@@ -392,21 +453,207 @@
                         <option value="EVS">EVS</option>
                         <option value="Other">Other</option>
                     </select>
-                    <input type="text" id="observationSearchInput" placeholder="Search observations..."
+                    <select id="observationEngagementFilter" onchange="renderObservations()">
+                        <option value="all">All Engagement</option>
+                        <option value="More Engaged">More Engaged</option>
+                        <option value="Engaged">Engaged</option>
+                        <option value="Not Engaged">Not Engaged</option>
+                    </select>
+                    <select id="observationTypeFilter" onchange="renderObservations()">
+                        <option value="all">All Practice Types</option>
+                        <option value="Teaching Practice">Teaching Practice</option>
+                        <option value="Common Practice">Common Practice</option>
+                        <option value="Learning Outcome">Learning Outcome</option>
+                    </select>
+                    <select id="observationBlockFilter" onchange="renderObservations()">
+                        <option value="all">All Blocks</option>
+                    </select>
+                    <select id="observationObsFilter" onchange="renderObservations()">
+                        <option value="all">All Status</option>
+                        <option value="Yes">Observed</option>
+                        <option value="Not_Observed">Not Observed</option>
+                        <option value="No">Not Done</option>
+                    </select>
+                    <input type="text" id="observationSearchInput" placeholder="Search school, teacher, practice..."
                         oninput="renderObservations()">
                 </div>
             </div>
 
-            <div id="observationsContainer" class="observations-list">
-                <div class="empty-state">
-                    <i class="fas fa-clipboard-check"></i>
-                    <h3>No observations recorded</h3>
-                    <p>Start documenting classroom observations</p>
+            <!-- Tabs: List / Analytics / Smart Planner -->
+            <div class="obs-tabs">
+                <button class="obs-tab active" data-tab="list" onclick="switchObsTab('list')"><i class="fas fa-list"></i> List View</button>
+                <button class="obs-tab" data-tab="analytics" onclick="switchObsTab('analytics')"><i class="fas fa-chart-pie"></i> Analytics</button>
+                <button class="obs-tab" data-tab="planner" onclick="switchObsTab('planner')"><i class="fas fa-brain"></i> Smart Planner</button>
+                <button class="obs-tab" data-tab="aianalysis" onclick="switchObsTab('aianalysis')"><i class="fas fa-robot"></i> AI Analysis</button>
+            </div>
+
+            <!-- List View -->
+            <div id="obsTabList" class="obs-tab-content active">
+                <div id="observationsContainer" class="observations-list">
+                    <div class="empty-state">
+                        <i class="fas fa-clipboard-check"></i>
+                        <h3>No observations recorded</h3>
+                        <p>Start documenting classroom observations or import a DMT Excel file</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Analytics View -->
+            <div id="obsTabAnalytics" class="obs-tab-content">
+                <div class="obs-analytics-grid" id="obsAnalyticsGrid">
+                    <div class="obs-chart-card">
+                        <h3><i class="fas fa-chart-pie"></i> Engagement Distribution</h3>
+                        <canvas id="obsChartEngagement"></canvas>
+                    </div>
+                    <div class="obs-chart-card">
+                        <h3><i class="fas fa-chart-bar"></i> Observations by Subject</h3>
+                        <canvas id="obsChartSubject"></canvas>
+                    </div>
+                    <div class="obs-chart-card">
+                        <h3><i class="fas fa-chart-bar"></i> Practice Type Distribution</h3>
+                        <canvas id="obsChartPracticeType"></canvas>
+                    </div>
+                    <div class="obs-chart-card">
+                        <h3><i class="fas fa-chart-bar"></i> Block-wise Observations</h3>
+                        <canvas id="obsChartBlock"></canvas>
+                    </div>
+                    <div class="obs-chart-card">
+                        <h3><i class="fas fa-chart-line"></i> Monthly Observation Trend</h3>
+                        <canvas id="obsChartTrend"></canvas>
+                    </div>
+                    <div class="obs-chart-card">
+                        <h3><i class="fas fa-chart-bar"></i> Observation Status</h3>
+                        <canvas id="obsChartStatus"></canvas>
+                    </div>
+                    <div class="obs-chart-card obs-chart-wide">
+                        <h3><i class="fas fa-chart-bar"></i> Top 15 Practices Observed</h3>
+                        <canvas id="obsChartPractices"></canvas>
+                    </div>
+                    <div class="obs-chart-card obs-chart-wide">
+                        <h3><i class="fas fa-chalkboard-teacher"></i> Top Observers</h3>
+                        <canvas id="obsChartObservers"></canvas>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Smart Planner View -->
+            <div id="obsTabPlanner" class="obs-tab-content">
+                <div id="smartPlannerContainer" class="smart-planner-container">
+                    <div class="empty-state"><i class="fas fa-brain"></i><h3>Loading Smart Planner...</h3><p>Analyzing your observation data to generate intelligent suggestions</p></div>
+                </div>
+            </div>
+
+            <!-- AI Analysis View -->
+            <div id="obsTabAianalysis" class="obs-tab-content">
+                <div id="aiAnalysisContainer" class="ai-analysis-container">
+
+                    <!-- Hero -->
+                    <div class="ai-hero">
+                        <div class="ai-hero-icon"><i class="fas fa-wand-magic-sparkles"></i></div>
+                        <h2>AI Analysis</h2>
+                        <p>Generate a smart prompt from your data, send it to any AI chatbot, and get actionable plans</p>
+                    </div>
+
+                    <!-- Steps Workflow -->
+                    <div class="ai-workflow">
+
+                        <!-- Step 1 — Generate -->
+                        <div class="ai-step" id="aiStep1">
+                            <div class="ai-step-header">
+                                <span class="ai-step-num">1</span>
+                                <div class="ai-step-title">
+                                    <h3>Choose Focus & Generate Prompt</h3>
+                                    <p>Select what you want AI to analyze, then generate the prompt</p>
+                                </div>
+                            </div>
+                            <div class="ai-step-body">
+                                <div class="ai-prompt-options">
+                                    <div class="ai-opt-chips">
+                                        <button class="ai-chip active" onclick="setAiPromptFocus('full')" data-focus="full"><i class="fas fa-globe"></i> Full Analysis</button>
+                                        <button class="ai-chip" onclick="setAiPromptFocus('engagement')" data-focus="engagement"><i class="fas fa-fire"></i> Engagement</button>
+                                        <button class="ai-chip" onclick="setAiPromptFocus('teacher')" data-focus="teacher"><i class="fas fa-user"></i> Teacher Support</button>
+                                        <button class="ai-chip" onclick="setAiPromptFocus('school')" data-focus="school"><i class="fas fa-school"></i> School Visits</button>
+                                        <button class="ai-chip" onclick="setAiPromptFocus('training')" data-focus="training"><i class="fas fa-chalkboard-teacher"></i> Training Needs</button>
+                                    </div>
+                                </div>
+                                <button class="btn btn-primary ai-generate-btn" onclick="generateAiPrompt()" id="aiAnalyzeBtn">
+                                    <i class="fas fa-bolt"></i> Generate Prompt
+                                </button>
+                                <!-- Prompt Output -->
+                                <div id="aiPromptOutput" class="ai-prompt-output" style="display:none">
+                                    <div class="ai-prompt-toolbar">
+                                        <span class="ai-prompt-badge"><i class="fas fa-check-circle"></i> Prompt Ready</span>
+                                        <div>
+                                            <button class="btn btn-sm btn-outline" onclick="copyAiPrompt()"><i class="fas fa-copy"></i> Copy</button>
+                                        </div>
+                                    </div>
+                                    <pre id="aiPromptText" class="ai-prompt-pre"></pre>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Step 2 — Send to AI -->
+                        <div class="ai-step" id="aiStep2">
+                            <div class="ai-step-header">
+                                <span class="ai-step-num">2</span>
+                                <div class="ai-step-title">
+                                    <h3>Send to Any AI Chatbot</h3>
+                                    <p>Copy the prompt and paste it into your favorite AI</p>
+                                </div>
+                            </div>
+                            <div class="ai-step-body">
+                                <div class="ai-chatbot-links">
+                                    <a href="https://chatgpt.com" target="_blank" class="ai-chatbot-link chatgpt"><i class="fas fa-comment-dots"></i> ChatGPT</a>
+                                    <a href="https://claude.ai" target="_blank" class="ai-chatbot-link claude"><i class="fas fa-brain"></i> Claude</a>
+                                    <a href="https://gemini.google.com" target="_blank" class="ai-chatbot-link gemini"><i class="fas fa-star"></i> Gemini</a>
+                                    <a href="https://chat.deepseek.com" target="_blank" class="ai-chatbot-link deepseek"><i class="fas fa-water"></i> DeepSeek</a>
+                                    <a href="https://copilot.microsoft.com" target="_blank" class="ai-chatbot-link copilot"><i class="fas fa-windows"></i> Copilot</a>
+                                </div>
+                                <div class="ai-step-hint"><i class="fas fa-info-circle"></i> Paste the copied prompt, wait for the full response, then copy the AI's reply</div>
+                            </div>
+                        </div>
+
+                        <!-- Step 3 — Paste Response -->
+                        <div class="ai-step" id="aiStep3">
+                            <div class="ai-step-header">
+                                <span class="ai-step-num">3</span>
+                                <div class="ai-step-title">
+                                    <h3>Paste AI Response & Parse</h3>
+                                    <p>Paste the full AI response below and convert it to actionable plans</p>
+                                </div>
+                            </div>
+                            <div class="ai-step-body">
+                                <textarea id="aiResponseInput" class="ai-response-textarea" rows="8" placeholder="Paste the AI's complete response here..."></textarea>
+                                <div class="ai-response-actions">
+                                    <button class="btn btn-primary" onclick="parseAiResponse()"><i class="fas fa-cogs"></i> Parse & Build Plans</button>
+                                    <button class="btn btn-outline btn-sm" onclick="document.getElementById('aiResponseInput').value=''" title="Clear"><i class="fas fa-eraser"></i> Clear</button>
+                                </div>
+                            </div>
+                        </div>
+
+                    </div><!-- /.ai-workflow -->
+
+                    <!-- AI Results -->
+                    <div id="aiResultsContainer" style="display:none">
+                        <div class="ai-results-header">
+                            <h3><i class="fas fa-chart-line"></i> Analysis Results</h3>
+                            <div class="ai-results-actions-top">
+                                <button class="btn btn-sm btn-outline" onclick="scrollToAiStep(1)"><i class="fas fa-redo"></i> New Analysis</button>
+                                <button class="btn btn-sm btn-outline" onclick="toggleAiRawResponse()"><i class="fas fa-code"></i> Raw</button>
+                                <button class="btn btn-sm btn-primary" onclick="aiPushAllPlans()"><i class="fas fa-paper-plane"></i> Push All</button>
+                            </div>
+                        </div>
+                        <div id="aiPlansContainer"></div>
+                        <div class="ai-plans-actions" id="aiPlansActions" style="display:none">
+                            <button class="btn btn-primary" onclick="aiPushAllPlans()"><i class="fas fa-paper-plane"></i> Push All to Dashboard</button>
+                        </div>
+                        <div class="ai-raw-response" id="aiRawResponse" style="display:none">
+                            <pre id="aiRawResponseText" class="ai-prompt-pre"></pre>
+                        </div>
+                    </div>
                 </div>
             </div>
         </section>
-
-        <!-- ==================== REPORTS SECTION ==================== -->
         <section class="content-section" id="section-reports">
             <div class="section-header">
                 <div>
@@ -1042,6 +1289,7 @@
                     <p class="section-subtitle">Deep analysis of your field activities, coverage, and impact</p>
                 </div>
                 <div class="header-actions">
+                    <button class="btn btn-outline btn-sm" id="periodCompareBtn" onclick="togglePeriodComparison()"><i class="fas fa-columns"></i> Compare Periods</button>
                     <select id="analyticsRange" class="filter-select" onchange="renderAnalytics()">
                         <option value="all">All Time</option>
                         <option value="month" selected>This Month</option>
@@ -1050,6 +1298,9 @@
                     </select>
                 </div>
             </div>
+
+            <!-- Period Comparison Panel -->
+            <div class="period-compare-panel" id="periodComparePanel" style="display:none;"></div>
 
             <!-- Smart Insights -->
             <div class="analytics-insights" id="analyticsInsightsPanel"></div>
@@ -1180,6 +1431,29 @@
             <div id="schoolDetailView" style="display:none;"></div>
         </section>
 
+        <!-- ==================== TEACHER GROWTH SECTION ==================== -->
+        <section class="content-section" id="section-teachers">
+            <div class="section-header">
+                <div>
+                    <h1><i class="fas fa-user-graduate"></i> Teacher Growth Tracker</h1>
+                    <p class="section-subtitle">Track every teacher's progress across observations over time</p>
+                </div>
+                <div class="header-actions">
+                    <select id="teacherSortSelect" class="filter-select" onchange="renderTeacherGrowth()">
+                        <option value="observations">Most Observed</option>
+                        <option value="name">Name A-Z</option>
+                        <option value="engagement-low">Low Engagement First</option>
+                        <option value="engagement-high">High Engagement First</option>
+                        <option value="recent">Recently Observed</option>
+                        <option value="stale">Needs Visit (Oldest First)</option>
+                    </select>
+                    <input type="text" id="teacherGrowthSearch" class="filter-input" placeholder="Search teachers..." oninput="renderTeacherGrowth()">
+                </div>
+            </div>
+            <div class="tg-summary" id="tgSummary"></div>
+            <div id="teacherGrowthContainer"></div>
+        </section>
+
         <!-- ==================== REFLECTIONS SECTION ==================== -->
         <section class="content-section" id="section-reflections">
             <div class="section-header">
@@ -1217,6 +1491,12 @@
                         <option value="Other">Other</option>
                     </select>
                     <input type="text" id="contactSearchInput" class="filter-input" placeholder="Search contacts..." oninput="renderContacts()">
+                    <button class="btn btn-outline" onclick="extractContactsFromObservations()" title="Extract teacher contacts from imported DMT observations">
+                        <i class="fas fa-file-import"></i> Extract from Observations
+                    </button>
+                    <button class="btn btn-outline tc-search-btn" onclick="openTruecallerSearch()" title="Search any phone number on Truecaller">
+                        <i class="fas fa-search-plus"></i> Truecaller Search
+                    </button>
                     <button class="btn btn-primary" onclick="openContactModal()">
                         <i class="fas fa-plus"></i> Add Contact
                     </button>
@@ -1577,49 +1857,52 @@ function getOrCreateFolder() {
                     </div>
                 </div>
 
-                <div class="backup-card backup-excel">
-                    <div class="backup-icon" style="background:linear-gradient(135deg, #3b82f6, #1d4ed8);"><i class="fas fa-file-excel"></i></div>
-                    <h3>Export to Excel</h3>
-                    <p>Download all your data as an organized Excel spreadsheet for reporting.</p>
-                    <button class="btn btn-primary" onclick="exportAllDataToExcel()" style="background:#3b82f6;">
-                        <i class="fas fa-file-export"></i> Export Excel
-                    </button>
-                </div>
-                <div class="backup-card backup-danger">
-                    <div class="backup-icon" style="background:linear-gradient(135deg, #ef4444, #b91c1c);"><i class="fas fa-trash-alt"></i></div>
-                    <h3>Reset All Data</h3>
-                    <p>Permanently delete all data and start fresh. This cannot be undone.</p>
-                    <button class="btn btn-danger" onclick="resetAllData()">
-                        <i class="fas fa-exclamation-triangle"></i> Reset Everything
-                    </button>
-                </div>
-                <div class="backup-card backup-password">
-                    <div class="backup-icon" style="background:linear-gradient(135deg, #f59e0b, #d97706);"><i class="fas fa-key"></i></div>
-                    <h3>Password Protection</h3>
-                    <p id="passwordStatusText">Protect your dashboard with a password. Data stays locked until you enter it.</p>
-                    <div class="password-status" id="passwordStatus"></div>
-                    <div id="passwordActions">
-                        <button class="btn btn-primary" id="btnSetPassword" onclick="openPasswordSetup()" style="background:#f59e0b;">
-                            <i class="fas fa-lock"></i> Set Password
-                        </button>
-                        <button class="btn btn-outline" id="btnChangePassword" onclick="openPasswordChange()" style="display:none;">
-                            <i class="fas fa-key"></i> Change Password
-                        </button>
-                        <button class="btn btn-danger" id="btnRemovePassword" onclick="removePassword()" style="display:none;margin-top:8px;">
-                            <i class="fas fa-unlock"></i> Remove Password
+                <!-- Bottom Cards Row -->
+                <div class="backup-bottom-row">
+                    <div class="backup-card backup-excel">
+                        <div class="backup-icon" style="background:linear-gradient(135deg, #3b82f6, #1d4ed8);"><i class="fas fa-file-excel"></i></div>
+                        <h3>Export to Excel</h3>
+                        <p>Download all your data as an organized Excel spreadsheet for reporting.</p>
+                        <button class="btn btn-primary" onclick="exportAllDataToExcel()" style="background:#3b82f6;">
+                            <i class="fas fa-file-export"></i> Export Excel
                         </button>
                     </div>
-                    <div class="password-settings" id="passwordAutoLockSetting" style="display:none;">
-                        <label for="autoLockTime" style="color:var(--text-secondary);font-size:13px;margin-top:12px;display:block;">
-                            <i class="fas fa-clock"></i> Auto-lock after inactivity:
-                        </label>
-                        <select id="autoLockTime" onchange="setAutoLockTime(this.value)" style="margin-top:6px;width:100%;padding:8px 12px;background:var(--bg-input);color:var(--text-primary);border:1px solid var(--border);border-radius:8px;font-size:13px;">
-                            <option value="0">Never</option>
-                            <option value="5">5 minutes</option>
-                            <option value="15">15 minutes</option>
-                            <option value="30">30 minutes</option>
-                            <option value="60">1 hour</option>
-                        </select>
+                    <div class="backup-card backup-danger">
+                        <div class="backup-icon" style="background:linear-gradient(135deg, #ef4444, #b91c1c);"><i class="fas fa-trash-alt"></i></div>
+                        <h3>Reset All Data</h3>
+                        <p>Permanently delete all data and start fresh. This cannot be undone.</p>
+                        <button class="btn btn-danger" onclick="resetAllData()">
+                            <i class="fas fa-exclamation-triangle"></i> Reset Everything
+                        </button>
+                    </div>
+                    <div class="backup-card backup-password">
+                        <div class="backup-icon" style="background:linear-gradient(135deg, #f59e0b, #d97706);"><i class="fas fa-key"></i></div>
+                        <h3>Password Protection</h3>
+                        <p id="passwordStatusText">Protect your dashboard with a password. Data stays locked until you enter it.</p>
+                        <div class="password-status" id="passwordStatus"></div>
+                        <div id="passwordActions">
+                            <button class="btn btn-primary" id="btnSetPassword" onclick="openPasswordSetup()" style="background:#f59e0b;">
+                                <i class="fas fa-lock"></i> Set Password
+                            </button>
+                            <button class="btn btn-outline" id="btnChangePassword" onclick="openPasswordChange()" style="display:none;">
+                                <i class="fas fa-key"></i> Change Password
+                            </button>
+                            <button class="btn btn-danger" id="btnRemovePassword" onclick="removePassword()" style="display:none;margin-top:8px;">
+                                <i class="fas fa-unlock"></i> Remove Password
+                            </button>
+                        </div>
+                        <div class="password-settings" id="passwordAutoLockSetting" style="display:none;">
+                            <label for="autoLockTime" style="color:var(--text-secondary);font-size:13px;margin-top:12px;display:block;">
+                                <i class="fas fa-clock"></i> Auto-lock after inactivity:
+                            </label>
+                            <select id="autoLockTime" onchange="setAutoLockTime(this.value)" style="margin-top:6px;width:100%;padding:8px 12px;background:var(--bg-input);color:var(--text-primary);border:1px solid var(--border);border-radius:8px;font-size:13px;">
+                                <option value="0">Never</option>
+                                <option value="5">5 minutes</option>
+                                <option value="15">15 minutes</option>
+                                <option value="30">30 minutes</option>
+                                <option value="60">1 hour</option>
+                            </select>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -1643,11 +1926,24 @@ function getOrCreateFolder() {
                         <div class="form-group">
                             <label for="visitSchool">School Name *</label>
                             <input type="text" id="visitSchool" required
-                                placeholder="e.g. Government Primary School, Anekal">
+                                placeholder="e.g. Government Primary School, Anekal" list="visitSchoolList">
+                            <datalist id="visitSchoolList"></datalist>
                         </div>
                         <div class="form-group">
-                            <label for="visitBlock">Block / Cluster</label>
-                            <input type="text" id="visitBlock" placeholder="e.g. Anekal Block">
+                            <label for="visitBlock">Block</label>
+                            <input type="text" id="visitBlock" placeholder="e.g. Anekal" list="visitBlockList">
+                            <datalist id="visitBlockList"></datalist>
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="visitCluster">Cluster</label>
+                            <input type="text" id="visitCluster" placeholder="e.g. Sarjapura" list="visitClusterList">
+                            <datalist id="visitClusterList"></datalist>
+                        </div>
+                        <div class="form-group">
+                            <label for="visitDistrict">District</label>
+                            <input type="text" id="visitDistrict" placeholder="e.g. Bengaluru Urban">
                         </div>
                     </div>
                     <div class="form-row">
@@ -1664,17 +1960,50 @@ function getOrCreateFolder() {
                             </select>
                         </div>
                     </div>
-                    <div class="form-group">
-                        <label for="visitPurpose">Purpose of Visit</label>
-                        <select id="visitPurpose">
-                            <option value="Classroom Observation">Classroom Observation</option>
-                            <option value="Teacher Support">Teacher Support</option>
-                            <option value="Workshop Facilitation">Workshop Facilitation</option>
-                            <option value="Material Distribution">Material Distribution</option>
-                            <option value="Meeting with HM">Meeting with Head Master</option>
-                            <option value="Follow-up">Follow-up Visit</option>
-                            <option value="Other">Other</option>
-                        </select>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="visitPurpose">Purpose of Visit</label>
+                            <select id="visitPurpose">
+                                <option value="Classroom Observation">Classroom Observation</option>
+                                <option value="Teacher Support">Teacher Support</option>
+                                <option value="Workshop Facilitation">Workshop Facilitation</option>
+                                <option value="Material Distribution">Material Distribution</option>
+                                <option value="Meeting with HM">Meeting with Head Master</option>
+                                <option value="Follow-up">Follow-up Visit</option>
+                                <option value="Community Engagement">Community Engagement</option>
+                                <option value="TLM Support">TLM Support</option>
+                                <option value="Assessment">Assessment</option>
+                                <option value="Other">Other</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label for="visitDuration">Duration</label>
+                            <select id="visitDuration">
+                                <option value="">— Select —</option>
+                                <option value="30 mins">30 minutes</option>
+                                <option value="1 hour">1 hour</option>
+                                <option value="2 hours">2 hours</option>
+                                <option value="Half day">Half day</option>
+                                <option value="Full day">Full day</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="visitPeopleMet">Key People Met</label>
+                            <input type="text" id="visitPeopleMet" placeholder="e.g. HM, SDMC, Teachers names">
+                        </div>
+                        <div class="form-group">
+                            <label for="visitRating">Visit Rating</label>
+                            <select id="visitRating">
+                                <option value="">— Rate —</option>
+                                <option value="5">⭐⭐⭐⭐⭐ Excellent</option>
+                                <option value="4">⭐⭐⭐⭐ Good</option>
+                                <option value="3">⭐⭐⭐ Average</option>
+                                <option value="2">⭐⭐ Below Average</option>
+                                <option value="1">⭐ Poor</option>
+                            </select>
+                        </div>
                     </div>
                     <div class="form-group">
                         <label for="visitNotes">Notes / Key Observations</label>
@@ -1685,6 +2014,10 @@ function getOrCreateFolder() {
                         <label for="visitFollowUp">Follow-up Actions</label>
                         <textarea id="visitFollowUp" rows="2"
                             placeholder="List any follow-up actions required..."></textarea>
+                    </div>
+                    <div class="form-group">
+                        <label for="visitNextDate">Next Visit Date (if planned)</label>
+                        <input type="date" id="visitNextDate">
                     </div>
                 </div>
                 <div class="modal-footer">
@@ -1787,25 +2120,93 @@ function getOrCreateFolder() {
             <form id="observationForm" onsubmit="saveObservation(event)">
                 <div class="modal-body">
                     <input type="hidden" id="observationId">
+
+                    <!-- Teacher & School Info -->
+                    <div class="obs-form-section-label"><i class="fas fa-school"></i> School & Teacher</div>
                     <div class="form-row">
                         <div class="form-group">
                             <label for="observationSchool">School Name *</label>
-                            <input type="text" id="observationSchool" required
-                                placeholder="e.g. Government Primary School, Anekal">
+                            <input type="text" id="observationSchool" required list="obsSchoolList"
+                                placeholder="e.g. GOVT P.S. AMLIDEEH">
+                            <datalist id="obsSchoolList"></datalist>
                         </div>
                         <div class="form-group">
                             <label for="observationTeacher">Teacher Name</label>
-                            <input type="text" id="observationTeacher" placeholder="e.g. Smt. Lakshmi">
+                            <input type="text" id="observationTeacher" list="obsTeacherList"
+                                placeholder="e.g. KAUSHAL SINGH">
+                            <datalist id="obsTeacherList"></datalist>
                         </div>
                     </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="observationTeacherPhone">Teacher Phone</label>
+                            <input type="tel" id="observationTeacherPhone" placeholder="e.g. 7999899602">
+                        </div>
+                        <div class="form-group">
+                            <label for="observationTeacherStage">Teacher Stage</label>
+                            <select id="observationTeacherStage">
+                                <option value="">-- Select --</option>
+                                <option value="Primary">Primary</option>
+                                <option value="ECE">ECE</option>
+                                <option value="Upper Primary">Upper Primary</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <!-- Location Info -->
+                    <div class="obs-form-section-label"><i class="fas fa-map-marker-alt"></i> Location</div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="observationCluster">Cluster</label>
+                            <input type="text" id="observationCluster" list="obsClusterList"
+                                placeholder="e.g. CRC AMLIDIH">
+                            <datalist id="obsClusterList"></datalist>
+                        </div>
+                        <div class="form-group">
+                            <label for="observationBlock">Block</label>
+                            <input type="text" id="observationBlock" list="obsBlockList"
+                                placeholder="e.g. Magarlod">
+                            <datalist id="obsBlockList"></datalist>
+                        </div>
+                    </div>
+
+                    <!-- Observation Details -->
+                    <div class="obs-form-section-label"><i class="fas fa-eye"></i> Observation Details</div>
                     <div class="form-row">
                         <div class="form-group">
                             <label for="observationDate">Date *</label>
                             <input type="date" id="observationDate" required>
                         </div>
                         <div class="form-group">
+                            <label for="observationStatus">Observation</label>
+                            <select id="observationStatus">
+                                <option value="Yes">Yes - Observed</option>
+                                <option value="Not_Observed">Not Observed</option>
+                                <option value="No">No</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="observationSubject">Subject</label>
+                            <select id="observationSubject">
+                                <option value="">-- Select --</option>
+                                <option value="Math">Math</option>
+                                <option value="Hindi">Hindi</option>
+                                <option value="English">English</option>
+                                <option value="ECE">ECE</option>
+                                <option value="Mathematics">Mathematics</option>
+                                <option value="Science">Science</option>
+                                <option value="Language">Language</option>
+                                <option value="Social Science">Social Science</option>
+                                <option value="EVS">EVS</option>
+                                <option value="Other">Other</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
                             <label for="observationClass">Class / Grade</label>
                             <select id="observationClass">
+                                <option value="">-- Select --</option>
                                 <option value="Class 1">Class 1</option>
                                 <option value="Class 2">Class 2</option>
                                 <option value="Class 3">Class 3</option>
@@ -1819,15 +2220,52 @@ function getOrCreateFolder() {
                     </div>
                     <div class="form-row">
                         <div class="form-group">
-                            <label for="observationSubject">Subject *</label>
-                            <select id="observationSubject" required>
-                                <option value="Mathematics">Mathematics</option>
-                                <option value="Science">Science</option>
-                                <option value="Language">Language</option>
-                                <option value="Social Science">Social Science</option>
-                                <option value="EVS">EVS</option>
-                                <option value="Other">Other</option>
+                            <label for="observationObservedTeaching">Observed While Teaching</label>
+                            <select id="observationObservedTeaching">
+                                <option value="">-- Select --</option>
+                                <option value="True">Yes</option>
+                                <option value="False">No</option>
                             </select>
+                        </div>
+                        <div class="form-group">
+                            <label for="observationEngagement">Teacher Engagement Level</label>
+                            <select id="observationEngagement">
+                                <option value="">-- Select --</option>
+                                <option value="More Engaged">More Engaged</option>
+                                <option value="Engaged">Engaged</option>
+                                <option value="Not Engaged">Not Engaged</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <!-- Practice Info -->
+                    <div class="obs-form-section-label"><i class="fas fa-tasks"></i> Practice Details</div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="observationPracticeType">Practice Type</label>
+                            <select id="observationPracticeType">
+                                <option value="">-- Select --</option>
+                                <option value="Teaching Practice">Teaching Practice</option>
+                                <option value="Common Practice">Common Practice</option>
+                                <option value="Learning Outcome">Learning Outcome</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label for="observationPracticeSerial">Practice Serial No.</label>
+                            <input type="text" id="observationPracticeSerial" placeholder="e.g. TP-016">
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label for="observationPractice">Practice</label>
+                        <textarea id="observationPractice" rows="2"
+                            placeholder="Teaching practice description..."></textarea>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="observationGroup">Group / Topic</label>
+                            <input type="text" id="observationGroup" list="obsGroupList"
+                                placeholder="e.g. Pre-number and Counting">
+                            <datalist id="obsGroupList"></datalist>
                         </div>
                         <div class="form-group">
                             <label for="observationTopic">Topic Taught</label>
@@ -1835,8 +2273,9 @@ function getOrCreateFolder() {
                         </div>
                     </div>
 
+                    <!-- Ratings (kept for star rating) -->
+                    <div class="obs-form-section-label"><i class="fas fa-star"></i> Classroom Ratings</div>
                     <div class="observation-section">
-                        <h3>Classroom Environment</h3>
                         <div class="rating-group">
                             <label>Student Engagement</label>
                             <div class="star-rating" id="ratingEngagement" data-field="engagement">
@@ -1869,6 +2308,13 @@ function getOrCreateFolder() {
                         </div>
                     </div>
 
+                    <!-- Notes -->
+                    <div class="obs-form-section-label"><i class="fas fa-pencil-alt"></i> Notes & Feedback</div>
+                    <div class="form-group">
+                        <label for="observationNotes">Field Notes</label>
+                        <textarea id="observationNotes" rows="3"
+                            placeholder="Classroom observation notes in detail..."></textarea>
+                    </div>
                     <div class="form-group">
                         <label for="observationStrengths">Strengths Observed</label>
                         <textarea id="observationStrengths" rows="2"
@@ -1882,6 +2328,26 @@ function getOrCreateFolder() {
                         <label for="observationSuggestions">Suggestions Given</label>
                         <textarea id="observationSuggestions" rows="2"
                             placeholder="Suggestions provided to the teacher..."></textarea>
+                    </div>
+
+                    <!-- Observer & Meta -->
+                    <div class="obs-form-section-label"><i class="fas fa-user-tie"></i> Observer Info</div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="observationObserver">Observer Name</label>
+                            <input type="text" id="observationObserver" list="obsObserverList"
+                                placeholder="e.g. Sitaram Sahu">
+                            <datalist id="obsObserverList"></datalist>
+                        </div>
+                        <div class="form-group">
+                            <label for="observationStakeholderStatus">Status</label>
+                            <select id="observationStakeholderStatus">
+                                <option value="">-- Select --</option>
+                                <option value="Active">Active</option>
+                                <option value="Inactive">Inactive</option>
+                                <option value="Expired">Expired</option>
+                            </select>
+                        </div>
                     </div>
                 </div>
                 <div class="modal-footer">
@@ -2049,6 +2515,41 @@ function getOrCreateFolder() {
         </div>
     </div>
 
+    <!-- Truecaller Search Modal -->
+    <div class="modal-overlay" id="truecallerModal">
+        <div class="modal modal-sm">
+            <div class="modal-header">
+                <h2><i class="fas fa-phone-square-alt" style="color:#2196F3"></i> Truecaller Lookup</h2>
+                <button class="modal-close" onclick="closeModal('truecallerModal')"><i class="fas fa-times"></i></button>
+            </div>
+            <div class="modal-body">
+                <div class="tc-search-box">
+                    <div class="form-group" style="margin-bottom:12px">
+                        <label for="tcSearchPhone">Phone Number</label>
+                        <div class="tc-input-row">
+                            <select id="tcCountryCode" style="width:90px;padding:10px 8px;background:var(--bg-secondary);color:var(--text-primary);border:1px solid var(--border);border-radius:var(--radius) 0 0 var(--radius);font-size:14px;">
+                                <option value="IN" selected>+91</option>
+                                <option value="US">+1</option>
+                                <option value="GB">+44</option>
+                                <option value="AE">+971</option>
+                                <option value="SA">+966</option>
+                                <option value="BD">+880</option>
+                                <option value="NP">+977</option>
+                                <option value="PK">+92</option>
+                                <option value="LK">+94</option>
+                            </select>
+                            <input type="tel" id="tcSearchPhone" placeholder="Enter phone number..." style="flex:1;border-radius:0 var(--radius) var(--radius) 0;border-left:none;">
+                        </div>
+                    </div>
+                    <button class="btn btn-primary" onclick="truecallerSearch()" id="tcSearchBtn" style="width:100%;background:linear-gradient(135deg,#2196F3,#1565C0);">
+                        <i class="fas fa-search"></i> Search on Truecaller
+                    </button>
+                </div>
+                <div id="tcSearchResult" class="tc-result-area"></div>
+            </div>
+        </div>
+    </div>
+
     <!-- Contact Modal -->
     <div class="modal-overlay" id="contactModal">
         <div class="modal modal-sm">
@@ -2188,6 +2689,162 @@ function getOrCreateFolder() {
                     <button type="submit" class="btn btn-primary"><i class="fas fa-save"></i> Save Idea</button>
                 </div>
             </form>
+        </div>
+    </div>
+
+    <!-- Filtered Import Modal -->
+    <div class="modal-overlay" id="filteredImportModal">
+        <div class="modal">
+            <div class="modal-header">
+                <h2><i class="fas fa-filter"></i> Import DMT Data (Filtered)</h2>
+                <button class="modal-close" onclick="closeModal('filteredImportModal')"><i class="fas fa-times"></i></button>
+            </div>
+            <div class="modal-body">
+                <div id="filteredImportLoading" class="filtered-import-loading">
+                    <i class="fas fa-spinner fa-spin"></i> Reading Excel file...
+                </div>
+                <div id="filteredImportContent" style="display:none">
+                    <p class="unload-modal-desc"><i class="fas fa-file-excel"></i> <strong id="filteredImportFileName"></strong> — <span id="filteredImportTotalRows">0</span> total rows found. Select filters to import only matching records.</p>
+                    <div class="unload-filters-grid">
+                        <div class="form-group">
+                            <label for="importFilterState"><i class="fas fa-flag"></i> State</label>
+                            <select id="importFilterState" onchange="previewFilteredImport()"><option value="all">All States</option></select>
+                        </div>
+                        <div class="form-group">
+                            <label for="importFilterBlock"><i class="fas fa-map-marker-alt"></i> Block</label>
+                            <select id="importFilterBlock" onchange="previewFilteredImport()"><option value="all">All Blocks</option></select>
+                        </div>
+                        <div class="form-group">
+                            <label><i class="fas fa-layer-group"></i> Cluster</label>
+                            <div class="cluster-checkbox-wrap" id="importFilterCluster">
+                                <div class="cluster-cb-header">
+                                    <label class="cluster-select-all"><input type="checkbox" checked onchange="toggleAllClusters('importFilterCluster', this.checked); previewFilteredImport()"> Select All</label>
+                                    <span class="cluster-cb-count" id="importClusterCount">0 selected</span>
+                                </div>
+                                <div class="cluster-cb-search"><input type="text" placeholder="Search clusters..." oninput="filterClusterCheckboxes('importFilterCluster', this.value)"></div>
+                                <div class="cluster-cb-list" id="importClusterList"></div>
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label for="importFilterObserver"><i class="fas fa-user-tie"></i> Observer</label>
+                            <select id="importFilterObserver" onchange="previewFilteredImport()"><option value="all">All Observers</option></select>
+                        </div>
+                    </div>
+                    <div class="unload-preview" id="filteredImportPreview">
+                        <div class="unload-preview-empty"><i class="fas fa-info-circle"></i> All records will be imported. Use filters above to narrow down.</div>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-ghost" onclick="closeModal('filteredImportModal')">Cancel</button>
+                <button type="button" class="btn btn-primary" id="filteredImportConfirmBtn" onclick="executeFilteredImport()" disabled>
+                    <i class="fas fa-download"></i> Import <span id="filteredImportCount">0</span> Records
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Unload Data Modal -->
+    <div class="modal-overlay" id="unloadModal">
+        <div class="modal">
+            <div class="modal-header">
+                <h2><i class="fas fa-filter"></i> Unload Data by Filter</h2>
+                <button class="modal-close" onclick="closeModal('unloadModal')"><i class="fas fa-times"></i></button>
+            </div>
+            <div class="modal-body">
+                <p class="unload-modal-desc">Select one or more filters to remove matching observations. Only imported (DMT) data will be affected — your manual entries are safe.</p>
+                <div class="unload-filters-grid">
+                    <div class="form-group">
+                        <label for="unloadState"><i class="fas fa-flag"></i> State</label>
+                        <select id="unloadState" onchange="previewUnload()"><option value="all">All States</option></select>
+                    </div>
+                    <div class="form-group">
+                        <label for="unloadBlock"><i class="fas fa-map-marker-alt"></i> Block</label>
+                        <select id="unloadBlock" onchange="previewUnload()"><option value="all">All Blocks</option></select>
+                    </div>
+                    <div class="form-group">
+                        <label><i class="fas fa-layer-group"></i> Cluster</label>
+                        <div class="cluster-checkbox-wrap" id="unloadCluster">
+                            <div class="cluster-cb-header">
+                                <label class="cluster-select-all"><input type="checkbox" checked onchange="toggleAllClusters('unloadCluster', this.checked); previewUnload()"> Select All</label>
+                                <span class="cluster-cb-count" id="unloadClusterCount">0 selected</span>
+                            </div>
+                            <div class="cluster-cb-search"><input type="text" placeholder="Search clusters..." oninput="filterClusterCheckboxes('unloadCluster', this.value)"></div>
+                            <div class="cluster-cb-list" id="unloadClusterList"></div>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label for="unloadObserver"><i class="fas fa-user-tie"></i> Observer</label>
+                        <select id="unloadObserver" onchange="previewUnload()"><option value="all">All Observers</option></select>
+                    </div>
+                </div>
+                <div class="unload-preview" id="unloadPreview">
+                    <div class="unload-preview-empty"><i class="fas fa-info-circle"></i> Select filters above to preview which records will be removed</div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-ghost" onclick="closeModal('unloadModal')">Cancel</button>
+                <button type="button" class="btn btn-danger" id="unloadConfirmBtn" onclick="executeFilteredUnload()" disabled>
+                    <i class="fas fa-eraser"></i> Unload <span id="unloadCount">0</span> Records
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Quick Capture FAB -->
+    <button class="quick-capture-fab" id="quickCaptureFab" onclick="openQuickCapture()" title="Quick Observation">
+        <i class="fas fa-plus"></i>
+    </button>
+
+    <!-- Quick Capture Modal -->
+    <div class="modal-overlay" id="quickCaptureModal">
+        <div class="modal" style="max-width:440px;">
+            <div class="modal-header">
+                <h2><i class="fas fa-bolt"></i> Quick Capture</h2>
+                <button class="modal-close" onclick="closeModal('quickCaptureModal')">&times;</button>
+            </div>
+            <div class="modal-body">
+                <form id="quickCaptureForm">
+                    <div class="form-group">
+                        <label><i class="fas fa-calendar"></i> Date</label>
+                        <input type="date" id="qcDate" required>
+                    </div>
+                    <div class="form-group">
+                        <label><i class="fas fa-school"></i> School</label>
+                        <input type="text" id="qcSchool" list="visitSchoolList" placeholder="School name" required>
+                    </div>
+                    <div class="form-group">
+                        <label><i class="fas fa-user"></i> Teacher</label>
+                        <input type="text" id="qcTeacher" list="obsTeacherList" placeholder="Teacher name" required>
+                    </div>
+                    <div class="form-group">
+                        <label><i class="fas fa-book"></i> Subject</label>
+                        <select id="qcSubject">
+                            <option value="">Select</option>
+                            <option>Language</option><option>Mathematics</option><option>EVS</option>
+                            <option>Science</option><option>Social Science</option><option>English</option>
+                            <option>Hindi</option><option>Kannada</option><option>Other</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label><i class="fas fa-fire"></i> Engagement Level</label>
+                        <div class="qc-engagement-pills">
+                            <button type="button" class="qc-pill low" onclick="setQcEngagement(this,'Not Engaged')"><i class="fas fa-battery-quarter"></i> Not Engaged</button>
+                            <button type="button" class="qc-pill mid" onclick="setQcEngagement(this,'Engaged')"><i class="fas fa-battery-half"></i> Engaged</button>
+                            <button type="button" class="qc-pill high active" onclick="setQcEngagement(this,'More Engaged')"><i class="fas fa-battery-full"></i> More Engaged</button>
+                        </div>
+                        <input type="hidden" id="qcEngagement" value="More Engaged">
+                    </div>
+                    <div class="form-group">
+                        <label><i class="fas fa-sticky-note"></i> Quick Note</label>
+                        <textarea id="qcNote" rows="2" placeholder="One-line observation note..."></textarea>
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-ghost" onclick="closeModal('quickCaptureModal')">Cancel</button>
+                <button class="btn btn-primary" onclick="saveQuickCapture()"><i class="fas fa-check"></i> Save Observation</button>
+            </div>
         </div>
     </div>
 

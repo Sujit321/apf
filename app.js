@@ -119,9 +119,21 @@ const CryptoEngine = {
 const EncryptedCache = {
     CACHE_KEY: 'apf_encrypted_cache',
     SAVE_TIME_KEY: 'apf_last_enc_save',
+    FLAG_KEY: 'apf_cache_exists',
+    _dbName: 'apf_cache_db',
+    _storeName: 'cache',
+
+    _openDB() {
+        return new Promise((resolve, reject) => {
+            const req = indexedDB.open(this._dbName, 1);
+            req.onupgradeneeded = () => req.result.createObjectStore(this._storeName);
+            req.onsuccess = () => resolve(req.result);
+            req.onerror = () => reject(req.error);
+        });
+    },
 
     exists() {
-        return !!localStorage.getItem(this.CACHE_KEY);
+        return !!(localStorage.getItem(this.FLAG_KEY) || localStorage.getItem(this.CACHE_KEY));
     },
 
     async save(password) {
@@ -129,12 +141,23 @@ const EncryptedCache = {
             const allData = { _meta: { app: 'APF Dashboard', version: 2, cachedAt: new Date().toISOString() } };
             ENCRYPTED_DATA_KEYS.forEach(k => { allData[k] = DB.get(k); });
             const encrypted = await CryptoEngine.encrypt(password, allData);
-            // Store as base64 string
-            const binary = String.fromCharCode(...encrypted);
-            localStorage.setItem(this.CACHE_KEY, btoa(binary));
+
+            // Store in IndexedDB (no size limit)
+            const db = await this._openDB();
+            await new Promise((resolve, reject) => {
+                const tx = db.transaction(this._storeName, 'readwrite');
+                tx.objectStore(this._storeName).put(encrypted.buffer, this.CACHE_KEY);
+                tx.oncomplete = resolve;
+                tx.onerror = () => reject(tx.error);
+            });
+
             const now = new Date().toISOString();
+            localStorage.setItem(this.FLAG_KEY, '1');
             localStorage.setItem(this.SAVE_TIME_KEY, now);
             lastEncSaveTime = now;
+
+            // Clean up old localStorage cache if present
+            localStorage.removeItem(this.CACHE_KEY);
             return true;
         } catch (err) {
             console.error('Cache save failed:', err);
@@ -143,17 +166,40 @@ const EncryptedCache = {
     },
 
     async load(password) {
+        // Try IndexedDB first (new storage)
+        try {
+            const db = await this._openDB();
+            const buffer = await new Promise((resolve, reject) => {
+                const tx = db.transaction(this._storeName, 'readonly');
+                const req = tx.objectStore(this._storeName).get(this.CACHE_KEY);
+                req.onsuccess = () => resolve(req.result);
+                req.onerror = () => reject(req.error);
+            });
+            if (buffer) {
+                return CryptoEngine.decrypt(password, buffer);
+            }
+        } catch (err) {
+            console.error('IndexedDB cache read failed:', err);
+        }
+
+        // Fallback: try old localStorage format (migration)
         const b64 = localStorage.getItem(this.CACHE_KEY);
         if (!b64) throw new Error('No cached data');
         const binary = atob(b64);
-        const buffer = new Uint8Array(binary.length);
-        for (let i = 0; i < binary.length; i++) buffer[i] = binary.charCodeAt(i);
-        return CryptoEngine.decrypt(password, buffer.buffer);
+        const arr = new Uint8Array(binary.length);
+        for (let i = 0; i < binary.length; i++) arr[i] = binary.charCodeAt(i);
+        return CryptoEngine.decrypt(password, arr.buffer);
     },
 
-    clear() {
+    async clear() {
+        localStorage.removeItem(this.FLAG_KEY);
         localStorage.removeItem(this.CACHE_KEY);
         localStorage.removeItem(this.SAVE_TIME_KEY);
+        try {
+            const db = await this._openDB();
+            const tx = db.transaction(this._storeName, 'readwrite');
+            tx.objectStore(this._storeName).delete(this.CACHE_KEY);
+        } catch (err) { /* ignore */ }
     },
 
     getLastSaveTime() {
@@ -408,7 +454,12 @@ const GoogleDriveSync = {
             const allData = { _meta: { app: 'APF Dashboard', version: 2, backedUpAt: new Date().toISOString() } };
             ENCRYPTED_DATA_KEYS.forEach(k => { allData[k] = DB.get(k); });
             const encrypted = await CryptoEngine.encrypt(_sessionPassword, allData);
-            const binary = String.fromCharCode(...encrypted);
+            // Convert to base64 in chunks (avoid call stack overflow with large data)
+            let binary = '';
+            const chunkSize = 8192;
+            for (let i = 0; i < encrypted.length; i += chunkSize) {
+                binary += String.fromCharCode.apply(null, encrypted.subarray(i, i + chunkSize));
+            }
             const b64Data = btoa(binary);
 
             // Send to Apps Script
@@ -720,14 +771,19 @@ async function performAutoSave() {
         if (FileLink.isLinked()) {
             await FileLink.writeToFile(_sessionPassword);
         }
-        // 2. Also save to browser cache as fallback
-        await EncryptedCache.save(_sessionPassword);
-        clearUnsavedChanges();
-        updateEncryptedFileStatus();
-        // 3. Schedule Google Drive backup if enabled
-        GoogleDriveSync.scheduleAutoBackup();
+        // 2. Also save to browser cache (IndexedDB — no size limit)
+        const saved = await EncryptedCache.save(_sessionPassword);
+        if (!saved) {
+            showToast('⚠️ Auto-save to browser cache failed. Please manually save/export your data.', 'error', 8000);
+        } else {
+            clearUnsavedChanges();
+            updateEncryptedFileStatus();
+            // 3. Schedule Google Drive backup if enabled
+            GoogleDriveSync.scheduleAutoBackup();
+        }
     } catch (err) {
         console.error('Auto-save failed:', err);
+        showToast('⚠️ Auto-save failed: ' + (err.message || 'Unknown error'), 'error', 6000);
     }
     _autoSaveBusy = false;
 }
@@ -1341,6 +1397,7 @@ function refreshSection(section) {
         case 'followups': renderFollowups(); break;
         case 'ideas': renderIdeas(); break;
         case 'schools': renderSchoolProfiles(); break;
+        case 'teachers': renderTeacherGrowth(); break;
         case 'reflections': initReflectionMonthFilter(); renderReflections(); break;
         case 'contacts': renderContacts(); break;
         case 'livesync': break;
@@ -1964,6 +2021,9 @@ function renderDashboard() {
 
     // Dashboard mini-charts
     renderDashboardCharts(visits, trainings, observations);
+
+    // Smart Alerts
+    renderDashboardAlerts();
 }
 
 // ===== Dashboard Mini Charts =====
@@ -2044,6 +2104,7 @@ function openVisitModal(id) {
     document.getElementById('visitId').value = '';
     document.getElementById('visitDate').value = new Date().toISOString().split('T')[0];
     document.getElementById('visitModalTitle').innerHTML = '<i class="fas fa-school"></i> New School Visit';
+    populateVisitDataLists();
 
     if (id) {
         const visits = DB.get('visits');
@@ -2052,15 +2113,51 @@ function openVisitModal(id) {
             document.getElementById('visitId').value = v.id;
             document.getElementById('visitSchool').value = v.school;
             document.getElementById('visitBlock').value = v.block || '';
+            document.getElementById('visitCluster').value = v.cluster || '';
+            document.getElementById('visitDistrict').value = v.district || '';
             document.getElementById('visitDate').value = v.date;
             document.getElementById('visitStatus').value = v.status;
             document.getElementById('visitPurpose').value = v.purpose || 'Classroom Observation';
+            document.getElementById('visitDuration').value = v.duration || '';
+            document.getElementById('visitPeopleMet').value = v.peopleMet || '';
+            document.getElementById('visitRating').value = v.rating || '';
             document.getElementById('visitNotes').value = v.notes || '';
             document.getElementById('visitFollowUp').value = v.followUp || '';
+            document.getElementById('visitNextDate').value = v.nextDate || '';
             document.getElementById('visitModalTitle').innerHTML = '<i class="fas fa-school"></i> Edit Visit';
         }
     }
     openModal('visitModal');
+}
+
+function populateVisitDataLists() {
+    const obs = DB.get('observations');
+    const visits = DB.get('visits');
+    const schools = new Set(), blocks = new Set(), clusters = new Set();
+    obs.forEach(o => {
+        if (o.school) schools.add(o.school.trim());
+        if (o.block) blocks.add(o.block.trim());
+        if (o.cluster) clusters.add(o.cluster.trim());
+    });
+    visits.forEach(v => {
+        if (v.school) schools.add(v.school.trim());
+        if (v.block) blocks.add(v.block.trim());
+        if (v.cluster) clusters.add(v.cluster.trim());
+    });
+    const toOpts = (set) => [...set].sort().map(s => `<option value="${escapeHtml(s)}">`).join('');
+    document.getElementById('visitSchoolList').innerHTML = toOpts(schools);
+    document.getElementById('visitBlockList').innerHTML = toOpts(blocks);
+    document.getElementById('visitClusterList').innerHTML = toOpts(clusters);
+
+    // Also populate block filter dropdown
+    const blockFilter = document.getElementById('visitBlockFilter');
+    if (blockFilter) {
+        const cur = blockFilter.value;
+        const allBlocks = new Set();
+        visits.forEach(v => { if (v.block) allBlocks.add(v.block.trim()); });
+        obs.forEach(o => { if (o.block) allBlocks.add(o.block.trim()); });
+        blockFilter.innerHTML = '<option value="all">All Blocks</option>' + [...allBlocks].sort().map(b => `<option value="${escapeHtml(b)}"${b===cur?' selected':''}>${escapeHtml(b)}</option>`).join('');
+    }
 }
 
 function saveVisit(e) {
@@ -2070,11 +2167,17 @@ function saveVisit(e) {
     const data = {
         school: document.getElementById('visitSchool').value.trim(),
         block: document.getElementById('visitBlock').value.trim(),
+        cluster: document.getElementById('visitCluster').value.trim(),
+        district: document.getElementById('visitDistrict').value.trim(),
         date: document.getElementById('visitDate').value,
         status: document.getElementById('visitStatus').value,
         purpose: document.getElementById('visitPurpose').value,
+        duration: document.getElementById('visitDuration').value,
+        peopleMet: document.getElementById('visitPeopleMet').value.trim(),
+        rating: document.getElementById('visitRating').value,
         notes: document.getElementById('visitNotes').value.trim(),
         followUp: document.getElementById('visitFollowUp').value.trim(),
+        nextDate: document.getElementById('visitNextDate').value,
     };
 
     if (id) {
@@ -2112,13 +2215,22 @@ function renderVisits() {
     const visits = DB.get('visits');
     const container = document.getElementById('visitsContainer');
     const statusFilter = document.getElementById('visitStatusFilter').value;
+    const purposeFilter = document.getElementById('visitPurposeFilter')?.value || 'all';
+    const blockFilter = document.getElementById('visitBlockFilter')?.value || 'all';
     const search = document.getElementById('visitSearchInput').value.toLowerCase();
 
     let filtered = visits.filter(v => {
         if (statusFilter !== 'all' && v.status !== statusFilter) return false;
-        if (search && !(v.school || '').toLowerCase().includes(search) && !(v.block || '').toLowerCase().includes(search)) return false;
+        if (purposeFilter !== 'all' && v.purpose !== purposeFilter) return false;
+        if (blockFilter !== 'all' && (v.block || '') !== blockFilter) return false;
+        if (search && !(v.school || '').toLowerCase().includes(search) && !(v.block || '').toLowerCase().includes(search) && !(v.cluster || '').toLowerCase().includes(search) && !(v.purpose || '').toLowerCase().includes(search)) return false;
         return true;
     }).sort((a, b) => new Date(b.date) - new Date(a.date));
+
+    // Render stats
+    renderVisitStats(visits);
+    // Populate block filter
+    populateVisitBlockFilter(visits);
 
     if (filtered.length === 0) {
         container.innerHTML = `<div class="empty-state"><i class="fas fa-school"></i><h3>No visits found</h3><p>${visits.length === 0 ? 'Start planning your visits by clicking "New Visit"' : 'Try adjusting your filters'}</p></div>`;
@@ -2130,18 +2242,31 @@ function renderVisits() {
         const day = d.getDate();
         const month = d.toLocaleString('en', { month: 'short' });
         const badgeClass = `badge-${v.status}`;
+        const ratingStars = v.rating ? '⭐'.repeat(parseInt(v.rating)) : '';
+        const purposeIcon = {
+            'Classroom Observation': 'fa-eye', 'Teacher Support': 'fa-hands-helping',
+            'Workshop Facilitation': 'fa-chalkboard', 'Material Distribution': 'fa-box-open',
+            'Meeting with HM': 'fa-user-tie', 'Follow-up': 'fa-redo-alt',
+            'Community Engagement': 'fa-users', 'TLM Support': 'fa-book',
+            'Assessment': 'fa-clipboard-list', 'Other': 'fa-ellipsis-h'
+        }[v.purpose] || 'fa-school';
+
         return `<div class="visit-item" onclick="openVisitModal('${v.id}')">
             <div class="visit-date-badge">
                 <div class="day">${day}</div>
                 <div class="month">${month}</div>
             </div>
             <div class="visit-info">
-                <h4>${escapeHtml(v.school)}</h4>
-                <p>${escapeHtml(v.purpose || '')}</p>
+                <h4><i class="fas ${purposeIcon}" style="color:var(--accent);margin-right:6px;font-size:13px"></i>${escapeHtml(v.school)}</h4>
+                <p>${escapeHtml(v.purpose || '')}${v.duration ? ` • ${v.duration}` : ''}${ratingStars ? ` • ${ratingStars}` : ''}</p>
                 <div class="visit-meta">
                     ${v.block ? `<span><i class="fas fa-map-marker-alt"></i> ${escapeHtml(v.block)}</span>` : ''}
+                    ${v.cluster ? `<span><i class="fas fa-layer-group"></i> ${escapeHtml(v.cluster)}</span>` : ''}
                     <span><i class="fas fa-calendar"></i> ${d.toLocaleDateString('en-IN')}</span>
+                    ${v.peopleMet ? `<span><i class="fas fa-user-friends"></i> ${escapeHtml(v.peopleMet.substring(0, 30))}${v.peopleMet.length > 30 ? '...' : ''}</span>` : ''}
                 </div>
+                ${v.followUp ? `<div class="visit-followup-preview"><i class="fas fa-arrow-right"></i> ${escapeHtml(v.followUp.substring(0, 60))}${v.followUp.length > 60 ? '...' : ''}</div>` : ''}
+                ${v.nextDate ? `<div class="visit-next-badge"><i class="fas fa-calendar-plus"></i> Next: ${new Date(v.nextDate).toLocaleDateString('en-IN')}</div>` : ''}
             </div>
             <div class="visit-actions">
                 <span class="badge ${badgeClass}">${v.status}</span>
@@ -2151,11 +2276,121 @@ function renderVisits() {
     }).join('');
 }
 
+function populateVisitBlockFilter(visits) {
+    const blockFilter = document.getElementById('visitBlockFilter');
+    if (!blockFilter) return;
+    const cur = blockFilter.value;
+    const allBlocks = new Set();
+    visits.forEach(v => { if (v.block) allBlocks.add(v.block.trim()); });
+    const obs = DB.get('observations');
+    obs.forEach(o => { if (o.block) allBlocks.add(o.block.trim()); });
+    blockFilter.innerHTML = '<option value="all">All Blocks</option>' + [...allBlocks].sort().map(b => `<option value="${escapeHtml(b)}"${b===cur?' selected':''}>${escapeHtml(b)}</option>`).join('');
+}
+
+function renderVisitStats(visits) {
+    const dash = document.getElementById('visitStatsDash');
+    if (!dash) return;
+
+    const now = new Date();
+    const thisMonth = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}`;
+    const total = visits.length;
+    const completed = visits.filter(v => v.status === 'completed').length;
+    const planned = visits.filter(v => v.status === 'planned').length;
+    const thisMonthCount = visits.filter(v => v.date && v.date.startsWith(thisMonth)).length;
+    const uniqueSchools = new Set(visits.map(v => (v.school||'').trim().toLowerCase())).size;
+    const withFollowUp = visits.filter(v => v.followUp && v.followUp.trim()).length;
+    const avgRating = visits.filter(v => v.rating).length > 0 ? (visits.filter(v => v.rating).reduce((s, v) => s + parseInt(v.rating), 0) / visits.filter(v => v.rating).length).toFixed(1) : '—';
+
+    const upcomingVisits = visits.filter(v => v.status === 'planned' && v.date >= now.toISOString().split('T')[0]).sort((a,b) => new Date(a.date) - new Date(b.date));
+    const nextVisit = upcomingVisits[0];
+
+    dash.innerHTML = `
+        <div class="vs-card total"><div class="vs-icon"><i class="fas fa-school"></i></div><div class="vs-val">${total}</div><div class="vs-lbl">Total Visits</div></div>
+        <div class="vs-card completed"><div class="vs-icon"><i class="fas fa-check-circle"></i></div><div class="vs-val">${completed}</div><div class="vs-lbl">Completed</div></div>
+        <div class="vs-card planned"><div class="vs-icon"><i class="fas fa-calendar-check"></i></div><div class="vs-val">${planned}</div><div class="vs-lbl">Planned</div></div>
+        <div class="vs-card month"><div class="vs-icon"><i class="fas fa-calendar-alt"></i></div><div class="vs-val">${thisMonthCount}</div><div class="vs-lbl">This Month</div></div>
+        <div class="vs-card schools"><div class="vs-icon"><i class="fas fa-map-marked-alt"></i></div><div class="vs-val">${uniqueSchools}</div><div class="vs-lbl">Unique Schools</div></div>
+        <div class="vs-card rating"><div class="vs-icon"><i class="fas fa-star"></i></div><div class="vs-val">${avgRating}</div><div class="vs-lbl">Avg Rating</div></div>
+        ${nextVisit ? `<div class="vs-card next" onclick="openVisitModal('${nextVisit.id}')"><div class="vs-icon"><i class="fas fa-arrow-right"></i></div><div class="vs-val-sm">${escapeHtml(nextVisit.school).substring(0,18)}</div><div class="vs-lbl">Next: ${new Date(nextVisit.date).toLocaleDateString('en-IN',{day:'numeric',month:'short'})}</div></div>` : ''}
+    `;
+}
+
+let _visitCalMonthOffset = 0;
 function setVisitView(view) {
-    document.querySelectorAll('.view-btn').forEach(b => b.classList.remove('active'));
-    document.querySelector(`.view-btn[data-view="${view}"]`)?.classList.add('active');
-    // For now, both views show list (calendar view can be extended)
-    renderVisits();
+    document.querySelectorAll('#section-visits .view-btn').forEach(b => b.classList.remove('active'));
+    document.querySelector(`#section-visits .view-btn[data-view="${view}"]`)?.classList.add('active');
+    const listEl = document.getElementById('visitsContainer');
+    const calEl = document.getElementById('visitCalendarView');
+    if (view === 'calendar') {
+        listEl.style.display = 'none';
+        calEl.style.display = 'block';
+        _visitCalMonthOffset = 0;
+        renderVisitCalendar();
+    } else {
+        listEl.style.display = '';
+        calEl.style.display = 'none';
+        renderVisits();
+    }
+}
+
+function navVisitCalendar(dir) {
+    _visitCalMonthOffset += dir;
+    renderVisitCalendar();
+}
+
+function renderVisitCalendar() {
+    const calEl = document.getElementById('visitCalendarView');
+    if (!calEl) return;
+
+    const now = new Date();
+    const viewMonth = new Date(now.getFullYear(), now.getMonth() + _visitCalMonthOffset, 1);
+    const year = viewMonth.getFullYear();
+    const month = viewMonth.getMonth();
+    const firstDay = new Date(year, month, 1);
+    const lastDay = new Date(year, month + 1, 0);
+    const startDow = (firstDay.getDay() + 6) % 7; // Mon=0
+
+    const monthStr = viewMonth.toLocaleDateString('en-IN', { month: 'long', year: 'numeric' });
+
+    const visits = DB.get('visits');
+    const todayStr = now.toISOString().split('T')[0];
+
+    // Build day cells
+    const cells = [];
+    // Empty leading cells
+    for (let i = 0; i < startDow; i++) cells.push('<div class="vc-day empty"></div>');
+
+    for (let d = 1; d <= lastDay.getDate(); d++) {
+        const dk = `${year}-${String(month+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+        const dayVisits = visits.filter(v => v.date === dk);
+        const isToday = dk === todayStr;
+
+        cells.push(`<div class="vc-day ${isToday ? 'today' : ''} ${dayVisits.length ? 'has-visits' : ''}">
+            <div class="vc-day-num">${d}</div>
+            <div class="vc-day-visits">
+                ${dayVisits.map(v => {
+                    const statusCls = v.status === 'completed' ? 'completed' : v.status === 'cancelled' ? 'cancelled' : 'planned';
+                    return `<div class="vc-visit ${statusCls}" onclick="openVisitModal('${v.id}')" title="${escapeHtml(v.school)} — ${v.purpose||''}">
+                        <i class="fas fa-school"></i> ${escapeHtml((v.school||'').substring(0, 16))}${(v.school||'').length > 16 ? '…' : ''}
+                    </div>`;
+                }).join('')}
+            </div>
+            ${!dayVisits.length && dk >= todayStr ? `<button class="vc-add" onclick="openVisitModal();document.getElementById('visitDate').value='${dk}'" title="Add visit"><i class="fas fa-plus"></i></button>` : ''}
+        </div>`);
+    }
+
+    calEl.innerHTML = `
+        <div class="vc-header">
+            <button class="vc-nav" onclick="navVisitCalendar(-1)"><i class="fas fa-chevron-left"></i></button>
+            <span class="vc-month">${monthStr}</span>
+            <button class="vc-nav" onclick="navVisitCalendar(1)"><i class="fas fa-chevron-right"></i></button>
+        </div>
+        <div class="vc-grid">
+            <div class="vc-dow">Mon</div><div class="vc-dow">Tue</div><div class="vc-dow">Wed</div>
+            <div class="vc-dow">Thu</div><div class="vc-dow">Fri</div><div class="vc-dow">Sat</div><div class="vc-dow">Sun</div>
+            ${cells.join('')}
+        </div>
+    `;
 }
 
 // ===== TEACHER TRAINING =====
@@ -2279,6 +2514,7 @@ function renderTrainings() {
 
 // ===== OBSERVATIONS =====
 let observationRatings = { engagement: 0, methodology: 0, tlm: 0 };
+let obsActiveCharts = {};
 
 function initStarRatings() {
     document.querySelectorAll('.star-rating').forEach(group => {
@@ -2310,6 +2546,37 @@ function highlightStars(group, val) {
     updateStars(group, val);
 }
 
+// Populate datalists for auto-complete from existing observations
+function populateObsDataLists() {
+    const observations = DB.get('observations');
+    const schools = [...new Set(observations.map(o => o.school).filter(Boolean))];
+    const teachers = [...new Set(observations.map(o => o.teacher).filter(Boolean))];
+    const clusters = [...new Set(observations.map(o => o.cluster).filter(Boolean))];
+    const blocks = [...new Set(observations.map(o => o.block).filter(Boolean))];
+    const groups = [...new Set(observations.map(o => o.group).filter(Boolean))];
+    const observers = [...new Set(observations.map(o => o.observer).filter(Boolean))];
+
+    const setList = (id, vals) => {
+        const el = document.getElementById(id);
+        if (el) el.innerHTML = vals.map(v => `<option value="${escapeHtml(v)}">`).join('');
+    };
+    setList('obsSchoolList', schools);
+    setList('obsTeacherList', teachers);
+    setList('obsClusterList', clusters);
+    setList('obsBlockList', blocks);
+    setList('obsGroupList', groups);
+    setList('obsObserverList', observers);
+
+    // Also populate block filter dropdown
+    const blockFilter = document.getElementById('observationBlockFilter');
+    if (blockFilter) {
+        const current = blockFilter.value;
+        blockFilter.innerHTML = '<option value="all">All Blocks</option>' +
+            blocks.sort().map(b => `<option value="${escapeHtml(b)}">${escapeHtml(b)}</option>`).join('');
+        blockFilter.value = current || 'all';
+    }
+}
+
 function openObservationModal(id) {
     document.getElementById('observationForm').reset();
     document.getElementById('observationId').value = '';
@@ -2318,24 +2585,44 @@ function openObservationModal(id) {
     observationRatings = { engagement: 0, methodology: 0, tlm: 0 };
     document.querySelectorAll('.star-rating').forEach(g => updateStars(g, 0));
 
+    populateObsDataLists();
+
     if (id) {
         const observations = DB.get('observations');
         const o = observations.find(x => x.id === id);
         if (o) {
             document.getElementById('observationId').value = o.id;
-            document.getElementById('observationSchool').value = o.school;
+            document.getElementById('observationSchool').value = o.school || '';
             document.getElementById('observationTeacher').value = o.teacher || '';
+            document.getElementById('observationTeacherPhone').value = o.teacherPhone || '';
+            document.getElementById('observationTeacherStage').value = o.teacherStage || '';
+            document.getElementById('observationCluster').value = o.cluster || '';
+            document.getElementById('observationBlock').value = o.block || '';
             document.getElementById('observationDate').value = o.date;
-            document.getElementById('observationClass').value = o.class || 'Class 1';
-            document.getElementById('observationSubject').value = o.subject;
+            document.getElementById('observationStatus').value = o.observationStatus || 'Yes';
+            document.getElementById('observationSubject').value = o.subject || '';
+            document.getElementById('observationClass').value = o.class || '';
+            document.getElementById('observationObservedTeaching').value = o.observedWhileTeaching || '';
+            document.getElementById('observationEngagement').value = o.engagementLevel || '';
+            document.getElementById('observationPracticeType').value = o.practiceType || '';
+            document.getElementById('observationPracticeSerial').value = o.practiceSerial || '';
+            document.getElementById('observationPractice').value = o.practice || '';
+            document.getElementById('observationGroup').value = o.group || '';
             document.getElementById('observationTopic').value = o.topic || '';
+            document.getElementById('observationNotes').value = o.notes || '';
             document.getElementById('observationStrengths').value = o.strengths || '';
             document.getElementById('observationAreas').value = o.areas || '';
             document.getElementById('observationSuggestions').value = o.suggestions || '';
-            observationRatings = { engagement: o.engagement || 0, methodology: o.methodology || 0, tlm: o.tlm || 0 };
-            updateStars(document.getElementById('ratingEngagement'), o.engagement || 0);
-            updateStars(document.getElementById('ratingMethodology'), o.methodology || 0);
-            updateStars(document.getElementById('ratingTLM'), o.tlm || 0);
+            document.getElementById('observationObserver').value = o.observer || '';
+            document.getElementById('observationStakeholderStatus').value = o.stakeholderStatus || '';
+            observationRatings = {
+                engagement: o.engagementRating || o.engagement || 0,
+                methodology: o.methodology || 0,
+                tlm: o.tlm || 0
+            };
+            updateStars(document.getElementById('ratingEngagement'), observationRatings.engagement);
+            updateStars(document.getElementById('ratingMethodology'), observationRatings.methodology);
+            updateStars(document.getElementById('ratingTLM'), observationRatings.tlm);
             document.getElementById('observationModalTitle').innerHTML = '<i class="fas fa-clipboard-check"></i> Edit Observation';
         }
     }
@@ -2349,16 +2636,30 @@ function saveObservation(e) {
     const data = {
         school: document.getElementById('observationSchool').value.trim(),
         teacher: document.getElementById('observationTeacher').value.trim(),
+        teacherPhone: document.getElementById('observationTeacherPhone').value.trim(),
+        teacherStage: document.getElementById('observationTeacherStage').value,
+        cluster: document.getElementById('observationCluster').value.trim(),
+        block: document.getElementById('observationBlock').value.trim(),
         date: document.getElementById('observationDate').value,
-        class: document.getElementById('observationClass').value,
+        observationStatus: document.getElementById('observationStatus').value,
         subject: document.getElementById('observationSubject').value,
+        class: document.getElementById('observationClass').value,
+        observedWhileTeaching: document.getElementById('observationObservedTeaching').value,
+        engagementLevel: document.getElementById('observationEngagement').value,
+        practiceType: document.getElementById('observationPracticeType').value,
+        practiceSerial: document.getElementById('observationPracticeSerial').value.trim(),
+        practice: document.getElementById('observationPractice').value.trim(),
+        group: document.getElementById('observationGroup').value.trim(),
         topic: document.getElementById('observationTopic').value.trim(),
-        engagement: observationRatings.engagement,
+        engagementRating: observationRatings.engagement,
         methodology: observationRatings.methodology,
         tlm: observationRatings.tlm,
+        notes: document.getElementById('observationNotes').value.trim(),
         strengths: document.getElementById('observationStrengths').value.trim(),
         areas: document.getElementById('observationAreas').value.trim(),
         suggestions: document.getElementById('observationSuggestions').value.trim(),
+        observer: document.getElementById('observationObserver').value.trim(),
+        stakeholderStatus: document.getElementById('observationStakeholderStatus').value,
     };
 
     if (id) {
@@ -2392,54 +2693,2507 @@ function deleteObservation(id) {
     refreshPlannerIfVisible();
 }
 
+// ===== Observation Tabs =====
+function switchObsTab(tab) {
+    document.querySelectorAll('.obs-tab').forEach(t => t.classList.toggle('active', t.dataset.tab === tab));
+    document.querySelectorAll('.obs-tab-content').forEach(c => c.classList.remove('active'));
+    const tabMap = { list: 'obsTabList', analytics: 'obsTabAnalytics', planner: 'obsTabPlanner', aianalysis: 'obsTabAianalysis' };
+    const el = document.getElementById(tabMap[tab] || 'obsTabList');
+    if (el) el.classList.add('active');
+    if (tab === 'analytics') renderObsAnalytics();
+    if (tab === 'planner') renderSmartPlanner();
+}
+
+// ===== Observation Stats =====
+function updateObsStats(observations) {
+    const total = observations.length;
+    const schools = new Set(observations.map(o => o.school).filter(Boolean)).size;
+    const teachers = new Set(observations.map(o => o.teacher).filter(Boolean)).size;
+    const observed = observations.filter(o => o.observationStatus === 'Yes').length;
+    const engagedCount = observations.filter(o => o.engagementLevel === 'More Engaged' || o.engagementLevel === 'Engaged').length;
+    const engagedPct = total > 0 ? Math.round(engagedCount / total * 100) : 0;
+
+    const s = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
+    s('obsStatTotal', total);
+    s('obsStatSchools', schools);
+    s('obsStatTeachers', teachers);
+    s('obsStatObserved', observed);
+    s('obsStatEngaged', engagedPct + '%');
+}
+
 function renderObservations() {
     const observations = DB.get('observations');
     const container = document.getElementById('observationsContainer');
-    const subjectFilter = document.getElementById('observationSubjectFilter').value;
-    const search = document.getElementById('observationSearchInput').value.toLowerCase();
+    const subjectFilter = document.getElementById('observationSubjectFilter')?.value || 'all';
+    const engagementFilter = document.getElementById('observationEngagementFilter')?.value || 'all';
+    const typeFilter = document.getElementById('observationTypeFilter')?.value || 'all';
+    const blockFilter = document.getElementById('observationBlockFilter')?.value || 'all';
+    const obsFilter = document.getElementById('observationObsFilter')?.value || 'all';
+    const search = (document.getElementById('observationSearchInput')?.value || '').toLowerCase();
+
+    // Populate block filter
+    populateObsDataLists();
 
     let filtered = observations.filter(o => {
         if (subjectFilter !== 'all' && o.subject !== subjectFilter) return false;
-        if (search && !(o.school || '').toLowerCase().includes(search) && !(o.teacher || '').toLowerCase().includes(search)) return false;
+        if (engagementFilter !== 'all' && o.engagementLevel !== engagementFilter) return false;
+        if (typeFilter !== 'all' && o.practiceType !== typeFilter) return false;
+        if (blockFilter !== 'all' && o.block !== blockFilter) return false;
+        if (obsFilter !== 'all' && o.observationStatus !== obsFilter) return false;
+        if (search) {
+            const hay = [o.school, o.teacher, o.practice, o.group, o.observer, o.topic, o.cluster, o.block, o.notes].filter(Boolean).join(' ').toLowerCase();
+            if (!hay.includes(search)) return false;
+        }
         return true;
     }).sort((a, b) => new Date(b.date) - new Date(a.date));
 
+    updateObsStats(filtered);
+
+    // Store filtered list for load-more
+    window._obsFiltered = filtered;
+    window._obsPageSize = 50;
+    window._obsShowing = Math.min(50, filtered.length);
+
     if (filtered.length === 0) {
-        container.innerHTML = `<div class="empty-state"><i class="fas fa-clipboard-check"></i><h3>No observations found</h3><p>${observations.length === 0 ? 'Start documenting classroom observations' : 'Try adjusting your filters'}</p></div>`;
+        container.innerHTML = `<div class="empty-state"><i class="fas fa-clipboard-check"></i><h3>No observations found</h3><p>${observations.length === 0 ? 'Start documenting classroom observations or import a DMT Excel' : 'Try adjusting your filters'}</p></div>`;
         return;
     }
 
-    container.innerHTML = filtered.map(o => {
+    // Pagination: show max 50 at a time
+    const PAGE_SIZE = 50;
+    const showing = filtered.slice(0, PAGE_SIZE);
+    const hasMore = filtered.length > PAGE_SIZE;
+
+    container.innerHTML = showing.map(o => {
         const d = new Date(o.date);
+        const engClass = o.engagementLevel === 'More Engaged' ? 'engagement-high' :
+                         o.engagementLevel === 'Engaged' ? 'engagement-mid' : 'engagement-low';
+        const obsStatusClass = o.observationStatus === 'Yes' ? 'obs-yes' :
+                               o.observationStatus === 'Not_Observed' ? 'obs-notobs' : 'obs-no';
+        const obsStatusLabel = o.observationStatus === 'Yes' ? 'Observed' :
+                               o.observationStatus === 'Not_Observed' ? 'Not Observed' : 'Not Done';
         const starsHtml = (val) => {
+            if (!val) return '';
             let s = '';
             for (let i = 1; i <= 5; i++) s += `<i class="fas fa-star" style="color:${i <= val ? 'var(--accent)' : 'var(--text-muted)'}; font-size:10px;"></i>`;
             return s;
         };
-        const preview = o.strengths || o.areas || o.suggestions || '';
+        const preview = o.notes || o.strengths || o.areas || o.suggestions || '';
+        const practicePreview = o.practice ? (o.practice.length > 80 ? o.practice.substring(0, 80) + '...' : o.practice) : '';
+
         return `<div class="observation-item" onclick="openObservationModal('${o.id}')">
             <div class="observation-header">
                 <h4>${escapeHtml(o.school)}</h4>
-                <span class="observation-date">${d.toLocaleDateString('en-IN')}</span>
+                <div class="obs-header-right">
+                    <span class="obs-status-badge ${obsStatusClass}">${obsStatusLabel}</span>
+                    <span class="observation-date">${d.toLocaleDateString('en-IN')}</span>
+                </div>
             </div>
             <div class="observation-meta-row">
                 ${o.teacher ? `<span><i class="fas fa-user"></i> ${escapeHtml(o.teacher)}</span>` : ''}
-                <span><i class="fas fa-book"></i> ${escapeHtml(o.subject)}</span>
-                <span><i class="fas fa-graduation-cap"></i> ${escapeHtml(o.class || '')}</span>
-                ${o.topic ? `<span><i class="fas fa-tag"></i> ${escapeHtml(o.topic)}</span>` : ''}
+                ${o.subject ? `<span><i class="fas fa-book"></i> ${escapeHtml(o.subject)}</span>` : ''}
+                ${o.class ? `<span><i class="fas fa-graduation-cap"></i> ${escapeHtml(o.class)}</span>` : ''}
+                ${o.block ? `<span><i class="fas fa-map-marker-alt"></i> ${escapeHtml(o.block)}</span>` : ''}
+                ${o.cluster ? `<span><i class="fas fa-layer-group"></i> ${escapeHtml(o.cluster)}</span>` : ''}
             </div>
-            <div class="observation-ratings">
-                <span class="mini-rating">Engagement: <span class="stars">${starsHtml(o.engagement)}</span></span>
-                <span class="mini-rating">Methodology: <span class="stars">${starsHtml(o.methodology)}</span></span>
-                <span class="mini-rating">TLM Use: <span class="stars">${starsHtml(o.tlm)}</span></span>
+            <div class="observation-meta-row obs-meta-row-2">
+                ${o.engagementLevel ? `<span class="obs-engagement-badge ${engClass}"><i class="fas fa-fire"></i> ${escapeHtml(o.engagementLevel)}</span>` : ''}
+                ${o.practiceType ? `<span class="obs-practice-type-badge">${escapeHtml(o.practiceType)}</span>` : ''}
+                ${o.practiceSerial ? `<span class="obs-serial-badge">${escapeHtml(o.practiceSerial)}</span>` : ''}
+                ${o.observedWhileTeaching === 'True' ? `<span class="obs-teaching-badge"><i class="fas fa-chalkboard"></i> While Teaching</span>` : ''}
+                ${o.observer ? `<span><i class="fas fa-user-tie"></i> ${escapeHtml(o.observer)}</span>` : ''}
             </div>
-            ${preview ? `<div class="observation-notes-preview">${escapeHtml(preview)}</div>` : ''}
+            ${practicePreview ? `<div class="obs-practice-preview"><i class="fas fa-tasks"></i> ${escapeHtml(practicePreview)}</div>` : ''}
+            ${(o.engagementRating || o.methodology || o.tlm) ? `<div class="observation-ratings">
+                ${o.engagementRating ? `<span class="mini-rating">Engagement: <span class="stars">${starsHtml(o.engagementRating)}</span></span>` : ''}
+                ${o.methodology ? `<span class="mini-rating">Methodology: <span class="stars">${starsHtml(o.methodology)}</span></span>` : ''}
+                ${o.tlm ? `<span class="mini-rating">TLM Use: <span class="stars">${starsHtml(o.tlm)}</span></span>` : ''}
+            </div>` : ''}
+            ${preview ? `<div class="observation-notes-preview">${escapeHtml(preview.substring(0, 150))}${preview.length > 150 ? '...' : ''}</div>` : ''}
             <div class="observation-item-actions">
                 <button class="btn btn-sm btn-outline" onclick="event.stopPropagation(); openObservationModal('${o.id}')"><i class="fas fa-edit"></i> Edit</button>
+                <button class="btn btn-sm btn-outline" onclick="event.stopPropagation(); printObsFeedback('${o.id}')"><i class="fas fa-print"></i> Feedback</button>
                 <button class="btn btn-sm btn-danger" onclick="event.stopPropagation(); deleteObservation('${o.id}')"><i class="fas fa-trash"></i> Delete</button>
             </div>
         </div>`;
+    }).join('') + (hasMore ? `<div class="obs-load-more"><button class="btn btn-outline" onclick="loadMoreObservations()"><i class="fas fa-chevron-down"></i> Showing ${PAGE_SIZE} of ${filtered.length.toLocaleString()} — Load More</button></div>` : `<div class="obs-load-more-info">${filtered.length.toLocaleString()} observations</div>`);
+}
+
+function loadMoreObservations() {
+    if (!window._obsFiltered) return;
+    const container = document.getElementById('observationsContainer');
+    const nextBatch = 50;
+    const start = window._obsShowing;
+    const end = Math.min(start + nextBatch, window._obsFiltered.length);
+    const newItems = window._obsFiltered.slice(start, end);
+    window._obsShowing = end;
+    const hasMore = end < window._obsFiltered.length;
+
+    // Remove the load-more button
+    const loadMoreEl = container.querySelector('.obs-load-more');
+    if (loadMoreEl) loadMoreEl.remove();
+    const infoEl = container.querySelector('.obs-load-more-info');
+    if (infoEl) infoEl.remove();
+
+    const renderCard = (o) => {
+        const d = new Date(o.date);
+        const engClass = o.engagementLevel === 'More Engaged' ? 'engagement-high' :
+                         o.engagementLevel === 'Engaged' ? 'engagement-mid' : 'engagement-low';
+        const obsStatusClass = o.observationStatus === 'Yes' ? 'obs-yes' :
+                               o.observationStatus === 'Not_Observed' ? 'obs-notobs' : 'obs-no';
+        const obsStatusLabel = o.observationStatus === 'Yes' ? 'Observed' :
+                               o.observationStatus === 'Not_Observed' ? 'Not Observed' : 'Not Done';
+        const starsHtml = (val) => {
+            if (!val) return '';
+            let s = '';
+            for (let i = 1; i <= 5; i++) s += `<i class="fas fa-star" style="color:${i <= val ? 'var(--accent)' : 'var(--text-muted)'}; font-size:10px;"></i>`;
+            return s;
+        };
+        const preview = o.notes || o.strengths || o.areas || o.suggestions || '';
+        const practicePreview = o.practice ? (o.practice.length > 80 ? o.practice.substring(0, 80) + '...' : o.practice) : '';
+
+        return `<div class="observation-item" onclick="openObservationModal('${o.id}')">
+            <div class="observation-header">
+                <h4>${escapeHtml(o.school)}</h4>
+                <div class="obs-header-right">
+                    <span class="obs-status-badge ${obsStatusClass}">${obsStatusLabel}</span>
+                    <span class="observation-date">${d.toLocaleDateString('en-IN')}</span>
+                </div>
+            </div>
+            <div class="observation-meta-row">
+                ${o.teacher ? `<span><i class="fas fa-user"></i> ${escapeHtml(o.teacher)}</span>` : ''}
+                ${o.subject ? `<span><i class="fas fa-book"></i> ${escapeHtml(o.subject)}</span>` : ''}
+                ${o.class ? `<span><i class="fas fa-graduation-cap"></i> ${escapeHtml(o.class)}</span>` : ''}
+                ${o.block ? `<span><i class="fas fa-map-marker-alt"></i> ${escapeHtml(o.block)}</span>` : ''}
+                ${o.cluster ? `<span><i class="fas fa-layer-group"></i> ${escapeHtml(o.cluster)}</span>` : ''}
+            </div>
+            <div class="observation-meta-row obs-meta-row-2">
+                ${o.engagementLevel ? `<span class="obs-engagement-badge ${engClass}"><i class="fas fa-fire"></i> ${escapeHtml(o.engagementLevel)}</span>` : ''}
+                ${o.practiceType ? `<span class="obs-practice-type-badge">${escapeHtml(o.practiceType)}</span>` : ''}
+                ${o.practiceSerial ? `<span class="obs-serial-badge">${escapeHtml(o.practiceSerial)}</span>` : ''}
+                ${o.observedWhileTeaching === 'True' ? `<span class="obs-teaching-badge"><i class="fas fa-chalkboard"></i> While Teaching</span>` : ''}
+                ${o.observer ? `<span><i class="fas fa-user-tie"></i> ${escapeHtml(o.observer)}</span>` : ''}
+            </div>
+            ${practicePreview ? `<div class="obs-practice-preview"><i class="fas fa-tasks"></i> ${escapeHtml(practicePreview)}</div>` : ''}
+            ${(o.engagementRating || o.methodology || o.tlm) ? `<div class="observation-ratings">
+                ${o.engagementRating ? `<span class="mini-rating">Engagement: <span class="stars">${starsHtml(o.engagementRating)}</span></span>` : ''}
+                ${o.methodology ? `<span class="mini-rating">Methodology: <span class="stars">${starsHtml(o.methodology)}</span></span>` : ''}
+                ${o.tlm ? `<span class="mini-rating">TLM Use: <span class="stars">${starsHtml(o.tlm)}</span></span>` : ''}
+            </div>` : ''}
+            ${preview ? `<div class="observation-notes-preview">${escapeHtml(preview.substring(0, 150))}${preview.length > 150 ? '...' : ''}</div>` : ''}
+            <div class="observation-item-actions">
+                <button class="btn btn-sm btn-outline" onclick="event.stopPropagation(); openObservationModal('${o.id}')"><i class="fas fa-edit"></i> Edit</button>
+                <button class="btn btn-sm btn-outline" onclick="event.stopPropagation(); printObsFeedback('${o.id}')"><i class="fas fa-print"></i> Feedback</button>
+                <button class="btn btn-sm btn-danger" onclick="event.stopPropagation(); deleteObservation('${o.id}')"><i class="fas fa-trash"></i> Delete</button>
+            </div>
+        </div>`;
+    };
+
+    container.innerHTML += newItems.map(renderCard).join('') +
+        (hasMore ? `<div class="obs-load-more"><button class="btn btn-outline" onclick="loadMoreObservations()"><i class="fas fa-chevron-down"></i> Showing ${end.toLocaleString()} of ${window._obsFiltered.length.toLocaleString()} — Load More</button></div>` : `<div class="obs-load-more-info">${window._obsFiltered.length.toLocaleString()} observations</div>`);
+}
+
+// ===== DMT Excel Import =====
+let _dmtImportMode = 'add';
+
+function toggleObsImportMenu() {
+    const menu = document.getElementById('obsImportMenu');
+    if (menu) menu.classList.toggle('show');
+}
+
+// Close menu when clicking outside
+document.addEventListener('click', e => {
+    const menu = document.getElementById('obsImportMenu');
+    const btn = document.getElementById('obsImportBtn');
+    if (menu && !menu.contains(e.target) && btn && !btn.contains(e.target)) {
+        menu.classList.remove('show');
+    }
+});
+
+function triggerDMTImport(mode) {
+    _dmtImportMode = mode;
+    document.getElementById('obsImportMenu')?.classList.remove('show');
+    document.getElementById('dmtImportFile').click();
+}
+
+// ===== Cluster Checkbox Helpers =====
+function populateClusterCheckboxes(listId, clusters, onchangeExpr) {
+    const listEl = document.getElementById(listId);
+    if (!listEl) return;
+    listEl.innerHTML = clusters.map(c =>
+        `<label class="cluster-cb-item" data-cluster="${escapeHtml(c)}">
+            <input type="checkbox" value="${escapeHtml(c)}" checked onchange="${onchangeExpr}; updateClusterCount('${listEl.closest('.cluster-checkbox-wrap')?.id}', '${listEl.closest('.cluster-checkbox-wrap')?.id ? listEl.closest('.cluster-checkbox-wrap').id.replace('Filter', '') + 'Count' : ''}')">
+            <span>${escapeHtml(c)}</span>
+        </label>`
+    ).join('');
+    // Reset search
+    const searchInput = listEl.closest('.cluster-checkbox-wrap')?.querySelector('.cluster-cb-search input');
+    if (searchInput) searchInput.value = '';
+    // Update select-all
+    const selAll = listEl.closest('.cluster-checkbox-wrap')?.querySelector('.cluster-select-all input');
+    if (selAll) selAll.checked = true;
+}
+
+function getSelectedClusters(listId) {
+    const listEl = document.getElementById(listId);
+    if (!listEl) return null;
+    const all = listEl.querySelectorAll('input[type="checkbox"]');
+    const checked = listEl.querySelectorAll('input[type="checkbox"]:checked');
+    if (all.length === 0 || checked.length === all.length) return null; // null = all selected
+    return new Set([...checked].map(cb => cb.value));
+}
+
+function toggleAllClusters(wrapId, checked) {
+    const wrap = document.getElementById(wrapId);
+    if (!wrap) return;
+    wrap.querySelectorAll('.cluster-cb-list input[type="checkbox"]').forEach(cb => {
+        cb.checked = checked;
+    });
+    updateClusterCount(wrapId, wrapId.replace('Filter', '') + 'Count');
+}
+
+function filterClusterCheckboxes(wrapId, query) {
+    const wrap = document.getElementById(wrapId);
+    if (!wrap) return;
+    const q = query.toLowerCase();
+    wrap.querySelectorAll('.cluster-cb-item').forEach(item => {
+        const name = item.dataset.cluster.toLowerCase();
+        item.style.display = name.includes(q) ? '' : 'none';
+    });
+}
+
+function updateClusterCount(wrapId, countId) {
+    const wrap = document.getElementById(wrapId);
+    const countEl = document.getElementById(countId);
+    if (!wrap || !countEl) return;
+    const all = wrap.querySelectorAll('.cluster-cb-list input[type="checkbox"]');
+    const checked = wrap.querySelectorAll('.cluster-cb-list input[type="checkbox"]:checked');
+    countEl.textContent = checked.length === all.length ? `All (${all.length})` : `${checked.length} of ${all.length}`;
+    // Update select-all checkbox state
+    const selAll = wrap.querySelector('.cluster-select-all input');
+    if (selAll) selAll.checked = checked.length === all.length;
+}
+
+// ===== Filtered Import =====
+let _filteredImportRows = [];
+let _filteredImportFileName = '';
+
+function triggerFilteredImport() {
+    document.getElementById('obsImportMenu')?.classList.remove('show');
+    document.getElementById('dmtFilteredImportFile').click();
+}
+
+async function loadFilteredImportPreview(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+    event.target.value = '';
+
+    _filteredImportFileName = file.name;
+    _filteredImportRows = [];
+
+    // Show modal with loading state
+    document.getElementById('filteredImportLoading').style.display = 'flex';
+    document.getElementById('filteredImportContent').style.display = 'none';
+    document.getElementById('filteredImportConfirmBtn').disabled = true;
+    document.getElementById('filteredImportModal').classList.add('active');
+
+    try {
+        const data = await file.arrayBuffer();
+        const wb = XLSX.read(data, { type: 'array', cellDates: true });
+
+        let rows = [];
+        for (const sheetName of wb.SheetNames) {
+            const ws = wb.Sheets[sheetName];
+            const sheetRows = XLSX.utils.sheet_to_json(ws);
+            if (sheetRows.length > 0) rows = rows.concat(sheetRows);
+        }
+
+        if (rows.length === 0) {
+            showToast('No data found in Excel file', 'error');
+            closeModal('filteredImportModal');
+            return;
+        }
+
+        const cols = Object.keys(rows[0]);
+        const isDMT = cols.some(c => c.includes('Teacher: Teacher Name') || c.includes('Practice Type') || c.includes('Teacher Engagement Level'));
+        if (!isDMT) {
+            showToast('This does not appear to be a DMT Field Notes Excel.', 'error', 6000);
+            closeModal('filteredImportModal');
+            return;
+        }
+
+        _filteredImportRows = rows;
+
+        // Extract unique values for filters
+        const states = [...new Set(rows.map(r => (r['State'] || '').trim()).filter(Boolean))].sort();
+        const blocks = [...new Set(rows.map(r => (r['Block Name'] || '').trim()).filter(Boolean))].sort();
+        const clusters = [...new Set(rows.map(r => (r['Cluster'] || '').trim()).filter(Boolean))].sort();
+        const observers = [...new Set(rows.map(r => (r['Actual Observer: Full Name'] || r['Primary Observer: Full Name'] || '').trim()).filter(Boolean))].sort();
+
+        const populateSelect = (id, label, values) => {
+            const el = document.getElementById(id);
+            if (!el) return;
+            el.innerHTML = `<option value="all">All ${label} (${values.length})</option>` +
+                values.map(v => `<option value="${escapeHtml(v)}">${escapeHtml(v)}</option>`).join('');
+        };
+
+        populateSelect('importFilterState', 'States', states);
+        populateSelect('importFilterBlock', 'Blocks', blocks);
+        populateClusterCheckboxes('importClusterList', clusters, 'previewFilteredImport()');
+        updateClusterCount('importFilterCluster', 'importClusterCount');
+        populateSelect('importFilterObserver', 'Observers', observers);
+
+        document.getElementById('filteredImportFileName').textContent = file.name;
+        document.getElementById('filteredImportTotalRows').textContent = rows.length.toLocaleString();
+
+        document.getElementById('filteredImportLoading').style.display = 'none';
+        document.getElementById('filteredImportContent').style.display = 'block';
+        previewFilteredImport();
+    } catch (err) {
+        console.error('Filtered import read error:', err);
+        showToast('Failed to read Excel: ' + err.message, 'error');
+        closeModal('filteredImportModal');
+    }
+}
+
+function getImportFilters() {
+    return {
+        state: document.getElementById('importFilterState')?.value || 'all',
+        block: document.getElementById('importFilterBlock')?.value || 'all',
+        clusters: getSelectedClusters('importClusterList'),
+        observer: document.getElementById('importFilterObserver')?.value || 'all'
+    };
+}
+
+function getFilteredImportRows() {
+    const f = getImportFilters();
+    const anyFilter = f.state !== 'all' || f.block !== 'all' || f.clusters !== null || f.observer !== 'all';
+    if (!anyFilter) return { rows: _filteredImportRows, anyFilter: false };
+
+    const filtered = _filteredImportRows.filter(row => {
+        const rowState = (row['State'] || '').trim();
+        const rowBlock = (row['Block Name'] || '').trim();
+        const rowCluster = (row['Cluster'] || '').trim();
+        const rowObserver = (row['Actual Observer: Full Name'] || row['Primary Observer: Full Name'] || '').trim();
+        if (f.state !== 'all' && rowState !== f.state) return false;
+        if (f.block !== 'all' && rowBlock !== f.block) return false;
+        if (f.clusters !== null && !f.clusters.has(rowCluster)) return false;
+        if (f.observer !== 'all' && rowObserver !== f.observer) return false;
+        return true;
+    });
+    return { rows: filtered, anyFilter: true };
+}
+
+function previewFilteredImport() {
+    const { rows, anyFilter } = getFilteredImportRows();
+    const total = _filteredImportRows.length;
+    const previewEl = document.getElementById('filteredImportPreview');
+    const countEl = document.getElementById('filteredImportCount');
+    const btn = document.getElementById('filteredImportConfirmBtn');
+
+    const schools = [...new Set(rows.map(r => (r['School Name'] || '').trim()).filter(Boolean))];
+    const teachers = [...new Set(rows.map(r => (r['Teacher: Teacher Name'] || '').trim()).filter(Boolean))];
+    const blocks = [...new Set(rows.map(r => (r['Block Name'] || '').trim()).filter(Boolean))];
+    const clusters = [...new Set(rows.map(r => (r['Cluster'] || '').trim()).filter(Boolean))];
+
+    const filterLabel = anyFilter
+        ? `<strong>${rows.length.toLocaleString()}</strong> of ${total.toLocaleString()} rows match your filters`
+        : `All <strong>${total.toLocaleString()}</strong> rows will be imported (no filter applied)`;
+
+    previewEl.innerHTML = `
+        <div class="unload-preview-stats">
+            <div class="unload-preview-count" style="color: var(--accent)">
+                <i class="fas fa-${anyFilter ? 'filter' : 'database'}"></i>
+                ${filterLabel}
+            </div>
+            <div class="unload-preview-details">
+                <span><i class="fas fa-school"></i> ${schools.length} Schools</span>
+                <span><i class="fas fa-chalkboard-teacher"></i> ${teachers.length} Teachers</span>
+                <span><i class="fas fa-map-marker-alt"></i> ${blocks.length} Blocks</span>
+                <span><i class="fas fa-layer-group"></i> ${clusters.length} Clusters</span>
+            </div>
+        </div>`;
+
+    btn.disabled = rows.length === 0;
+    countEl.textContent = rows.length.toLocaleString();
+}
+
+function executeFilteredImport() {
+    const { rows } = getFilteredImportRows();
+    if (rows.length === 0) return;
+
+    const f = getImportFilters();
+    const filterDesc = [f.state !== 'all' ? `State: ${f.state}` : '', f.block !== 'all' ? `Block: ${f.block}` : '', f.clusters !== null ? `Clusters: ${[...f.clusters].join(', ')}` : '', f.observer !== 'all' ? `Observer: ${f.observer}` : ''].filter(Boolean).join(', ') || 'No filter';
+
+    if (!confirm(`Import ${rows.length.toLocaleString()} records from "${_filteredImportFileName}"?\n\nFilter: ${filterDesc}\n\nThese will be ADDED to your existing observations.`)) return;
+
+    let observations = DB.get('observations');
+    let imported = 0;
+    const buildKey = (o) => `${o.nid || ''}|${o.date || ''}|${o.practiceSerial || ''}`;
+    const existingKeys = new Set(observations.filter(o => o.source === 'DMT Import').map(buildKey));
+
+    rows.forEach(row => {
+        const nid = String(row['NID'] || '').trim();
+        let dateStr = '';
+        const rawDate = row['Response Date'];
+        if (rawDate instanceof Date) {
+            dateStr = rawDate.toISOString().split('T')[0];
+        } else if (typeof rawDate === 'string' && rawDate) {
+            const parsed = new Date(rawDate);
+            if (!isNaN(parsed)) dateStr = parsed.toISOString().split('T')[0];
+        }
+
+        const obs = {
+            id: DB.generateId(),
+            nid: nid,
+            school: (row['School Name'] || '').trim(),
+            teacher: (row['Teacher: Teacher Name'] || '').trim(),
+            teacherPhone: String(row['Teacher Phone No.'] || '').trim(),
+            teacherStage: (row['Teacher Stage'] || '').trim(),
+            cluster: (row['Cluster'] || '').trim(),
+            block: (row['Block Name'] || '').trim(),
+            date: dateStr || new Date().toISOString().split('T')[0],
+            observationStatus: (row['Observation'] || 'Yes').trim(),
+            observedWhileTeaching: (row['Observed While Teaching'] || '').trim(),
+            engagementLevel: (row['Teacher Engagement Level'] || '').trim(),
+            practiceType: (row['Practice Type'] || '').trim(),
+            practiceSerial: (row['Practice Master: Practice Serial No'] || '').trim(),
+            practice: (row['Practice'] || '').trim(),
+            group: (row['Group'] || '').trim(),
+            subject: (row['Subject'] || '').trim(),
+            notes: (row['Notes'] || '').trim(),
+            observer: (row['Actual Observer: Full Name'] || row['Primary Observer: Full Name'] || '').trim(),
+            stakeholderStatus: (row['Stakeholder Status'] || '').trim(),
+            history: String(row['History'] || '0').trim(),
+            district: (row['District Name'] || '').trim(),
+            state: (row['State'] || '').trim(),
+            createdAt: new Date().toISOString(),
+            source: 'DMT Import'
+        };
+
+        const key = buildKey(obs);
+        if (existingKeys.has(key)) return;
+
+        observations.push(obs);
+        existingKeys.add(key);
+        imported++;
+    });
+
+    DB.set('observations', observations);
+    closeModal('filteredImportModal');
+    _filteredImportRows = [];
+    renderObservations();
+    renderDashboard();
+    showToast(`Imported ${imported.toLocaleString()} records (${filterDesc}). ${(rows.length - imported)} duplicates skipped.`, 'success', 6000);
+    setTimeout(() => switchObsTab('analytics'), 500);
+}
+
+function unloadImportedData() {
+    document.getElementById('obsImportMenu')?.classList.remove('show');
+    const observations = DB.get('observations');
+    const imported = observations.filter(o => o.source === 'DMT Import');
+    if (imported.length === 0) {
+        showToast('No imported data found to unload', 'info');
+        return;
+    }
+    if (!confirm(`Unload ALL ${imported.length.toLocaleString()} imported observations?\n\nThis will remove all DMT-imported records but keep your manually added observations.\n\nContinue?`)) return;
+    const manual = observations.filter(o => o.source !== 'DMT Import');
+    DB.set('observations', manual);
+    renderObservations();
+    renderDashboard();
+    showToast(`Unloaded ${imported.length.toLocaleString()} imported observations. ${manual.length} manual records kept.`, 'success', 5000);
+}
+
+function openUnloadModal() {
+    document.getElementById('obsImportMenu')?.classList.remove('show');
+    const observations = DB.get('observations');
+    const imported = observations.filter(o => o.source === 'DMT Import');
+    if (imported.length === 0) {
+        showToast('No imported data found to unload', 'info');
+        return;
+    }
+
+    // Populate filter dropdowns from imported data only
+    const states = [...new Set(imported.map(o => o.state).filter(Boolean))].sort();
+    const blocks = [...new Set(imported.map(o => o.block).filter(Boolean))].sort();
+    const clusters = [...new Set(imported.map(o => o.cluster).filter(Boolean))].sort();
+    const observers = [...new Set(imported.map(o => o.observer).filter(Boolean))].sort();
+
+    const populateSelect = (id, label, values) => {
+        const el = document.getElementById(id);
+        if (!el) return;
+        el.innerHTML = `<option value="all">All ${label} (${values.length})</option>` +
+            values.map(v => `<option value="${escapeHtml(v)}">${escapeHtml(v)}</option>`).join('');
+    };
+
+    populateSelect('unloadState', 'States', states);
+    populateSelect('unloadBlock', 'Blocks', blocks);
+    populateClusterCheckboxes('unloadClusterList', clusters, 'previewUnload()');
+    updateClusterCount('unloadCluster', 'unloadClusterCount');
+    populateSelect('unloadObserver', 'Observers', observers);
+
+    previewUnload();
+    document.getElementById('unloadModal').classList.add('active');
+}
+
+function getUnloadFilters() {
+    return {
+        state: document.getElementById('unloadState')?.value || 'all',
+        block: document.getElementById('unloadBlock')?.value || 'all',
+        clusters: getSelectedClusters('unloadClusterList'),
+        observer: document.getElementById('unloadObserver')?.value || 'all'
+    };
+}
+
+function getUnloadMatches() {
+    const f = getUnloadFilters();
+    const observations = DB.get('observations');
+    const imported = observations.filter(o => o.source === 'DMT Import');
+    const anyFilter = f.state !== 'all' || f.block !== 'all' || f.clusters !== null || f.observer !== 'all';
+    if (!anyFilter) return { matches: [], total: imported.length, anyFilter: false };
+
+    const matches = imported.filter(o => {
+        if (f.state !== 'all' && o.state !== f.state) return false;
+        if (f.block !== 'all' && o.block !== f.block) return false;
+        if (f.clusters !== null && !f.clusters.has(o.cluster)) return false;
+        if (f.observer !== 'all' && o.observer !== f.observer) return false;
+        return true;
+    });
+    return { matches, total: imported.length, anyFilter: true };
+}
+
+function previewUnload() {
+    const f = getUnloadFilters();
+    const observations = DB.get('observations');
+    const imported = observations.filter(o => o.source === 'DMT Import');
+
+    // Cascade: filter available options based on current selections
+    let pool = imported;
+    if (f.state !== 'all') pool = pool.filter(o => o.state === f.state);
+
+    const cascadeBlocks = [...new Set(pool.map(o => o.block).filter(Boolean))].sort();
+    const blockSel = document.getElementById('unloadBlock');
+    const curBlock = blockSel?.value || 'all';
+    if (blockSel) {
+        blockSel.innerHTML = `<option value="all">All Blocks (${cascadeBlocks.length})</option>` +
+            cascadeBlocks.map(v => `<option value="${escapeHtml(v)}"${v === curBlock ? ' selected' : ''}>${escapeHtml(v)}</option>`).join('');
+    }
+
+    if (f.block !== 'all') pool = pool.filter(o => o.block === f.block);
+
+    const cascadeClusters = [...new Set(pool.map(o => o.cluster).filter(Boolean))].sort();
+    const clusterSel = document.getElementById('unloadCluster');
+    const curCluster = clusterSel?.value || 'all';
+    if (clusterSel) {
+        clusterSel.innerHTML = `<option value="all">All Clusters (${cascadeClusters.length})</option>` +
+            cascadeClusters.map(v => `<option value="${escapeHtml(v)}"${v === curCluster ? ' selected' : ''}>${escapeHtml(v)}</option>`).join('');
+    }
+
+    if (f.cluster !== 'all') pool = pool.filter(o => o.cluster === f.cluster);
+
+    const cascadeObservers = [...new Set(pool.map(o => o.observer).filter(Boolean))].sort();
+    const obsSel = document.getElementById('unloadObserver');
+    const curObs = obsSel?.value || 'all';
+    if (obsSel) {
+        obsSel.innerHTML = `<option value="all">All Observers (${cascadeObservers.length})</option>` +
+            cascadeObservers.map(v => `<option value="${escapeHtml(v)}"${v === curObs ? ' selected' : ''}>${escapeHtml(v)}</option>`).join('');
+    }
+
+    // Now compute matches
+    const { matches, total, anyFilter } = getUnloadMatches();
+    const previewEl = document.getElementById('unloadPreview');
+    const countEl = document.getElementById('unloadCount');
+    const btn = document.getElementById('unloadConfirmBtn');
+
+    if (!anyFilter) {
+        previewEl.innerHTML = `<div class="unload-preview-empty"><i class="fas fa-info-circle"></i> Select at least one filter to preview which records will be removed<br><small>${total.toLocaleString()} imported records available</small></div>`;
+        btn.disabled = true;
+        countEl.textContent = '0';
+        return;
+    }
+
+    const schools = [...new Set(matches.map(o => o.school).filter(Boolean))];
+    const teachers = [...new Set(matches.map(o => o.teacher).filter(Boolean))];
+    const blocks = [...new Set(matches.map(o => o.block).filter(Boolean))];
+    const clusters = [...new Set(matches.map(o => o.cluster).filter(Boolean))];
+
+    previewEl.innerHTML = `
+        <div class="unload-preview-stats">
+            <div class="unload-preview-count">
+                <i class="fas fa-exclamation-triangle"></i>
+                <strong>${matches.length.toLocaleString()}</strong> of ${total.toLocaleString()} imported records will be removed
+            </div>
+            <div class="unload-preview-details">
+                <span><i class="fas fa-school"></i> ${schools.length} Schools</span>
+                <span><i class="fas fa-chalkboard-teacher"></i> ${teachers.length} Teachers</span>
+                <span><i class="fas fa-map-marker-alt"></i> ${blocks.length} Blocks</span>
+                <span><i class="fas fa-layer-group"></i> ${clusters.length} Clusters</span>
+            </div>
+        </div>`;
+
+    btn.disabled = matches.length === 0;
+    countEl.textContent = matches.length.toLocaleString();
+}
+
+function executeFilteredUnload() {
+    const { matches, anyFilter } = getUnloadMatches();
+    if (!anyFilter || matches.length === 0) return;
+
+    const f = getUnloadFilters();
+    const filterDesc = [f.state !== 'all' ? `State: ${f.state}` : '', f.block !== 'all' ? `Block: ${f.block}` : '', f.clusters !== null ? `Clusters: ${[...f.clusters].join(', ')}` : '', f.observer !== 'all' ? `Observer: ${f.observer}` : ''].filter(Boolean).join(', ');
+
+    if (!confirm(`Unload ${matches.length.toLocaleString()} imported observations matching:\n${filterDesc}\n\nYour manual entries will NOT be affected.\n\nContinue?`)) return;
+
+    const matchIds = new Set(matches.map(o => o.id));
+    const observations = DB.get('observations');
+    const remaining = observations.filter(o => !matchIds.has(o.id));
+    DB.set('observations', remaining);
+    closeModal('unloadModal');
+    renderObservations();
+    renderDashboard();
+    showToast(`Unloaded ${matches.length.toLocaleString()} records (${filterDesc}). ${remaining.length.toLocaleString()} records remaining.`, 'success', 6000);
+}
+
+function clearAllObservations() {
+    document.getElementById('obsImportMenu')?.classList.remove('show');
+    const observations = DB.get('observations');
+    if (observations.length === 0) {
+        showToast('No observations to clear', 'info');
+        return;
+    }
+    if (!confirm(`Delete ALL ${observations.length.toLocaleString()} observations?\n\n⚠️ This will permanently remove every observation record (both imported and manual).\n\nThis cannot be undone!`)) return;
+    const answer = prompt('Type DELETE to confirm:');
+    if (answer !== 'DELETE') { showToast('Cancelled', 'info'); return; }
+    DB.set('observations', []);
+    renderObservations();
+    renderDashboard();
+    showToast('All observations cleared', 'info');
+}
+
+async function importDMTExcel(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+
+    const mode = _dmtImportMode || 'add';
+    const modeLabel = mode === 'replace' ? 'REPLACE all existing observations with' : 'ADD';
+    if (!confirm(`Import "${file.name}"?\n\nThis will ${modeLabel} observation records from the DMT Excel file.\n\nContinue?`)) {
+        event.target.value = '';
+        return;
+    }
+
+    showToast('Reading Excel file...', 'info');
+
+    try {
+        const data = await file.arrayBuffer();
+        const wb = XLSX.read(data, { type: 'array', cellDates: true });
+        
+        // Read ALL sheets and combine rows (in case data spans multiple sheets)
+        let rows = [];
+        for (const sheetName of wb.SheetNames) {
+            const ws = wb.Sheets[sheetName];
+            const sheetRows = XLSX.utils.sheet_to_json(ws);
+            if (sheetRows.length > 0) rows = rows.concat(sheetRows);
+        }
+
+        if (rows.length === 0) {
+            showToast('No data found in Excel file', 'error');
+            event.target.value = '';
+            return;
+        }
+
+        // Detect DMT format by checking column names
+        const cols = Object.keys(rows[0]);
+        const isDMT = cols.some(c => c.includes('Teacher: Teacher Name') || c.includes('Practice Type') || c.includes('Teacher Engagement Level'));
+
+        if (!isDMT) {
+            showToast('This does not appear to be a DMT Field Notes Excel. Expected columns like "Teacher: Teacher Name", "Practice Type" etc.', 'error', 6000);
+            event.target.value = '';
+            return;
+        }
+
+        let observations = mode === 'replace'
+            ? DB.get('observations').filter(o => o.source !== 'DMT Import')
+            : DB.get('observations');
+        if (mode === 'replace') {
+            // In replace mode, also remove old imported data first
+            const manualOnly = observations.filter(o => o.source !== 'DMT Import');
+            observations = manualOnly;
+        }
+        let imported = 0;
+        // Build dedup key: NID + date + practice serial (NID is teacher ID, not unique per row)
+        const buildKey = (o) => `${o.nid || ''}|${o.date || ''}|${o.practiceSerial || ''}`;
+        const existingKeys = new Set(observations.filter(o => o.source === 'DMT Import').map(buildKey));
+
+        rows.forEach(row => {
+            const nid = String(row['NID'] || '').trim();
+
+            // Parse date
+            let dateStr = '';
+            const rawDate = row['Response Date'];
+            if (rawDate instanceof Date) {
+                dateStr = rawDate.toISOString().split('T')[0];
+            } else if (typeof rawDate === 'string' && rawDate) {
+                // Try parsing "9/28/2020, 8:45 AM" format
+                const parsed = new Date(rawDate);
+                if (!isNaN(parsed)) dateStr = parsed.toISOString().split('T')[0];
+            }
+
+            const obs = {
+                id: DB.generateId(),
+                nid: nid,
+                school: (row['School Name'] || '').trim(),
+                teacher: (row['Teacher: Teacher Name'] || '').trim(),
+                teacherPhone: String(row['Teacher Phone No.'] || '').trim(),
+                teacherStage: (row['Teacher Stage'] || '').trim(),
+                cluster: (row['Cluster'] || '').trim(),
+                block: (row['Block Name'] || '').trim(),
+                date: dateStr || new Date().toISOString().split('T')[0],
+                observationStatus: (row['Observation'] || 'Yes').trim(),
+                observedWhileTeaching: (row['Observed While Teaching'] || '').trim(),
+                engagementLevel: (row['Teacher Engagement Level'] || '').trim(),
+                practiceType: (row['Practice Type'] || '').trim(),
+                practiceSerial: (row['Practice Master: Practice Serial No'] || '').trim(),
+                practice: (row['Practice'] || '').trim(),
+                group: (row['Group'] || '').trim(),
+                subject: (row['Subject'] || '').trim(),
+                notes: (row['Notes'] || '').trim(),
+                observer: (row['Actual Observer: Full Name'] || row['Primary Observer: Full Name'] || '').trim(),
+                stakeholderStatus: (row['Stakeholder Status'] || '').trim(),
+                history: String(row['History'] || '0').trim(),
+                district: (row['District Name'] || '').trim(),
+                state: (row['State'] || '').trim(),
+                createdAt: new Date().toISOString(),
+                source: 'DMT Import'
+            };
+
+            // Skip exact duplicates (same teacher + date + practice)
+            const key = buildKey(obs);
+            if (existingKeys.has(key)) return;
+
+            observations.push(obs);
+            existingKeys.add(key);
+            imported++;
+        });
+
+        DB.set('observations', observations);
+        renderObservations();
+        renderDashboard();
+        showToast(`Imported ${imported.toLocaleString()} observations from DMT Excel! (${rows.length - imported} duplicates skipped)`, 'success', 6000);
+        // Auto-switch to analytics tab after import
+        setTimeout(() => switchObsTab('analytics'), 500);
+    } catch (err) {
+        console.error('DMT Import error:', err);
+        showToast('Failed to import: ' + err.message, 'error');
+    }
+    event.target.value = '';
+}
+
+// ===== SMART PLANNER — Intelligent Suggestion Engine =====
+let _spAnalysis = null;
+let _spObs = null;
+let _spCalendarWeekOffset = 0;
+
+function renderSmartPlanner() {
+    const container = document.getElementById('smartPlannerContainer');
+    if (!container) return;
+    const observations = DB.get('observations');
+
+    if (observations.length === 0) {
+        container.innerHTML = `<div class="empty-state"><i class="fas fa-brain"></i><h3>No data available</h3><p>Import DMT Excel data or add observations to activate the Smart Planner</p></div>`;
+        return;
+    }
+
+    _spObs = observations;
+    _spAnalysis = analyzeObservationData(observations);
+    const html = buildSmartPlannerHTML(_spAnalysis, observations);
+    container.innerHTML = html;
+}
+
+/* ---- Expand/collapse any sp-section body ---- */
+function toggleSpSection(el) {
+    const section = el.closest('.sp-section');
+    if (!section) return;
+    section.classList.toggle('collapsed');
+}
+
+/* ---- Expand detail panel inside a card ---- */
+function toggleSpDetail(btn) {
+    const card = btn.closest('[data-sp-detail]') || btn.parentElement;
+    const detail = card.querySelector('.sp-detail-panel');
+    if (!detail) return;
+    const open = detail.style.display === 'block';
+    detail.style.display = open ? 'none' : 'block';
+    btn.querySelector('i').className = open ? 'fas fa-chevron-down' : 'fas fa-chevron-up';
+}
+
+/* ---- Weekly Calendar navigation ---- */
+function spCalNav(dir) {
+    if (dir === 0) _spCalendarWeekOffset = 0;
+    else _spCalendarWeekOffset += dir;
+    renderSpCalendar();
+}
+
+function renderSpCalendar() {
+    const wrap = document.getElementById('spCalendarWrap');
+    if (!wrap || !_spAnalysis) return;
+
+    const now = new Date();
+    const dow = now.getDay();
+    const mon = new Date(now);
+    mon.setDate(now.getDate() - (dow === 0 ? 6 : dow - 1) + (_spCalendarWeekOffset * 7));
+    mon.setHours(0,0,0,0);
+
+    const days = [];
+    const dayNames = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+    for (let i = 0; i < 7; i++) {
+        const d = new Date(mon); d.setDate(mon.getDate() + i);
+        const dk = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+        days.push({ date: d, dk, dayName: dayNames[i], isToday: d.toDateString() === now.toDateString() });
+    }
+
+    const startStr = mon.toLocaleDateString('en-IN',{day:'numeric',month:'short'});
+    const endD = new Date(mon); endD.setDate(mon.getDate()+6);
+    const endStr = endD.toLocaleDateString('en-IN',{day:'numeric',month:'short',year:'numeric'});
+
+    // Pull existing planner tasks, visits, observations for this week
+    const tasks = DB.get('plannerTasks');
+    const visits = DB.get('visits');
+    const observations = DB.get('observations');
+    const trainings = DB.get('trainings');
+
+    // Cluster-wise suggestion for each weekday
+    const allClustersSorted = [..._spAnalysis.clusters].sort((x,y) => x.avgEngagement - y.avgEngagement);
+
+    wrap.innerHTML = `
+        <div class="sp-cal-header">
+            <button class="sp-cal-nav" onclick="spCalNav(-1)" title="Previous"><i class="fas fa-chevron-left"></i></button>
+            <span class="sp-cal-title">📅 ${startStr} — ${endStr}</span>
+            <button class="sp-cal-nav" onclick="spCalNav(0)" title="Today"><i class="fas fa-dot-circle"></i></button>
+            <button class="sp-cal-nav" onclick="spCalNav(1)" title="Next"><i class="fas fa-chevron-right"></i></button>
+        </div>
+        <div class="sp-cal-grid">
+            ${days.map((day, idx) => {
+                const dayTasks = tasks.filter(t => t.date === day.dk);
+                const dayVisits = visits.filter(v => v.date === day.dk);
+                const dayObs = observations.filter(o => o.date === day.dk);
+                const dayTrainings = trainings.filter(t => t.date === day.dk);
+                const sugCluster = idx < 5 ? allClustersSorted[idx % allClustersSorted.length] : null;
+                const sugSchools = sugCluster ? _spAnalysis.schools.filter(s => s.cluster === sugCluster.name).sort((a,b)=>b.priorityScore-a.priorityScore).slice(0,2) : [];
+                const dateDisp = day.date.toLocaleDateString('en-IN',{day:'numeric',month:'short'});
+                const isWeekend = idx >= 5;
+                return `<div class="sp-cal-day ${day.isToday ? 'today' : ''} ${isWeekend ? 'weekend' : ''}">
+                    <div class="sp-cal-day-head">
+                        <span class="sp-cal-day-name">${day.dayName}</span>
+                        <span class="sp-cal-day-date">${dateDisp}</span>
+                    </div>
+                    <div class="sp-cal-day-body">
+                        ${dayVisits.map(v => `<div class="sp-cal-item visit"><i class="fas fa-school"></i> ${escapeHtml(v.school||v.purpose||'Visit')}</div>`).join('')}
+                        ${dayObs.map(o => `<div class="sp-cal-item obs"><i class="fas fa-clipboard-check"></i> ${escapeHtml(o.school||'Observation')}</div>`).join('')}
+                        ${dayTrainings.map(t => `<div class="sp-cal-item training"><i class="fas fa-chalkboard-teacher"></i> ${escapeHtml(t.title||'Training')}</div>`).join('')}
+                        ${dayTasks.map(t => `<div class="sp-cal-item task ${t.done?'done':''}"><i class="fas ${t.done?'fa-check-circle':'fa-circle'}"></i> ${escapeHtml(t.text)}</div>`).join('')}
+                        ${!isWeekend && sugCluster && dayVisits.length===0 && dayObs.length===0 && dayTasks.length===0 ? `
+                            <div class="sp-cal-suggest">
+                                <div class="sp-cal-sug-label"><i class="fas fa-magic"></i> Suggested</div>
+                                <div class="sp-cal-sug-cluster"><i class="fas fa-layer-group"></i> ${escapeHtml(sugCluster.name)}</div>
+                                ${sugSchools.map(s => `<div class="sp-cal-sug-school">${escapeHtml(s.name)}</div>`).join('')}
+                                <button class="sp-cal-add-btn" onclick="spAddSuggestedVisit('${day.dk}','${escapeHtml(sugSchools[0]?.name||'')}','${escapeHtml(sugCluster.name)}')" title="Add to planner"><i class="fas fa-plus"></i> Add to Planner</button>
+                            </div>` : ''}
+                        ${!isWeekend ? `<div class="sp-cal-add-row">
+                            <input type="text" class="sp-cal-input" id="spCalInput-${day.dk}" placeholder="Quick add..." onkeydown="if(event.key==='Enter')spQuickAddTask('${day.dk}')">
+                            <button onclick="spQuickAddTask('${day.dk}')" title="Add"><i class="fas fa-plus"></i></button>
+                        </div>` : ''}
+                    </div>
+                </div>`;
+            }).join('')}
+        </div>`;
+}
+
+function spQuickAddTask(dateKey) {
+    const input = document.getElementById('spCalInput-' + dateKey);
+    if (!input) return;
+    const text = input.value.trim();
+    if (!text) return;
+    const tasks = DB.get('plannerTasks');
+    tasks.push({ id: DB.generateId(), date: dateKey, text, type: 'task', done: false, createdAt: new Date().toISOString() });
+    DB.set('plannerTasks', tasks);
+    input.value = '';
+    renderSmartPlanner();
+    refreshPlannerIfVisible();
+    showToast('Task added to planner');
+}
+
+function spAddSuggestedVisit(dateKey, school, cluster) {
+    // Create an actual School Visit entry
+    const visits = DB.get('visits');
+    const block = _spAnalysis ? (_spAnalysis.schools.find(s => s.name === school) || {}).block || '' : '';
+    const alreadyVisit = visits.some(v => v.school === school && v.date === dateKey);
+    if (!alreadyVisit) {
+        visits.push({ id: DB.generateId(), school, block, cluster, district: '', date: dateKey, status: 'planned', purpose: 'Classroom Observation', duration: '', peopleMet: '', rating: '', notes: '', followUp: '', nextDate: '', createdAt: new Date().toISOString() });
+        DB.set('visits', visits);
+    }
+
+    renderSmartPlanner();
+    refreshPlannerIfVisible();
+    renderVisits();
+    showToast(alreadyVisit ? 'Visit already planned for this date' : 'School visit added ✅', alreadyVisit ? 'info' : 'success');
+}
+
+/* ---- Generate actions — push plans to existing features ---- */
+function spGenerateDailyVisits() {
+    if (!_spAnalysis) { showToast('No data loaded', 'error'); return; }
+    const today = new Date();
+    const dk = `${today.getFullYear()}-${String(today.getMonth()+1).padStart(2,'0')}-${String(today.getDate()).padStart(2,'0')}`;
+    const visits = DB.get('visits');
+    const topSchools = [..._spAnalysis.schools].sort((a,b)=>b.priorityScore-a.priorityScore).slice(0,3);
+    let added = 0;
+    topSchools.forEach(s => {
+        const alreadyVisit = visits.some(v => v.school === s.name && v.date === dk);
+        if (!alreadyVisit) {
+            visits.push({ id: DB.generateId(), school: s.name, block: s.block || '', cluster: s.cluster || '', district: '', date: dk, status: 'planned', purpose: 'Classroom Observation', duration: '', peopleMet: '', rating: '', notes: '', followUp: '', nextDate: '', createdAt: new Date().toISOString() });
+            added++;
+        }
+    });
+    DB.set('visits', visits);
+    renderSmartPlanner();
+    refreshPlannerIfVisible();
+    renderVisits();
+    showToast(added > 0 ? `${added} school visits planned for today` : 'All top schools already planned for today', added > 0 ? 'success' : 'info');
+}
+
+function spGenerateWeeklyPlan() {
+    if (!_spAnalysis) { showToast('No data loaded', 'error'); return; }
+    const now = new Date();
+    const dow = now.getDay();
+    const mon = new Date(now);
+    mon.setDate(now.getDate() - (dow === 0 ? 6 : dow - 1));
+    mon.setHours(0,0,0,0);
+
+    const visits = DB.get('visits');
+    const allClustersSorted = [..._spAnalysis.clusters].sort((x,y) => x.avgEngagement - y.avgEngagement);
+    let added = 0;
+
+    for (let i = 0; i < 5; i++) {
+        const d = new Date(mon); d.setDate(mon.getDate() + i);
+        const dk = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+        const cluster = allClustersSorted[i % allClustersSorted.length];
+        if (!cluster) continue;
+        const schools = _spAnalysis.schools.filter(s => s.cluster === cluster.name).sort((a,b)=>b.priorityScore-a.priorityScore).slice(0,2);
+        schools.forEach(s => {
+            const alreadyVisit = visits.some(v => v.school === s.name && v.date === dk);
+            if (!alreadyVisit) {
+                visits.push({ id: DB.generateId(), school: s.name, block: s.block || '', cluster: cluster.name, district: '', date: dk, status: 'planned', purpose: 'Classroom Observation', duration: '', peopleMet: '', rating: '', notes: '', followUp: '', nextDate: '', createdAt: new Date().toISOString() });
+                added++;
+            }
+        });
+    }
+    DB.set('visits', visits);
+    renderSmartPlanner();
+    refreshPlannerIfVisible();
+    renderVisits();
+    showToast(added > 0 ? `${added} school visits planned for this week` : 'Weekly plan already populated', added > 0 ? 'success' : 'info');
+}
+
+function spGenerateQuarterlyGoals() {
+    if (!_spAnalysis) { showToast('No data loaded', 'error'); return; }
+    const now = new Date();
+    const monthKey = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}`;
+    const allGoals = DB.get('goalTargets');
+    const existing = allGoals.find(g => g.monthKey === monthKey);
+
+    const totalSchools = _spAnalysis.schools.length;
+    const totalTeachers = _spAnalysis.teachers.length;
+    const trainingNeeded = _spAnalysis.subjects.filter(s => s.needsTraining).length;
+
+    const targets = {
+        visits: Math.max(totalSchools, 15),
+        trainings: Math.max(trainingNeeded, 4),
+        observations: Math.max(Math.ceil(totalTeachers * 0.5), 10),
+        teachers: totalTeachers,
+        resources: 5
+    };
+
+    if (existing) {
+        existing.targets = targets;
+    } else {
+        allGoals.push({ monthKey, targets });
+    }
+    DB.set('goalTargets', allGoals);
+    renderSmartPlanner();
+    showToast('Quarterly goals pushed to Goal Tracker ✅');
+}
+
+function spPushIdea(title, desc) {
+    const ideas = DB.get('ideas');
+    ideas.push({
+        id: DB.generateId(),
+        title, description: desc,
+        category: 'Education', status: 'spark', priority: 'medium',
+        tags: ['smart-planner', 'auto-generated'],
+        color: '#8b5cf6', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString()
+    });
+    DB.set('ideas', ideas);
+    renderSmartPlanner();
+    showToast('Idea saved to Idea Tracker 💡');
+}
+
+function spPushTrainingIdea(topic) {
+    spPushIdea(`Training: ${topic}`, `Auto-suggested by Smart Planner based on observation data analysis. Plan a training session on "${topic}" for teachers with low engagement in this area.`);
+}
+
+/* ================================================================
+   AI ANALYSIS — AI Prompt Builder & Plan Renderer
+   ================================================================ */
+let _aiPromptFocus = 'full';
+let _aiParsedPlans = [];
+let _aiGeneratedPrompt = '';
+let _aiLastRawResponse = '';
+
+function setAiPromptFocus(focus) {
+    _aiPromptFocus = focus;
+    document.querySelectorAll('.ai-chip').forEach(c => c.classList.toggle('active', c.dataset.focus === focus));
+}
+
+function scrollToAiStep(num) {
+    const el = document.getElementById('aiStep' + num);
+    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+function toggleAiRawResponse() {
+    const el = document.getElementById('aiRawResponse');
+    if (el) el.style.display = el.style.display === 'none' ? 'block' : 'none';
+}
+
+
+
+// Build the prompt from observation data
+function _buildAiPrompt() {
+    const obs = DB.get('observations');
+    if (!obs || obs.length === 0) return null;
+
+    const analysis = analyzeObservationData(obs);
+    const focus = _aiPromptFocus;
+    const today = new Date().toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' });
+
+    const totalObs = obs.length;
+    const engCounts = { 'More Engaged': 0, 'Engaged': 0, 'Not Engaged': 0 };
+    obs.forEach(o => { if (o.engagementLevel && engCounts[o.engagementLevel] !== undefined) engCounts[o.engagementLevel]++; });
+
+    const subjectLines = analysis.subjects.slice(0, 15).map(s =>
+        `  - ${s.name}: ${s.count} obs, Avg Engagement ${s.avgEngagement.toFixed(1)}/3${s.needsTraining ? ' ⚠️ NEEDS TRAINING' : ''}`
+    ).join('\n');
+
+    const lowEngLines = analysis.lowEngTeachers.slice(0, 20).map(t =>
+        `  - ${t.name} (${t.school || 'N/A'}, ${t.cluster || ''}, ${t.block || ''}) — Avg: ${t.avgEngagement.toFixed(1)}/3, ${t.totalVisits} visits, Last: ${t.daysSinceVisit}d ago`
+    ).join('\n');
+
+    const topSchoolLines = analysis.schools.sort((a, b) => b.priorityScore - a.priorityScore).slice(0, 15).map(s =>
+        `  - ${s.name} (${s.block || ''} / ${s.cluster || ''}) — ${s.teacherCount} teachers, Avg: ${s.avgEngagement.toFixed(1)}/3, Last: ${s.daysSinceVisit}d ago, Priority: ${s.priorityScore.toFixed(0)}`
+    ).join('\n');
+
+    const clusterLines = analysis.clusters.map(c =>
+        `  - ${c.name} (${c.block || ''}) — ${c.schoolCount} schools, ${c.teacherCount} teachers, Avg: ${c.avgEngagement.toFixed(1)}/3`
+    ).join('\n');
+
+    const notObsLines = analysis.notObservedTeachers.slice(0, 15).map(t => `  - ${t}`).join('\n');
+
+    const practiceLines = analysis.practices.slice(0, 15).map(p =>
+        `  - ${p.name} (${p.type || 'N/A'}): ${p.count} obs, Avg: ${p.avgEngagement.toFixed(1)}/3`
+    ).join('\n');
+
+    const notVisitedLines = analysis.notVisitedRecently.slice(0, 15).map(t =>
+        `  - ${t.name} (${t.school || ''}) — Last: ${t.daysSinceVisit}d ago`
+    ).join('\n');
+
+    // Build engagement trend data
+    const monthMap = {};
+    obs.forEach(o => {
+        if (!o.date) return;
+        const d = new Date(o.date);
+        const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+        if (!monthMap[key]) monthMap[key] = { total: 0, moreEng: 0, eng: 0, notEng: 0 };
+        monthMap[key].total++;
+        if (o.engagementLevel === 'More Engaged') monthMap[key].moreEng++;
+        else if (o.engagementLevel === 'Engaged') monthMap[key].eng++;
+        else if (o.engagementLevel === 'Not Engaged') monthMap[key].notEng++;
+    });
+    const trendLines = Object.keys(monthMap).sort().map(k => {
+        const m = monthMap[k];
+        return `  - ${k}: ${m.total} obs — More Engaged ${m.moreEng} (${m.total ? Math.round(m.moreEng/m.total*100) : 0}%), Engaged ${m.eng} (${m.total ? Math.round(m.eng/m.total*100) : 0}%), Not Engaged ${m.notEng} (${m.total ? Math.round(m.notEng/m.total*100) : 0}%)`;
+    }).join('\n');
+
+    // High-performing teachers for recognition
+    const highEngTeachers = analysis.teachers
+        .filter(t => t.avgEngagement >= 2.5 && t.totalVisits >= 2)
+        .sort((a, b) => b.avgEngagement - a.avgEngagement)
+        .slice(0, 10);
+    const highEngLines = highEngTeachers.map(t =>
+        `  - ${t.name} (${t.school || 'N/A'}, ${t.cluster || ''}) — Avg: ${t.avgEngagement.toFixed(1)}/3, ${t.totalVisits} visits`
+    ).join('\n');
+
+    let prompt = `You are an expert Educational Mentor / Academic Resource Person (APF/BRP/CRP) in India.
+Today is ${today}. Analyze this classroom observation data thoroughly and provide DETAILED, COMPREHENSIVE, ACTIONABLE plans.
+Be VERY SPECIFIC — use EXACT teacher names, school names, dates. Give RICH explanations for every recommendation.
+Provide REASONING for each suggestion. Don't just list items — explain WHY and HOW.\n\n`;
+
+    prompt += `📊 DATA SUMMARY\nTotal Observations: ${totalObs} | Schools: ${analysis.schools.length} | Teachers: ${analysis.teachers.length} | Clusters: ${analysis.clusters.length} | Blocks: ${analysis.blocks.length}\n`;
+    prompt += `Engagement Breakdown: More Engaged ${engCounts['More Engaged']} (${totalObs ? Math.round(engCounts['More Engaged'] / totalObs * 100) : 0}%) | Engaged ${engCounts['Engaged']} (${totalObs ? Math.round(engCounts['Engaged'] / totalObs * 100) : 0}%) | Not Engaged ${engCounts['Not Engaged']} (${totalObs ? Math.round(engCounts['Not Engaged'] / totalObs * 100) : 0}%)\n\n`;
+
+    if (trendLines) {
+        prompt += `📈 MONTHLY TREND:\n${trendLines}\n\n`;
+    }
+
+    if (focus === 'full' || focus === 'engagement') {
+        prompt += `📘 Subjects:\n${subjectLines}\n\n🔴 Low Engagement Teachers:\n${lowEngLines || '(None)'}\n\n📋 Teaching Practices:\n${practiceLines}\n\n`;
+        if (highEngLines) prompt += `⭐ High Performing Teachers (for peer mentoring/recognition):\n${highEngLines}\n\n`;
+    }
+    if (focus === 'full' || focus === 'teacher') {
+        prompt += `⏳ Not Visited Recently (need follow-up):\n${notVisitedLines || '(All recent)'}\n\n❌ Not Observed At All:\n${notObsLines || '(None)'}\n\n`;
+    }
+    if (focus === 'full' || focus === 'school') {
+        prompt += `🏫 Priority Schools (sorted by priority score):\n${topSchoolLines}\n\n`;
+    }
+    if (focus === 'full' || focus === 'training') {
+        prompt += `🏘️ Clusters:\n${clusterLines}\n\n`;
+    }
+
+    prompt += `RESPOND with these EXACT section headers. Use pipe | to separate fields within items.\n`;
+    prompt += `For each item, provide DETAILED explanations — not just short labels.\n\n`;
+
+    if (focus === 'full' || focus === 'engagement') {
+        prompt += `## KEY INSIGHTS\n10-15 bullet points with detailed findings. For each insight include:\n- What the data shows (with specific numbers and percentages)\n- Why it matters for student learning\n- Which specific teachers/schools/subjects are involved\n\n`;
+    }
+
+    if (focus === 'full' || focus === 'engagement') {
+        prompt += `## SUBJECT WISE ANALYSIS\nFor each subject with observations, provide: Subject Name | Total Observations | Engagement Rate | Key Issue | Recommended Action | Reason\n\n`;
+    }
+
+    if (focus === 'full' || focus === 'school') {
+        prompt += `## SCHOOL VISIT PLAN\nFor each school (at least 8-10): School Name | Block | Cluster | Purpose (be DETAILED — what to observe, whom to meet, what to check) | Specific Date (YYYY-MM-DD) | Expected Outcome\n\n`;
+    }
+
+    if (focus === 'full' || focus === 'teacher') {
+        prompt += `## TEACHER SUPPORT ACTIONS\nFor each teacher (at least 10-12): Teacher Name | School | Detailed Action Needed (be specific about what support to give and how) | Priority (High/Medium/Low) | Reason for Priority\n\n`;
+    }
+
+    if (focus === 'full' || focus === 'teacher') {
+        prompt += `## TEACHER PROFILES\nFor the top 8-10 teachers needing attention, provide: Teacher Name | School | Strengths | Challenges | Specific Mentoring Plan | Timeline\n\n`;
+    }
+
+    if (focus === 'full' || focus === 'training') {
+        prompt += `## TRAINING RECOMMENDATIONS\nFor each training (at least 5-6): Title | Target Group: who | Key Topics: detailed topic list | Duration: time | Methodology: hands-on/demo/etc | Expected Impact: what will improve\n\n`;
+    }
+
+    if (focus === 'full' || focus === 'engagement') {
+        prompt += `## ENGAGEMENT IMPROVEMENT STRATEGIES\n8-12 concrete strategies. For each strategy include:\n- Strategy name and description\n- Which specific teachers/schools it targets\n- Step-by-step implementation plan\n- Expected timeline and measurable outcome\n\n`;
+    }
+
+    prompt += `## WEEKLY ACTION PLAN\nFor EACH day (Monday through Saturday): Day | School to Visit | Key Activities (list 3-4 specific things to do) | Teachers to Meet (use real names) | Follow-up Focus | Materials/Documents Needed\n\n`;
+
+    if (focus === 'full') {
+        prompt += `## DATA GAPS & RECOMMENDATIONS\n5-7 items about what data is missing, which schools/teachers need more observations, and what additional information would strengthen the analysis. For each: Gap Description | Impact | Recommended Action\n\n`;
+    }
+
+    if (focus === 'full') {
+        prompt += `## MONTHLY PROGRESS TRACKER\nCreate 4-5 measurable goals for this month. For each: Goal | Current Status (from data) | Target | How to Measure | Key Actions\n\n`;
+    }
+
+    prompt += `## IDEAS & INNOVATIONS\n5-8 innovative, creative ideas for improving classroom engagement and teacher support. For each idea include what it is, how to implement it, and expected impact.\n\n`;
+
+    prompt += `IMPORTANT INSTRUCTIONS:\n`;
+    prompt += `- Use EXACT names from my data. Be specific — no generic advice.\n`;
+    prompt += `- Dates in YYYY-MM-DD format, starting from this week.\n`;
+    prompt += `- Provide REASONING and CONTEXT for every recommendation.\n`;
+    prompt += `- Be COMPREHENSIVE — more detail is better. Think like an experienced mentor.\n`;
+    prompt += `- Cover ALL teachers and schools mentioned in the data, don't skip any.\n`;
+    prompt += `- Cross-reference data points — if a teacher has low engagement AND hasn't been visited, mention both.`;
+
+    return prompt;
+}
+
+function generateAiPrompt() {
+    const prompt = _buildAiPrompt();
+    if (!prompt) { showToast('No observation data. Import DMT Excel first.', 'error'); return; }
+    _aiGeneratedPrompt = prompt;
+    const outputEl = document.getElementById('aiPromptOutput');
+    const textEl = document.getElementById('aiPromptText');
+    if (outputEl && textEl) {
+        textEl.textContent = prompt;
+        outputEl.style.display = 'block';
+    }
+    showToast('Prompt generated!', 'success');
+}
+
+function copyAiPrompt() {
+    const text = _aiGeneratedPrompt || document.getElementById('aiPromptText')?.textContent || '';
+    if (!text) { generateAiPrompt(); return; }
+    navigator.clipboard.writeText(text).then(() => showToast('Copied! 📋', 'success')).catch(() => {
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+        showToast('Copied! 📋', 'success');
+    });
+}
+
+function _parseAndShowAiResults(text) {
+    const plans = [];
+    const cleanMd = t => t.replace(/\*\*(.+?)\*\*/g, '$1').replace(/__(.+?)__/g, '$1').replace(/\*(.+?)\*/g, '$1').replace(/_(.+?)_/g, '$1').trim();
+
+    const sections = [
+        { key: 'insights', header: 'KEY INSIGHTS', icon: 'fa-lightbulb', color: '#f59e0b' },
+        { key: 'subjects', header: 'SUBJECT WISE ANALYSIS', icon: 'fa-book', color: '#0ea5e9' },
+        { key: 'visits', header: 'SCHOOL VISIT PLAN', icon: 'fa-school', color: '#3b82f6' },
+        { key: 'teacher', header: 'TEACHER SUPPORT ACTIONS', icon: 'fa-user-graduate', color: '#8b5cf6' },
+        { key: 'profiles', header: 'TEACHER PROFILES', icon: 'fa-id-card', color: '#a855f7' },
+        { key: 'training', header: 'TRAINING RECOMMENDATIONS', icon: 'fa-chalkboard-teacher', color: '#10b981' },
+        { key: 'engagement', header: 'ENGAGEMENT IMPROVEMENT STRATEGIES', icon: 'fa-fire', color: '#ef4444' },
+        { key: 'weekly', header: 'WEEKLY ACTION PLAN', icon: 'fa-calendar-week', color: '#6366f1' },
+        { key: 'datagaps', header: 'DATA GAPS & RECOMMENDATIONS', icon: 'fa-exclamation-triangle', color: '#f97316' },
+        { key: 'progress', header: 'MONTHLY PROGRESS TRACKER', icon: 'fa-chart-line', color: '#14b8a6' },
+        { key: 'ideas', header: 'IDEAS & INNOVATIONS', icon: 'fa-lightbulb', color: '#ec4899' }
+    ];
+
+    sections.forEach(sec => {
+        const regex = new RegExp(`##\\s*${sec.header.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`, 'i');
+        const match = text.match(regex);
+        if (!match) return;
+
+        const startIdx = match.index + match[0].length;
+        const nextHeader = text.slice(startIdx).match(/\n##\s/);
+        const endIdx = nextHeader ? startIdx + nextHeader.index : text.length;
+        const sectionText = text.slice(startIdx, endIdx).trim();
+
+        const lines = sectionText.split('\n')
+            .map(l => l.replace(/^[\s]*[-*•▸▹►●◆⦿✦✧]\s*/, '').replace(/^\d+[\.\)]\s*/, '').trim())
+            .filter(l => l.length > 5 && !l.startsWith('#'));
+
+        plans.push({
+            key: sec.key,
+            header: sec.header,
+            icon: sec.icon,
+            color: sec.color,
+            items: lines.map((line, idx) => {
+                const cleaned = cleanMd(line);
+                let parts = null, fields = null;
+                if (cleaned.includes('|')) {
+                    parts = cleaned.split('|').map(p => p.trim());
+                    fields = {};
+                    parts.forEach(p => {
+                        const m = p.match(/^([A-Za-z\s\-]+?):\s*(.+)$/);
+                        if (m) fields[m[1].trim().toLowerCase()] = m[2].trim();
+                        else if (!fields._title && p.length > 2) fields._title = p;
+                    });
+                }
+                return { id: `ai_${sec.key}_${idx}`, text: cleaned, pushed: false, parts, fields };
+            })
+        });
+    });
+
+    if (plans.length === 0) {
+        const lines = text.split('\n')
+            .map(l => cleanMd(l.replace(/^[\s]*[-*•]\s*/, '').trim()))
+            .filter(l => l.length > 10 && !l.startsWith('#'));
+        plans.push({
+            key: 'general', header: 'AI ANALYSIS', icon: 'fa-robot', color: '#6366f1',
+            items: lines.map((line, idx) => {
+                let parts = null, fields = null;
+                if (line.includes('|')) {
+                    parts = line.split('|').map(p => p.trim());
+                    fields = {};
+                    parts.forEach(p => {
+                        const m = p.match(/^([A-Za-z\s\-]+?):\s*(.+)$/);
+                        if (m) fields[m[1].trim().toLowerCase()] = m[2].trim();
+                        else if (!fields._title && p.length > 2) fields._title = p;
+                    });
+                }
+                return { id: `ai_general_${idx}`, text: line, pushed: false, parts, fields };
+            })
+        });
+    }
+
+    _aiParsedPlans = plans;
+    renderAiPlans(plans);
+
+    const results = document.getElementById('aiResultsContainer');
+    if (results) { results.style.display = 'block'; results.scrollIntoView({ behavior: 'smooth' }); }
+}
+
+// Also support manual paste
+function parseAiResponse() {
+    const input = document.getElementById('aiResponseInput');
+    if (!input || !input.value.trim()) { showToast('Please paste the AI response first', 'error'); return; }
+    _parseAndShowAiResults(input.value.trim());
+    showToast(`Parsed ${_aiParsedPlans.reduce((s, p) => s + p.items.length, 0)} items`, 'success');
+}
+
+function renderAiPlans(plans) {
+    const container = document.getElementById('aiPlansContainer');
+    const actionsEl = document.getElementById('aiPlansActions');
+    if (!container) return;
+
+    if (!plans || plans.length === 0) {
+        container.innerHTML = '<div class="empty-state"><i class="fas fa-robot"></i><h3>No plans generated</h3><p>Paste the AI response and try again</p></div>';
+        if (actionsEl) actionsEl.style.display = 'none';
+        return;
+    }
+
+    container.innerHTML = plans.map(sec => `
+        <div class="ai-plan-section" style="--ai-sec-color: ${sec.color}">
+            <div class="ai-plan-section-header">
+                <i class="fas ${sec.icon}" style="color: ${sec.color}"></i>
+                <span>${sec.header}</span>
+                <span class="ai-plan-count">${sec.items.length} items</span>
+            </div>
+            <div class="ai-plan-items">
+                ${sec.items.map(item => `
+                    <div class="ai-plan-item ${item.pushed ? 'pushed' : ''}" id="aiItem-${item.id}">
+                        <div class="ai-plan-item-body">
+                            ${_renderAiItemContent(item, sec.key)}
+                        </div>
+                        <div class="ai-plan-item-actions">
+                            ${sec.key === 'visits' || sec.key === 'weekly' ? `<button class="ai-push-btn visit" onclick="aiPushToVisit('${item.id}')" title="Add as School Visit" ${item.pushed ? 'disabled' : ''}><i class="fas fa-school"></i> Visit</button>` : ''}
+                            ${sec.key === 'training' ? `<button class="ai-push-btn training" onclick="aiPushToTraining('${item.id}')" title="Add as Training" ${item.pushed ? 'disabled' : ''}><i class="fas fa-chalkboard-teacher"></i> Training</button>` : ''}
+                            ${sec.key === 'ideas' || sec.key === 'engagement' || sec.key === 'insights' || sec.key === 'datagaps' || sec.key === 'progress' ? `<button class="ai-push-btn idea" onclick="aiPushToIdea('${item.id}')" title="Save as Idea" ${item.pushed ? 'disabled' : ''}><i class="fas fa-lightbulb"></i> Idea</button>` : ''}
+                            ${sec.key === 'teacher' || sec.key === 'profiles' ? `<button class="ai-push-btn visit" onclick="aiPushToVisit('${item.id}')" title="Add as Visit" ${item.pushed ? 'disabled' : ''}><i class="fas fa-school"></i> Visit</button><button class="ai-push-btn idea" onclick="aiPushToIdea('${item.id}')" title="Save as Idea" ${item.pushed ? 'disabled' : ''}><i class="fas fa-lightbulb"></i> Idea</button>` : ''}
+                            ${sec.key === 'subjects' ? `<button class="ai-push-btn training" onclick="aiPushToTraining('${item.id}')" title="Add as Training" ${item.pushed ? 'disabled' : ''}><i class="fas fa-chalkboard-teacher"></i> Training</button><button class="ai-push-btn idea" onclick="aiPushToIdea('${item.id}')" title="Save as Idea" ${item.pushed ? 'disabled' : ''}><i class="fas fa-lightbulb"></i> Idea</button>` : ''}
+                            ${sec.key === 'general' ? `<button class="ai-push-btn idea" onclick="aiPushToIdea('${item.id}')" title="Save as Idea" ${item.pushed ? 'disabled' : ''}><i class="fas fa-lightbulb"></i> Idea</button><button class="ai-push-btn visit" onclick="aiPushToVisit('${item.id}')" title="Add Visit" ${item.pushed ? 'disabled' : ''}><i class="fas fa-school"></i> Visit</button>` : ''}
+                        </div>
+                    </div>
+                `).join('')}
+            </div>
+        </div>
+    `).join('');
+
+
+    if (actionsEl) actionsEl.style.display = 'flex';
+}
+
+function _renderAiItemContent(item, secKey) {
+    const f = item.fields;
+    const parts = item.parts;
+
+    // ===== Positional pipe fields (no labels like "Key:") — map by section type =====
+    const positionalMaps = {
+        visits: [
+            { label: 'School', icon: 'fa-school' },
+            { label: 'Block', icon: 'fa-map-marker-alt' },
+            { label: 'Cluster', icon: 'fa-layer-group' },
+            { label: 'Purpose', icon: 'fa-bullseye' },
+            { label: 'Date', icon: 'fa-calendar' },
+            { label: 'Expected Outcome', icon: 'fa-chart-line' }
+        ],
+        teacher: [
+            { label: 'Teacher', icon: 'fa-user' },
+            { label: 'School', icon: 'fa-school' },
+            { label: 'Action Needed', icon: 'fa-bolt' },
+            { label: 'Priority', icon: 'fa-flag' },
+            { label: 'Reason', icon: 'fa-info-circle' }
+        ],
+        profiles: [
+            { label: 'Teacher', icon: 'fa-user' },
+            { label: 'School', icon: 'fa-school' },
+            { label: 'Strengths', icon: 'fa-star' },
+            { label: 'Challenges', icon: 'fa-exclamation-circle' },
+            { label: 'Mentoring Plan', icon: 'fa-hands-helping' },
+            { label: 'Timeline', icon: 'fa-clock' }
+        ],
+        weekly: [
+            { label: 'Day', icon: 'fa-calendar-day' },
+            { label: 'School to Visit', icon: 'fa-school' },
+            { label: 'Key Activities', icon: 'fa-tasks' },
+            { label: 'Teachers to Meet', icon: 'fa-user' },
+            { label: 'Follow-up Focus', icon: 'fa-redo' },
+            { label: 'Materials Needed', icon: 'fa-clipboard-list' }
+        ],
+        training: [
+            { label: 'Training Title', icon: 'fa-chalkboard-teacher' },
+            { label: 'Target Group', icon: 'fa-users' },
+            { label: 'Key Topics', icon: 'fa-tags' },
+            { label: 'Duration', icon: 'fa-clock' },
+            { label: 'Methodology', icon: 'fa-cogs' },
+            { label: 'Expected Impact', icon: 'fa-chart-line' }
+        ],
+        subjects: [
+            { label: 'Subject', icon: 'fa-book' },
+            { label: 'Total Observations', icon: 'fa-clipboard-check' },
+            { label: 'Engagement Rate', icon: 'fa-fire' },
+            { label: 'Key Issue', icon: 'fa-exclamation-circle' },
+            { label: 'Recommended Action', icon: 'fa-bolt' },
+            { label: 'Reason', icon: 'fa-info-circle' }
+        ],
+        datagaps: [
+            { label: 'Gap', icon: 'fa-exclamation-triangle' },
+            { label: 'Impact', icon: 'fa-chart-line' },
+            { label: 'Recommended Action', icon: 'fa-bolt' }
+        ],
+        progress: [
+            { label: 'Goal', icon: 'fa-bullseye' },
+            { label: 'Current Status', icon: 'fa-info-circle' },
+            { label: 'Target', icon: 'fa-flag' },
+            { label: 'How to Measure', icon: 'fa-ruler' },
+            { label: 'Key Actions', icon: 'fa-tasks' }
+        ]
+    };
+
+    const fieldIcons = {
+        'target group': 'fa-users', 'target': 'fa-users', 'group': 'fa-users',
+        'key topics': 'fa-tags', 'topics': 'fa-tags', 'key topic': 'fa-tags',
+        'duration': 'fa-clock', 'time': 'fa-clock', 'timeline': 'fa-clock',
+        'school': 'fa-school', 'school to visit': 'fa-school', 'school name': 'fa-school',
+        'block': 'fa-map-marker-alt', 'cluster': 'fa-layer-group',
+        'purpose': 'fa-bullseye', 'action': 'fa-bolt', 'action needed': 'fa-bolt',
+        'priority': 'fa-flag', 'date': 'fa-calendar', 'suggested date': 'fa-calendar',
+        'key activities': 'fa-tasks', 'activities': 'fa-tasks',
+        'teachers to meet': 'fa-user', 'teacher': 'fa-user', 'teacher name': 'fa-user',
+        'follow-up focus': 'fa-redo', 'follow-up': 'fa-redo', 'followup': 'fa-redo',
+        'day': 'fa-calendar-day', 'training title': 'fa-chalkboard-teacher',
+        'strategy': 'fa-chess', 'idea': 'fa-lightbulb', 'description': 'fa-align-left',
+        'impact': 'fa-chart-line', 'expected impact': 'fa-chart-line', 'area': 'fa-crosshairs',
+        'focus': 'fa-crosshairs', 'subject': 'fa-book',
+        'observation': 'fa-clipboard-check', 'total observations': 'fa-clipboard-check',
+        'engagement rate': 'fa-fire', 'key issue': 'fa-exclamation-circle',
+        'recommended action': 'fa-bolt', 'reason': 'fa-info-circle',
+        'reason for priority': 'fa-info-circle', 'strengths': 'fa-star',
+        'challenges': 'fa-exclamation-circle', 'mentoring plan': 'fa-hands-helping',
+        'specific mentoring plan': 'fa-hands-helping',
+        'methodology': 'fa-cogs', 'materials needed': 'fa-clipboard-list',
+        'materials/documents needed': 'fa-clipboard-list',
+        'expected outcome': 'fa-chart-line', 'gap': 'fa-exclamation-triangle',
+        'gap description': 'fa-exclamation-triangle',
+        'goal': 'fa-bullseye', 'current status': 'fa-info-circle',
+        'how to measure': 'fa-ruler', 'key actions': 'fa-tasks'
+    };
+
+    // --- Case 1: Labeled fields detected (like "Target Group: value") ---
+    if (f && Object.keys(f).length > 1) {
+        const title = f._title || '';
+        let html = '';
+        if (title) html += `<div class="ai-item-title">${escapeHtml(title)}</div>`;
+        html += '<div class="ai-item-fields">';
+        for (const [key, val] of Object.entries(f)) {
+            if (key === '_title') continue;
+            const icon = fieldIcons[key] || 'fa-info-circle';
+            const label = key.split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+            html += `<div class="ai-item-field"><span class="ai-field-label"><i class="fas ${icon}"></i> ${escapeHtml(label)}</span><span class="ai-field-value">${escapeHtml(val)}</span></div>`;
+        }
+        html += '</div>';
+        return html;
+    }
+
+    // --- Case 2: Positional pipe fields (no labels) — map by section ---
+    if (parts && parts.length >= 2 && positionalMaps[secKey]) {
+        const map = positionalMaps[secKey];
+        const title = parts[0] || '';
+        let html = '';
+        if (title) html += `<div class="ai-item-title">${escapeHtml(title)}</div>`;
+        html += '<div class="ai-item-fields">';
+        for (let i = 1; i < parts.length; i++) {
+            const def = map[i] || { label: `Field ${i}`, icon: 'fa-info-circle' };
+            if (parts[i]) {
+                html += `<div class="ai-item-field"><span class="ai-field-label"><i class="fas ${def.icon}"></i> ${escapeHtml(def.label)}</span><span class="ai-field-value">${escapeHtml(parts[i])}</span></div>`;
+            }
+        }
+        html += '</div>';
+        return html;
+    }
+
+    // --- Case 3: Pipe fields in unknown section — show generically ---
+    if (parts && parts.length >= 2) {
+        const title = parts[0] || '';
+        let html = '';
+        if (title) html += `<div class="ai-item-title">${escapeHtml(title)}</div>`;
+        if (parts.length > 1) {
+            html += '<div class="ai-item-fields">';
+            for (let i = 1; i < parts.length; i++) {
+                if (parts[i]) {
+                    const m = parts[i].match(/^([A-Za-z\s\-]+?):\s*(.+)$/);
+                    if (m) {
+                        const icon = fieldIcons[m[1].trim().toLowerCase()] || 'fa-info-circle';
+                        html += `<div class="ai-item-field"><span class="ai-field-label"><i class="fas ${icon}"></i> ${escapeHtml(m[1].trim())}</span><span class="ai-field-value">${escapeHtml(m[2].trim())}</span></div>`;
+                    } else {
+                        html += `<div class="ai-item-field"><span class="ai-field-value">${escapeHtml(parts[i])}</span></div>`;
+                    }
+                }
+            }
+            html += '</div>';
+        }
+        return html;
+    }
+
+    // --- Case 4: Plain text (insights, strategies, ideas) — render as highlighted card ---
+    const text = item.text || '';
+    // Detect if text has a colon-separated title
+    const colonMatch = text.match(/^([^:]{5,60}):\s+(.+)$/s);
+    if (colonMatch) {
+        return `<div class="ai-item-title">${escapeHtml(colonMatch[1])}</div><div class="ai-plan-item-text">${escapeHtml(colonMatch[2])}</div>`;
+    }
+    return `<div class="ai-plan-item-text">${escapeHtml(text)}</div>`;
+}
+
+function _findAiItem(itemId) {
+    for (const sec of _aiParsedPlans) {
+        const item = sec.items.find(i => i.id === itemId);
+        if (item) return { item, sec };
+    }
+    return null;
+}
+
+function _markAiPushed(itemId) {
+    const found = _findAiItem(itemId);
+    if (found) {
+        found.item.pushed = true;
+        const el = document.getElementById('aiItem-' + itemId);
+        if (el) {
+            el.classList.add('pushed');
+            el.querySelectorAll('.ai-push-btn').forEach(b => b.disabled = true);
+        }
+    }
+}
+
+function aiPushToVisit(itemId) {
+    const found = _findAiItem(itemId);
+    if (!found) return;
+    const txt = found.item.text;
+
+    // Try to parse structured: School | Block | Cluster | Purpose | Date
+    let school = '', block = '', cluster = '', purpose = 'Classroom Observation', date = '';
+    if (found.item.parts && found.item.parts.length >= 2) {
+        const p = found.item.parts;
+        school = p[0] || '';
+        block = p.length >= 3 ? p[1] : '';
+        cluster = p.length >= 4 ? p[2] : '';
+        purpose = p.length >= 5 ? p[3] : purpose;
+        // Try to find a date in YYYY-MM-DD format
+        const dateMatch = txt.match(/\d{4}-\d{2}-\d{2}/);
+        date = dateMatch ? dateMatch[0] : p[p.length - 1]?.match(/\d{4}-\d{2}-\d{2}/) ? p[p.length - 1].match(/\d{4}-\d{2}-\d{2}/)[0] : '';
+    } else {
+        // Guess from free text
+        school = txt.substring(0, 60);
+        const dateMatch = txt.match(/\d{4}-\d{2}-\d{2}/);
+        date = dateMatch ? dateMatch[0] : '';
+    }
+
+    if (!date) {
+        // Default to tomorrow
+        const tmrw = new Date();
+        tmrw.setDate(tmrw.getDate() + 1);
+        date = `${tmrw.getFullYear()}-${String(tmrw.getMonth()+1).padStart(2,'0')}-${String(tmrw.getDate()).padStart(2,'0')}`;
+    }
+
+    const visits = DB.get('visits');
+    const alreadyExists = visits.some(v => v.school === school && v.date === date);
+    if (alreadyExists) {
+        showToast('Visit already exists for this school & date', 'info');
+        _markAiPushed(itemId);
+        return;
+    }
+
+    visits.push({
+        id: DB.generateId(), school, block, cluster, district: '',
+        date, status: 'planned', purpose,
+        duration: '', peopleMet: '', rating: '', notes: `AI Suggested: ${txt}`,
+        followUp: '', nextDate: '', createdAt: new Date().toISOString()
+    });
+    DB.set('visits', visits);
+    _markAiPushed(itemId);
+    renderVisits();
+    showToast('School visit added ✅');
+}
+
+function aiPushToTraining(itemId) {
+    const found = _findAiItem(itemId);
+    if (!found) return;
+    const txt = found.item.text;
+
+    let title = '', target = '', topics = '', duration = '';
+    if (found.item.parts && found.item.parts.length >= 2) {
+        const p = found.item.parts;
+        title = p[0] || txt.substring(0, 60);
+        target = p[1] || '';
+        topics = p[2] || '';
+        duration = p[3] || '';
+    } else {
+        title = txt.substring(0, 80);
+    }
+
+    const trainings = DB.get('trainings');
+    trainings.push({
+        id: DB.generateId(), title,
+        date: new Date().toISOString().split('T')[0],
+        location: '', facilitator: '', participants: target,
+        description: `AI Suggested: ${txt}\n\nTopics: ${topics}\nDuration: ${duration}`,
+        type: 'Workshop', status: 'planned',
+        createdAt: new Date().toISOString()
+    });
+    DB.set('trainings', trainings);
+    _markAiPushed(itemId);
+    showToast('Training added ✅');
+}
+
+function aiPushToIdea(itemId) {
+    const found = _findAiItem(itemId);
+    if (!found) return;
+    const txt = found.item.text;
+    const title = txt.length > 80 ? txt.substring(0, 77) + '...' : txt;
+
+    const ideas = DB.get('ideas');
+    ideas.push({
+        id: DB.generateId(),
+        title,
+        description: `AI Analysis Suggestion:\n${txt}`,
+        category: 'Education',
+        status: 'spark',
+        priority: 'medium',
+        tags: ['ai-analysis', 'auto-generated'],
+        color: '#6366f1',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+    });
+    DB.set('ideas', ideas);
+    _markAiPushed(itemId);
+    showToast('Idea saved 💡');
+}
+
+function aiPushAllPlans() {
+    if (!_aiParsedPlans || _aiParsedPlans.length === 0) return;
+    let pushed = 0;
+
+    _aiParsedPlans.forEach(sec => {
+        sec.items.forEach(item => {
+            if (item.pushed) return;
+            if (sec.key === 'visits' || sec.key === 'weekly') {
+                aiPushToVisit(item.id);
+                pushed++;
+            } else if (sec.key === 'training') {
+                aiPushToTraining(item.id);
+                pushed++;
+            } else if (sec.key === 'ideas' || sec.key === 'engagement' || sec.key === 'insights') {
+                aiPushToIdea(item.id);
+                pushed++;
+            } else if (sec.key === 'teacher') {
+                aiPushToIdea(item.id);
+                pushed++;
+            } else if (sec.key === 'general') {
+                aiPushToIdea(item.id);
+                pushed++;
+            }
+        });
+    });
+
+    renderAiPlans(_aiParsedPlans);
+    renderVisits();
+    renderDashboard();
+    showToast(`${pushed} items pushed to dashboard! 🚀`, 'success');
+}
+
+function analyzeObservationData(obs) {
+    const today = new Date();
+    const todayStr = today.toISOString().split('T')[0];
+
+    // ===== Teacher Profiles =====
+    const teacherMap = {};
+    obs.forEach(o => {
+        const key = (o.teacher || '').trim();
+        if (!key) return;
+        if (!teacherMap[key]) teacherMap[key] = {
+            name: key, nid: o.nid, school: o.school, block: o.block, cluster: o.cluster,
+            phone: o.teacherPhone, stage: o.teacherStage, subject: new Set(),
+            observations: [], engagementScores: [], practices: new Set(),
+            lastVisit: null, totalVisits: 0
+        };
+        const t = teacherMap[key];
+        t.observations.push(o);
+        t.totalVisits++;
+        if (o.subject) t.subject.add(o.subject);
+        if (o.practice) t.practices.add(o.practice);
+        const engMap = { 'More Engaged': 3, 'Engaged': 2, 'Not Engaged': 1 };
+        if (o.engagementLevel && engMap[o.engagementLevel]) t.engagementScores.push(engMap[o.engagementLevel]);
+        const d = new Date(o.date);
+        if (!isNaN(d) && (!t.lastVisit || d > t.lastVisit)) t.lastVisit = d;
+    });
+
+    // ===== School Profiles =====
+    const schoolMap = {};
+    obs.forEach(o => {
+        const key = (o.school || '').trim();
+        if (!key) return;
+        if (!schoolMap[key]) schoolMap[key] = {
+            name: key, block: o.block, cluster: o.cluster, observations: [],
+            teachers: new Set(), lastVisit: null, engagementScores: []
+        };
+        const s = schoolMap[key];
+        s.observations.push(o);
+        if (o.teacher) s.teachers.add(o.teacher);
+        const engMap = { 'More Engaged': 3, 'Engaged': 2, 'Not Engaged': 1 };
+        if (o.engagementLevel && engMap[o.engagementLevel]) s.engagementScores.push(engMap[o.engagementLevel]);
+        const d = new Date(o.date);
+        if (!isNaN(d) && (!s.lastVisit || d > s.lastVisit)) s.lastVisit = d;
+    });
+
+    // ===== Cluster Profiles =====
+    const clusterMap = {};
+    obs.forEach(o => {
+        const key = (o.cluster || '').trim();
+        if (!key) return;
+        if (!clusterMap[key]) clusterMap[key] = {
+            name: key, block: o.block, schools: new Set(), teachers: new Set(),
+            observations: [], engagementScores: []
+        };
+        const c = clusterMap[key];
+        c.observations.push(o);
+        if (o.school) c.schools.add(o.school);
+        if (o.teacher) c.teachers.add(o.teacher);
+        const engMap = { 'More Engaged': 3, 'Engaged': 2, 'Not Engaged': 1 };
+        if (o.engagementLevel && engMap[o.engagementLevel]) c.engagementScores.push(engMap[o.engagementLevel]);
+    });
+
+    // ===== Block Profiles =====
+    const blockMap = {};
+    obs.forEach(o => {
+        const key = (o.block || '').trim();
+        if (!key) return;
+        if (!blockMap[key]) blockMap[key] = {
+            name: key, clusters: new Set(), schools: new Set(), teachers: new Set(),
+            observations: [], engagementScores: []
+        };
+        const b = blockMap[key];
+        b.observations.push(o);
+        if (o.cluster) b.clusters.add(o.cluster);
+        if (o.school) b.schools.add(o.school);
+        if (o.teacher) b.teachers.add(o.teacher);
+        const engMap = { 'More Engaged': 3, 'Engaged': 2, 'Not Engaged': 1 };
+        if (o.engagementLevel && engMap[o.engagementLevel]) b.engagementScores.push(engMap[o.engagementLevel]);
+    });
+
+    // ===== Compute Averages & Scores =====
+    const avg = arr => arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : 0;
+    const daysSince = d => d ? Math.floor((today - d) / 86400000) : 999;
+
+    const teachers = Object.values(teacherMap).map(t => ({
+        ...t,
+        avgEngagement: avg(t.engagementScores),
+        daysSinceVisit: daysSince(t.lastVisit),
+        subject: [...t.subject],
+        practices: [...t.practices],
+        // Priority score: higher = more urgent to visit
+        priorityScore: (3 - avg(t.engagementScores)) * 30 + Math.min(daysSince(t.lastVisit), 180) + (t.totalVisits < 3 ? 50 : 0)
+    }));
+
+    const schools = Object.values(schoolMap).map(s => ({
+        ...s,
+        avgEngagement: avg(s.engagementScores),
+        daysSinceVisit: daysSince(s.lastVisit),
+        teacherCount: s.teachers.size,
+        teachers: [...s.teachers],
+        priorityScore: (3 - avg(s.engagementScores)) * 25 + Math.min(daysSince(s.lastVisit), 180) + (s.teachers.size > 5 ? 20 : 0)
+    }));
+
+    const clusters = Object.values(clusterMap).map(c => ({
+        ...c,
+        avgEngagement: avg(c.engagementScores),
+        schoolCount: c.schools.size,
+        teacherCount: c.teachers.size,
+        schools: [...c.schools],
+        teachers: [...c.teachers]
+    }));
+
+    const blocks = Object.values(blockMap).map(b => ({
+        ...b,
+        avgEngagement: avg(b.engagementScores),
+        clusterCount: b.clusters.size,
+        schoolCount: b.schools.size,
+        teacherCount: b.teachers.size,
+        clusters: [...b.clusters],
+        schools: [...b.schools]
+    }));
+
+    // ===== Subject Analysis =====
+    const subjectEngagement = {};
+    obs.forEach(o => {
+        const sub = o.subject || 'Other';
+        if (!subjectEngagement[sub]) subjectEngagement[sub] = { scores: [], count: 0, notEngaged: 0 };
+        subjectEngagement[sub].count++;
+        const engMap = { 'More Engaged': 3, 'Engaged': 2, 'Not Engaged': 1 };
+        if (o.engagementLevel && engMap[o.engagementLevel]) {
+            subjectEngagement[sub].scores.push(engMap[o.engagementLevel]);
+            if (o.engagementLevel === 'Not Engaged') subjectEngagement[sub].notEngaged++;
+        }
+    });
+
+    const subjects = Object.entries(subjectEngagement).map(([name, d]) => ({
+        name, count: d.count, avgEngagement: avg(d.scores), notEngaged: d.notEngaged,
+        needsTraining: d.notEngaged > d.count * 0.3
+    })).sort((a, b) => a.avgEngagement - b.avgEngagement);
+
+    // ===== Practice Analysis =====
+    const practiceEngagement = {};
+    obs.forEach(o => {
+        const p = o.practice || '';
+        if (!p) return;
+        if (!practiceEngagement[p]) practiceEngagement[p] = { scores: [], count: 0, type: o.practiceType };
+        practiceEngagement[p].count++;
+        const engMap = { 'More Engaged': 3, 'Engaged': 2, 'Not Engaged': 1 };
+        if (o.engagementLevel && engMap[o.engagementLevel]) practiceEngagement[p].scores.push(engMap[o.engagementLevel]);
+    });
+
+    const practices = Object.entries(practiceEngagement).map(([name, d]) => ({
+        name, count: d.count, avgEngagement: avg(d.scores), type: d.type
+    })).sort((a, b) => a.avgEngagement - b.avgEngagement);
+
+    // ===== Trend Data =====
+    const monthlyData = {};
+    obs.forEach(o => {
+        const d = new Date(o.date);
+        if (isNaN(d)) return;
+        const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+        if (!monthlyData[key]) monthlyData[key] = { total: 0, engaged: 0, notEngaged: 0 };
+        monthlyData[key].total++;
+        if (o.engagementLevel === 'More Engaged' || o.engagementLevel === 'Engaged') monthlyData[key].engaged++;
+        if (o.engagementLevel === 'Not Engaged') monthlyData[key].notEngaged++;
+    });
+
+    // ===== Not Observed / Not Done Teachers =====
+    const notObserved = obs.filter(o => o.observationStatus === 'Not_Observed' || o.observationStatus === 'No');
+    const notObservedTeachers = [...new Set(notObserved.map(o => o.teacher).filter(Boolean))];
+
+    // ===== Engagement groups for training =====
+    const lowEngTeachers = teachers.filter(t => t.avgEngagement > 0 && t.avgEngagement < 2);
+    const highEngTeachers = teachers.filter(t => t.avgEngagement >= 2.5);
+    const notVisitedRecently = teachers.filter(t => t.daysSinceVisit > 30).sort((a, b) => b.daysSinceVisit - a.daysSinceVisit);
+    const needsFollowUp = teachers.filter(t => t.avgEngagement < 2 || t.totalVisits < 2).sort((a, b) => b.priorityScore - a.priorityScore);
+    const topPriority = [...teachers].sort((a, b) => b.priorityScore - a.priorityScore).slice(0, 20);
+
+    return {
+        teachers, schools, clusters, blocks, subjects, practices,
+        monthlyData, notObservedTeachers, lowEngTeachers, highEngTeachers,
+        notVisitedRecently, needsFollowUp, topPriority, today, todayStr
+    };
+}
+
+function buildSmartPlannerHTML(a, obs) {
+    const engLabel = v => v >= 2.5 ? '🟢 High' : v >= 1.5 ? '🟡 Medium' : '🔴 Low';
+    const engColor = v => v >= 2.5 ? '#10b981' : v >= 1.5 ? '#f59e0b' : '#ef4444';
+    const daysLabel = d => d < 7 ? 'This week' : d < 30 ? `${Math.floor(d / 7)}w ago` : d < 365 ? `${Math.floor(d / 30)}m ago` : `${Math.floor(d / 365)}y ago`;
+
+    // Existing features data
+    const ideas = DB.get('ideas');
+    const plannerTasks = DB.get('plannerTasks');
+    const goalTargets = DB.get('goalTargets');
+    const followupStatus = DB.get('followupStatus');
+    const visits = DB.get('visits');
+    const trainings = DB.get('trainings');
+
+    // ===== DAILY VISIT PLAN =====
+    const dailySchools = [...a.schools].sort((x, y) => y.priorityScore - x.priorityScore).slice(0, 5);
+    const dailyHTML = dailySchools.map((s, i) => {
+        const schoolTeachers = a.teachers.filter(t => t.school === s.name);
+        const lowEng = schoolTeachers.filter(t => t.avgEngagement < 2);
+        const subjectsSet = new Set();
+        schoolTeachers.forEach(t => t.subject.forEach(su => subjectsSet.add(su)));
+        return `
+        <div class="sp-visit-card" data-sp-detail>
+            <div class="sp-visit-rank">${i + 1}</div>
+            <div class="sp-visit-info">
+                <div class="sp-visit-school">${escapeHtml(s.name)}</div>
+                <div class="sp-visit-meta">
+                    <span><i class="fas fa-map-marker-alt"></i> ${escapeHtml(s.block || '')} / ${escapeHtml(s.cluster || '')}</span>
+                    <span><i class="fas fa-users"></i> ${s.teacherCount} teachers</span>
+                    <span><i class="fas fa-clock"></i> ${daysLabel(s.daysSinceVisit)}</span>
+                </div>
+            </div>
+            <div class="sp-visit-score" style="color:${engColor(s.avgEngagement)}">${engLabel(s.avgEngagement)}</div>
+            <button class="sp-expand-btn" onclick="toggleSpDetail(this)" title="Details"><i class="fas fa-chevron-down"></i></button>
+            <div class="sp-detail-panel" style="display:none">
+                <div class="sp-detail-grid">
+                    <div class="sp-detail-item"><strong>Total Observations:</strong> ${s.observations.length}</div>
+                    <div class="sp-detail-item"><strong>Avg Engagement:</strong> <span style="color:${engColor(s.avgEngagement)}">${s.avgEngagement.toFixed(2)}/3</span></div>
+                    <div class="sp-detail-item"><strong>Last Visit:</strong> ${s.lastVisit ? s.lastVisit.toLocaleDateString('en-IN') : 'Never'}</div>
+                    <div class="sp-detail-item"><strong>Subjects:</strong> ${[...subjectsSet].join(', ') || '—'}</div>
+                </div>
+                <div class="sp-detail-teachers">
+                    <strong>Teachers (${schoolTeachers.length}):</strong>
+                    ${schoolTeachers.slice(0,10).map(t => `<span class="sp-teacher-chip" style="border-left:3px solid ${engColor(t.avgEngagement)}">${escapeHtml(t.name)} <small>${engLabel(t.avgEngagement)}</small></span>`).join('')}
+                    ${schoolTeachers.length > 10 ? `<span class="sp-teacher-chip sp-more">+${schoolTeachers.length - 10} more</span>` : ''}
+                </div>
+                ${lowEng.length ? `<div class="sp-detail-alert"><i class="fas fa-exclamation-triangle"></i> ${lowEng.length} teacher${lowEng.length>1?'s':''} with low engagement need follow-up</div>` : ''}
+                <div class="sp-detail-actions">
+                    <button onclick="spAddSuggestedVisit('${a.todayStr}','${escapeHtml(s.name)}','${escapeHtml(s.cluster||'')}')" class="sp-action-btn"><i class="fas fa-plus"></i> Add to Today's Planner</button>
+                    <button onclick="spPushIdea('Visit ${escapeHtml(s.name)}','Priority school visit — ${lowEng.length} low engagement teachers, avg ${s.avgEngagement.toFixed(1)}/3')" class="sp-action-btn idea"><i class="fas fa-lightbulb"></i> Save as Idea</button>
+                </div>
+            </div>
+        </div>`;
     }).join('');
+
+    // ===== FOLLOW-UP PLAN =====
+    const followUpTeachers = a.needsFollowUp.slice(0, 10);
+    const followUpHTML = followUpTeachers.map(t => {
+        const reasons = [];
+        if (t.avgEngagement < 2) reasons.push('Low engagement');
+        if (t.totalVisits < 2) reasons.push('Few visits');
+        if (t.daysSinceVisit > 30) reasons.push(`Not visited ${daysLabel(t.daysSinceVisit)}`);
+        const isDone = followupStatus.some(f => f.id === t.nid && f.done);
+        const practiceList = t.practices.slice(0,5);
+        return `<div class="sp-followup-row ${isDone ? 'done' : ''}" data-sp-detail>
+            <div class="sp-followup-teacher">
+                <strong>${escapeHtml(t.name)}</strong>
+                <span class="sp-followup-school">${escapeHtml(t.school || '')} • ${escapeHtml(t.cluster || '')}</span>
+            </div>
+            <div class="sp-followup-reasons">${reasons.map(r => `<span class="sp-reason-tag">${r}</span>`).join('')}</div>
+            <div class="sp-followup-eng" style="color:${engColor(t.avgEngagement)}">${engLabel(t.avgEngagement)}</div>
+            <button class="sp-expand-btn" onclick="toggleSpDetail(this)" title="Details"><i class="fas fa-chevron-down"></i></button>
+            <div class="sp-detail-panel" style="display:none">
+                <div class="sp-detail-grid">
+                    <div class="sp-detail-item"><strong>NID:</strong> ${escapeHtml(t.nid||'—')}</div>
+                    <div class="sp-detail-item"><strong>Phone:</strong> ${escapeHtml(t.phone||'—')}</div>
+                    <div class="sp-detail-item"><strong>Stage:</strong> ${escapeHtml(t.stage||'—')}</div>
+                    <div class="sp-detail-item"><strong>Total Visits:</strong> ${t.totalVisits}</div>
+                    <div class="sp-detail-item"><strong>Subjects:</strong> ${t.subject.join(', ')||'—'}</div>
+                    <div class="sp-detail-item"><strong>Last Visit:</strong> ${t.lastVisit ? t.lastVisit.toLocaleDateString('en-IN') : 'Never'}</div>
+                </div>
+                ${practiceList.length ? `<div class="sp-detail-practices"><strong>Practices Observed:</strong> ${practiceList.map(p=>`<span class="sp-practice-chip">${escapeHtml(p)}</span>`).join('')}${t.practices.length>5?`<span class="sp-practice-chip sp-more">+${t.practices.length-5}</span>`:''}</div>` : ''}
+                <div class="sp-detail-actions">
+                    <button onclick="spAddSuggestedVisit('${a.todayStr}','${escapeHtml(t.school||'')}','${escapeHtml(t.cluster||'')}')" class="sp-action-btn"><i class="fas fa-calendar-plus"></i> Schedule Visit</button>
+                    <button onclick="spPushIdea('Follow-up: ${escapeHtml(t.name)}','Teacher at ${escapeHtml(t.school||'')} needs follow-up. Engagement: ${t.avgEngagement.toFixed(1)}/3. Visits: ${t.totalVisits}. ${reasons.join(". ")}.')" class="sp-action-btn idea"><i class="fas fa-lightbulb"></i> Save Idea</button>
+                </div>
+            </div>
+        </div>`;
+    }).join('');
+
+    // ===== WEEKLY PLAN =====
+    const weekDays = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'];
+    const clustersByBlock = {};
+    a.clusters.forEach(c => {
+        const bk = c.block || 'Unknown';
+        if (!clustersByBlock[bk]) clustersByBlock[bk] = [];
+        clustersByBlock[bk].push(c);
+    });
+    // Sort clusters by lowest engagement first
+    const allClustersSorted = [...a.clusters].sort((x, y) => x.avgEngagement - y.avgEngagement);
+    const weeklyPlan = weekDays.map((day, i) => {
+        const cluster = allClustersSorted[i % allClustersSorted.length];
+        if (!cluster) return { day, cluster: 'N/A', schools: [], focus: '' };
+        const clusterSchools = a.schools.filter(s => s.cluster === cluster.name).sort((x, y) => y.priorityScore - x.priorityScore).slice(0, 3);
+        const weakSubjects = {};
+        cluster.observations.forEach(o => {
+            if (o.engagementLevel === 'Not Engaged' && o.subject) {
+                weakSubjects[o.subject] = (weakSubjects[o.subject] || 0) + 1;
+            }
+        });
+        const topWeakSubject = Object.entries(weakSubjects).sort((a, b) => b[1] - a[1])[0];
+        return {
+            day, cluster: cluster.name, block: cluster.block,
+            schools: clusterSchools.map(s => s.name),
+            focus: topWeakSubject ? topWeakSubject[0] + ' support' : 'General observation',
+            engagement: cluster.avgEngagement
+        };
+    });
+    const weeklyHTML = weeklyPlan.map(w => `
+        <div class="sp-week-row">
+            <div class="sp-week-day">${w.day}</div>
+            <div class="sp-week-cluster"><i class="fas fa-layer-group"></i> ${escapeHtml(w.cluster)}</div>
+            <div class="sp-week-schools">${w.schools.map(s => `<span class="sp-school-chip">${escapeHtml(s)}</span>`).join('') || '<span style="color:var(--text-muted)">—</span>'}</div>
+            <div class="sp-week-focus"><i class="fas fa-bullseye"></i> ${escapeHtml(w.focus)}</div>
+        </div>`).join('');
+
+    // ===== MONTHLY PLAN =====
+    const totalTeachers = a.teachers.length;
+    const totalSchools = a.schools.length;
+    const totalClusters = a.clusters.length;
+    const lowEngCount = a.lowEngTeachers.length;
+    const lowEngPct = totalTeachers > 0 ? Math.round(lowEngCount / totalTeachers * 100) : 0;
+    const avgVisitsPerTeacher = totalTeachers > 0 ? Math.round(obs.length / totalTeachers * 10) / 10 : 0;
+
+    // Training group suggestions
+    const trainingGroups = [];
+    // Group by subject with low engagement
+    a.subjects.filter(s => s.needsTraining).forEach(sub => {
+        const subTeachers = a.lowEngTeachers.filter(t => t.subject.includes(sub.name));
+        if (subTeachers.length >= 2) {
+            trainingGroups.push({
+                topic: `${sub.name} — Pedagogy & Practice`,
+                type: 'Subject-based',
+                icon: 'fas fa-book',
+                teachers: subTeachers.slice(0, 15),
+                reason: `${subTeachers.length} teachers with low engagement in ${sub.name}`,
+                sessions: Math.ceil(subTeachers.length / 8),
+                suggestedActivities: ['Demo lesson', 'Practice sharing', 'Material development', 'Peer observation']
+            });
+        }
+    });
+
+    // Group by practice type with low engagement
+    const practiceTypeEng = {};
+    obs.forEach(o => {
+        const pt = o.practiceType || '';
+        if (!pt) return;
+        if (!practiceTypeEng[pt]) practiceTypeEng[pt] = { low: 0, total: 0, teachers: new Set() };
+        practiceTypeEng[pt].total++;
+        if (o.engagementLevel === 'Not Engaged') {
+            practiceTypeEng[pt].low++;
+            if (o.teacher) practiceTypeEng[pt].teachers.add(o.teacher);
+        }
+    });
+    Object.entries(practiceTypeEng).forEach(([pt, d]) => {
+        if (d.low > d.total * 0.3 && d.teachers.size >= 3) {
+            trainingGroups.push({
+                topic: `${pt} — Strengthening Implementation`,
+                type: 'Practice-based',
+                icon: 'fas fa-tasks',
+                teachers: [...d.teachers].slice(0, 15).map(name => a.teachers.find(t => t.name === name)).filter(Boolean),
+                reason: `${d.low} of ${d.total} observations show low engagement`,
+                sessions: Math.ceil(d.teachers.size / 10),
+                suggestedActivities: ['Workshop', 'Hands-on practice', 'Action research', 'Follow-up classroom visit']
+            });
+        }
+    });
+
+    // Cluster-level capacity building
+    const weakClusters = a.clusters.filter(c => c.avgEngagement < 1.8 && c.teacherCount >= 3);
+    weakClusters.forEach(c => {
+        trainingGroups.push({
+            topic: `${c.name} Cluster — Intensive Support Programme`,
+            type: 'Cluster-based',
+            icon: 'fas fa-layer-group',
+            teachers: a.teachers.filter(t => t.cluster === c.name).slice(0, 20),
+            reason: `Cluster avg engagement ${c.avgEngagement.toFixed(1)}/3 with ${c.teacherCount} teachers`,
+            sessions: 3,
+            suggestedActivities: ['Cluster meeting', 'Peer learning circle', 'Demo lesson by mentor teacher', 'Material sharing']
+        });
+    });
+
+    // New teacher support (few visits)
+    const newTeachers = a.teachers.filter(t => t.totalVisits <= 2);
+    if (newTeachers.length >= 3) {
+        trainingGroups.push({
+            topic: 'Orientation & Onboarding Support',
+            type: 'Support',
+            icon: 'fas fa-hands-helping',
+            teachers: newTeachers.slice(0, 20),
+            reason: `${newTeachers.length} teachers with only 1-2 observations — need more engagement`,
+            sessions: 2,
+            suggestedActivities: ['One-on-one mentoring', 'Classroom observation with feedback', 'Resource sharing', 'Goal setting']
+        });
+    }
+
+    const trainingHTML = trainingGroups.length ? trainingGroups.map((g, idx) => `
+        <div class="sp-training-card" data-sp-detail>
+            <div class="sp-training-header">
+                <i class="${g.icon}"></i>
+                <div style="flex:1">
+                    <div class="sp-training-topic">${escapeHtml(g.topic)}</div>
+                    <div class="sp-training-type">${escapeHtml(g.type)} • ${g.sessions} session${g.sessions > 1 ? 's' : ''} recommended</div>
+                </div>
+                <button class="sp-expand-btn" onclick="toggleSpDetail(this)" title="Details"><i class="fas fa-chevron-down"></i></button>
+            </div>
+            <div class="sp-training-reason"><i class="fas fa-info-circle"></i> ${escapeHtml(g.reason)}</div>
+            <div class="sp-detail-panel" style="display:none">
+                <div class="sp-training-teachers">
+                    <strong>${g.teachers.length} Teachers:</strong>
+                    ${g.teachers.slice(0, 8).map(t => `<span class="sp-teacher-chip">${escapeHtml(t.name)} <small>(${escapeHtml(t.school || '')})</small> <small style="color:${engColor(t.avgEngagement)}">${engLabel(t.avgEngagement)}</small></span>`).join('')}
+                    ${g.teachers.length > 8 ? `<span class="sp-teacher-chip sp-more">+${g.teachers.length - 8} more</span>` : ''}
+                </div>
+                <div class="sp-training-activities">
+                    <strong>Suggested Activities:</strong>
+                    ${g.suggestedActivities.map(a => `<span class="sp-activity-chip"><i class="fas fa-check-circle"></i> ${a}</span>`).join('')}
+                </div>
+                <div class="sp-detail-actions">
+                    <button onclick="spPushTrainingIdea('${escapeHtml(g.topic)}')" class="sp-action-btn idea"><i class="fas fa-lightbulb"></i> Save as Idea</button>
+                </div>
+            </div>
+        </div>
+    `).join('') : '<div class="sp-no-data">All teachers showing good engagement levels — no urgent training needs detected.</div>';
+
+    // ===== CLASSROOM SUPPORT =====
+    const classroomSupport = a.topPriority.slice(0, 10).map(t => {
+        const suggestions = [];
+        if (t.avgEngagement < 1.5) suggestions.push('Intensive co-teaching support');
+        if (t.avgEngagement < 2) suggestions.push('Weekly classroom visit with structured feedback');
+        if (t.totalVisits < 3) suggestions.push('Build rapport through informal visit');
+        if (t.daysSinceVisit > 60) suggestions.push('Re-establish contact urgently');
+        if (t.subject.length && t.avgEngagement < 2) suggestions.push(`Share ${t.subject[0]} TLM/resources`);
+        suggestions.push('Observe + debrief cycle');
+        return { teacher: t, suggestions: suggestions.slice(0, 4) };
+    });
+
+    const classroomHTML = classroomSupport.map(cs => `
+        <div class="sp-support-card" data-sp-detail>
+            <div class="sp-support-header">
+                <div>
+                    <div class="sp-support-name">${escapeHtml(cs.teacher.name)}</div>
+                    <div class="sp-support-meta">${escapeHtml(cs.teacher.school || '')} • ${escapeHtml(cs.teacher.cluster || '')} • ${daysLabel(cs.teacher.daysSinceVisit)}</div>
+                </div>
+                <div class="sp-support-eng" style="color:${engColor(cs.teacher.avgEngagement)}">${engLabel(cs.teacher.avgEngagement)}</div>
+            </div>
+            <div class="sp-support-suggestions">
+                ${cs.suggestions.map(s => `<div class="sp-suggestion"><i class="fas fa-arrow-right"></i> ${s}</div>`).join('')}
+            </div>
+            <div class="sp-detail-actions">
+                <button onclick="spAddSuggestedVisit('${a.todayStr}','${escapeHtml(cs.teacher.school||'')}','${escapeHtml(cs.teacher.cluster||'')}')" class="sp-action-btn sm"><i class="fas fa-calendar-plus"></i> Plan Visit</button>
+                <button onclick="spPushIdea('Support: ${escapeHtml(cs.teacher.name)}','${cs.suggestions.join(". ")}')" class="sp-action-btn idea sm"><i class="fas fa-lightbulb"></i> Idea</button>
+            </div>
+        </div>`).join('');
+
+    // ===== QUARTERLY PLAN =====
+    const quarterlyGoals = [];
+    const engagedPct = obs.filter(o => o.engagementLevel === 'More Engaged' || o.engagementLevel === 'Engaged').length;
+    const currentEngRate = obs.length > 0 ? Math.round(engagedPct / obs.length * 100) : 0;
+    const targetEngRate = Math.min(currentEngRate + 15, 95);
+    quarterlyGoals.push({ goal: `Increase engagement rate from ${currentEngRate}% to ${targetEngRate}%`, icon: 'fas fa-chart-line', metric: `${currentEngRate}% → ${targetEngRate}%` });
+    quarterlyGoals.push({ goal: `Complete follow-up visits for ${a.needsFollowUp.length} priority teachers`, icon: 'fas fa-walking', metric: `${a.needsFollowUp.length} teachers` });
+    quarterlyGoals.push({ goal: `Cover all ${totalClusters} clusters with at least 2 visits each`, icon: 'fas fa-layer-group', metric: `${totalClusters} clusters` });
+    if (trainingGroups.length) quarterlyGoals.push({ goal: `Conduct ${trainingGroups.length} training sessions for identified groups`, icon: 'fas fa-chalkboard-teacher', metric: `${trainingGroups.length} trainings` });
+    quarterlyGoals.push({ goal: `Ensure every school receives minimum 1 observation per month`, icon: 'fas fa-school', metric: `${totalSchools} schools × 3 months` });
+    if (lowEngCount > 0) quarterlyGoals.push({ goal: `Move ${lowEngCount} low-engagement teachers to medium/high through mentoring`, icon: 'fas fa-hands-helping', metric: `${lowEngCount} teachers` });
+
+    const quarterlyHTML = quarterlyGoals.map(g => `
+        <div class="sp-goal-row">
+            <i class="${g.icon}"></i>
+            <div class="sp-goal-text">${g.goal}</div>
+            <div class="sp-goal-metric">${g.metric}</div>
+        </div>`).join('');
+
+    // ===== YEARLY PLAN =====
+    const yearlyMilestones = [
+        { month: 'Q1 (Apr-Jun)', focus: 'Baseline & Mapping', tasks: [`Complete observation mapping for all ${totalSchools} schools`, `Identify and profile all ${totalTeachers} teachers`, 'Establish cluster-wise visit calendar', 'First round of teacher training for low-engagement groups'], icon: 'fas fa-map-marked-alt' },
+        { month: 'Q2 (Jul-Sep)', focus: 'Intensive Support', tasks: [`Intensive classroom support for ${lowEngCount || 'priority'} low-engagement teachers`, 'Subject-specific TLM development and distribution', 'Peer learning circles in each cluster', 'Mid-year engagement assessment'], icon: 'fas fa-hands-helping' },
+        { month: 'Q3 (Oct-Dec)', focus: 'Consolidation & Scale', tasks: ['Scale successful practices across clusters', 'Teacher-led demo lessons — peer mentoring', 'Community engagement and parent interactions', 'Quarterly review and plan adjustment'], icon: 'fas fa-chart-line' },
+        { month: 'Q4 (Jan-Mar)', focus: 'Review & Planning', tasks: ['Annual engagement analysis and impact report', 'Identify best practices for documentation', 'Plan next year targets based on progress', 'Celebrate teacher achievements'], icon: 'fas fa-flag-checkered' }
+    ];
+
+    const yearlyHTML = yearlyMilestones.map(m => `
+        <div class="sp-yearly-card">
+            <div class="sp-yearly-header"><i class="${m.icon}"></i> <strong>${m.month}</strong> — ${m.focus}</div>
+            <div class="sp-yearly-tasks">${m.tasks.map(t => `<div class="sp-yearly-task"><i class="fas fa-check"></i> ${t}</div>`).join('')}</div>
+        </div>`).join('');
+
+    // ===== KEY INSIGHTS =====
+    const insights = [];
+    // Engagement trend
+    const monthKeys = Object.keys(a.monthlyData).sort();
+    if (monthKeys.length >= 2) {
+        const latest = a.monthlyData[monthKeys[monthKeys.length - 1]];
+        const prev = a.monthlyData[monthKeys[monthKeys.length - 2]];
+        const latestRate = latest.total > 0 ? Math.round(latest.engaged / latest.total * 100) : 0;
+        const prevRate = prev.total > 0 ? Math.round(prev.engaged / prev.total * 100) : 0;
+        const diff = latestRate - prevRate;
+        insights.push({ icon: diff >= 0 ? 'fas fa-arrow-up' : 'fas fa-arrow-down', color: diff >= 0 ? '#10b981' : '#ef4444', text: `Engagement ${diff >= 0 ? 'improved' : 'declined'} by ${Math.abs(diff)}% from last month (${prevRate}% → ${latestRate}%)` });
+    }
+    if (a.notVisitedRecently.length > 0) insights.push({ icon: 'fas fa-exclamation-triangle', color: '#f59e0b', text: `${a.notVisitedRecently.length} teachers not visited in 30+ days — prioritize revisits` });
+    if (a.notObservedTeachers.length > 0) insights.push({ icon: 'fas fa-eye-slash', color: '#ef4444', text: `${a.notObservedTeachers.length} teachers marked as "Not Observed" — schedule observations` });
+    if (a.highEngTeachers.length > 0) insights.push({ icon: 'fas fa-star', color: '#10b981', text: `${a.highEngTeachers.length} highly engaged teachers — potential peer mentors and demo lesson leaders` });
+    const avgVPT = totalTeachers > 0 ? (obs.length / totalTeachers).toFixed(1) : 0;
+    insights.push({ icon: 'fas fa-clipboard-list', color: '#3b82f6', text: `Average ${avgVPT} observations per teacher across ${totalSchools} schools in ${totalClusters} clusters` });
+
+    const insightsHTML = insights.map(i => `
+        <div class="sp-insight"><i class="${i.icon}" style="color:${i.color}"></i> ${i.text}</div>`).join('');
+
+    // ===== INTEGRATION STATS — Goals, Ideas, Tasks =====
+    const activeIdeas = ideas.filter(i => i.status !== 'archived' && i.status !== 'done');
+    const upcomingTasks = plannerTasks.filter(t => !t.done && t.date >= a.todayStr).length;
+    const completedFollowups = followupStatus.filter(f => f.done).length;
+    const currentMonthGoals = goalTargets.find(g => g.monthKey === `${a.today.getFullYear()}-${String(a.today.getMonth()+1).padStart(2,'0')}`);
+    const pendingVisits = visits.filter(v => v.status !== 'completed' && v.date >= a.todayStr).length;
+    const upcomingTrainings = trainings.filter(t => t.date >= a.todayStr).length;
+
+    // ===== ASSEMBLE FINAL HTML =====
+    return `
+        <div class="sp-header">
+            <div class="sp-header-title"><i class="fas fa-brain"></i> Smart Planner — AI Suggestions</div>
+            <div class="sp-header-subtitle">Powered by analysis of ${obs.length.toLocaleString()} observations across ${totalSchools} schools, ${totalTeachers} teachers, ${totalClusters} clusters</div>
+        </div>
+
+        <!-- Toolbar -->
+        <div class="sp-toolbar">
+            <div class="sp-toolbar-group">
+                <span class="sp-toolbar-label">Generate & Push:</span>
+                <button class="sp-gen-btn" onclick="spGenerateDailyVisits()"><i class="fas fa-calendar-day"></i> Today's Visits</button>
+                <button class="sp-gen-btn" onclick="spGenerateWeeklyPlan()"><i class="fas fa-calendar-week"></i> Weekly Plan</button>
+                <button class="sp-gen-btn" onclick="spGenerateQuarterlyGoals()"><i class="fas fa-bullseye"></i> Quarterly Goals</button>
+            </div>
+            <div class="sp-toolbar-group">
+                <button class="sp-gen-btn refresh" onclick="renderSmartPlanner()"><i class="fas fa-sync-alt"></i> Refresh</button>
+            </div>
+        </div>
+
+        <!-- Integration Dashboard -->
+        <div class="sp-section">
+            <div class="sp-section-title sp-section-toggle" onclick="toggleSpSection(this)"><i class="fas fa-link"></i> Dashboard — Integrated Overview <i class="fas fa-chevron-down sp-toggle-icon"></i></div>
+            <div class="sp-section-body">
+                <div class="sp-dash-grid">
+                    <div class="sp-dash-card" style="--dash-color:#3b82f6"><div class="sp-dash-icon"><i class="fas fa-walking"></i></div><div class="sp-dash-stat">${pendingVisits}</div><div class="sp-dash-label">Pending Visits</div></div>
+                    <div class="sp-dash-card" style="--dash-color:#8b5cf6"><div class="sp-dash-icon"><i class="fas fa-tasks"></i></div><div class="sp-dash-stat">${upcomingTasks}</div><div class="sp-dash-label">Planner Tasks</div></div>
+                    <div class="sp-dash-card" style="--dash-color:#f59e0b"><div class="sp-dash-icon"><i class="fas fa-lightbulb"></i></div><div class="sp-dash-stat">${activeIdeas.length}</div><div class="sp-dash-label">Active Ideas</div></div>
+                    <div class="sp-dash-card" style="--dash-color:#10b981"><div class="sp-dash-icon"><i class="fas fa-clipboard-check"></i></div><div class="sp-dash-stat">${completedFollowups}</div><div class="sp-dash-label">Follow-ups Done</div></div>
+                    <div class="sp-dash-card" style="--dash-color:#ec4899"><div class="sp-dash-icon"><i class="fas fa-chalkboard-teacher"></i></div><div class="sp-dash-stat">${upcomingTrainings}</div><div class="sp-dash-label">Upcoming Trainings</div></div>
+                    <div class="sp-dash-card" style="--dash-color:#6366f1"><div class="sp-dash-icon"><i class="fas fa-flag-checkered"></i></div><div class="sp-dash-stat">${currentMonthGoals ? '✓' : '—'}</div><div class="sp-dash-label">Monthly Goals Set</div></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Key Insights -->
+        <div class="sp-section">
+            <div class="sp-section-title sp-section-toggle" onclick="toggleSpSection(this)"><i class="fas fa-lightbulb"></i> Key Insights <i class="fas fa-chevron-down sp-toggle-icon"></i></div>
+            <div class="sp-section-body">
+                <div class="sp-insights-grid">${insightsHTML}</div>
+            </div>
+        </div>
+
+        <!-- Weekly Calendar -->
+        <div class="sp-section">
+            <div class="sp-section-title sp-section-toggle" onclick="toggleSpSection(this)"><i class="fas fa-calendar-week"></i> School Visit Calendar <i class="fas fa-chevron-down sp-toggle-icon"></i></div>
+            <div class="sp-section-desc">Visual weekly calendar with existing tasks + AI suggestions. Click <strong>+ Add to Planner</strong> to schedule.</div>
+            <div class="sp-section-body">
+                <div id="spCalendarWrap" class="sp-calendar-wrap"></div>
+            </div>
+        </div>
+
+        <!-- Daily Visit Plan -->
+        <div class="sp-section">
+            <div class="sp-section-title sp-section-toggle" onclick="toggleSpSection(this)"><i class="fas fa-calendar-day"></i> Daily Visit Plan — Top Priority Schools <i class="fas fa-chevron-down sp-toggle-icon"></i></div>
+            <div class="sp-section-desc">Schools ranked by urgency. Click any card to see teachers, subjects & actions.</div>
+            <div class="sp-section-body">
+                <div class="sp-visit-list">${dailyHTML}</div>
+            </div>
+        </div>
+
+        <!-- Follow-up Plan -->
+        <div class="sp-section">
+            <div class="sp-section-title sp-section-toggle" onclick="toggleSpSection(this)"><i class="fas fa-redo-alt"></i> Follow-up Plan — Teachers Needing Attention <i class="fas fa-chevron-down sp-toggle-icon"></i></div>
+            <div class="sp-section-desc">Click any teacher to see TPS data, practices & schedule a visit.</div>
+            <div class="sp-section-body">
+                <div class="sp-followup-list">${followUpHTML || '<div class="sp-no-data">All teachers are well-covered. Great work!</div>'}</div>
+            </div>
+        </div>
+
+        <!-- Weekly Plan Table -->
+        <div class="sp-section">
+            <div class="sp-section-title sp-section-toggle" onclick="toggleSpSection(this)"><i class="fas fa-table"></i> Weekly Cluster Schedule <i class="fas fa-chevron-down sp-toggle-icon"></i></div>
+            <div class="sp-section-desc">Cluster-wise schedule prioritized by lowest engagement.</div>
+            <div class="sp-section-body">
+                <div class="sp-week-table">
+                    <div class="sp-week-header">
+                        <div>Day</div><div>Cluster</div><div>Priority Schools</div><div>Focus Area</div>
+                    </div>
+                    ${weeklyHTML}
+                </div>
+            </div>
+        </div>
+
+        <!-- Monthly Plan -->
+        <div class="sp-section">
+            <div class="sp-section-title sp-section-toggle" onclick="toggleSpSection(this)"><i class="fas fa-calendar-alt"></i> Monthly Plan — Targets & Milestones <i class="fas fa-chevron-down sp-toggle-icon"></i></div>
+            <div class="sp-section-body">
+                <div class="sp-monthly-grid">
+                    <div class="sp-monthly-card">
+                        <div class="sp-monthly-stat">${totalSchools}</div>
+                        <div class="sp-monthly-label">Schools to cover</div>
+                        <div class="sp-monthly-target">Target: ${Math.ceil(totalSchools / 4)} schools/week</div>
+                    </div>
+                    <div class="sp-monthly-card">
+                        <div class="sp-monthly-stat">${a.needsFollowUp.length}</div>
+                        <div class="sp-monthly-label">Follow-ups needed</div>
+                        <div class="sp-monthly-target">Target: ${Math.ceil(a.needsFollowUp.length / 4)} teachers/week</div>
+                    </div>
+                    <div class="sp-monthly-card">
+                        <div class="sp-monthly-stat">${trainingGroups.length}</div>
+                        <div class="sp-monthly-label">Trainings to plan</div>
+                        <div class="sp-monthly-target">Target: ${Math.ceil(trainingGroups.length / 2)} sessions this month</div>
+                    </div>
+                    <div class="sp-monthly-card">
+                        <div class="sp-monthly-stat" style="color:${engColor(currentEngRate / 33)}">${currentEngRate}%</div>
+                        <div class="sp-monthly-label">Current engagement</div>
+                        <div class="sp-monthly-target">Target: ${targetEngRate}% by month end</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Teacher Training Suggestions -->
+        <div class="sp-section">
+            <div class="sp-section-title sp-section-toggle" onclick="toggleSpSection(this)"><i class="fas fa-chalkboard-teacher"></i> Teacher Training Suggestions <i class="fas fa-chevron-down sp-toggle-icon"></i></div>
+            <div class="sp-section-desc">Click training cards to see teachers list, activities & save as idea.</div>
+            <div class="sp-section-body">
+                <div class="sp-training-list">${trainingHTML}</div>
+            </div>
+        </div>
+
+        <!-- Classroom Support -->
+        <div class="sp-section">
+            <div class="sp-section-title sp-section-toggle" onclick="toggleSpSection(this)"><i class="fas fa-hands-helping"></i> Classroom Support — Priority Teachers <i class="fas fa-chevron-down sp-toggle-icon"></i></div>
+            <div class="sp-section-desc">Teachers needing intensive one-on-one support with specific action items.</div>
+            <div class="sp-section-body">
+                <div class="sp-support-list">${classroomHTML}</div>
+            </div>
+        </div>
+
+        <!-- Quarterly Plan -->
+        <div class="sp-section">
+            <div class="sp-section-title sp-section-toggle" onclick="toggleSpSection(this)"><i class="fas fa-bullseye"></i> Quarterly Goals <i class="fas fa-chevron-down sp-toggle-icon"></i></div>
+            <div class="sp-section-body">
+                <div class="sp-goals-list">${quarterlyHTML}</div>
+                <div style="margin-top:12px;text-align:center">
+                    <button class="sp-gen-btn" onclick="spGenerateQuarterlyGoals()"><i class="fas fa-arrow-right"></i> Push to Goal Tracker</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Yearly Plan -->
+        <div class="sp-section">
+            <div class="sp-section-title sp-section-toggle" onclick="toggleSpSection(this)"><i class="fas fa-road"></i> Yearly Roadmap <i class="fas fa-chevron-down sp-toggle-icon"></i></div>
+            <div class="sp-section-desc">Strategic annual plan aligned with APF field work approach.</div>
+            <div class="sp-section-body">
+                <div class="sp-yearly-grid">${yearlyHTML}</div>
+            </div>
+        </div>
+    `;
+}
+
+// After render, init the calendar
+const _origRenderSP = renderSmartPlanner;
+renderSmartPlanner = function() {
+    _origRenderSP();
+    setTimeout(() => renderSpCalendar(), 50);
+};
+
+// ===== Observation Analytics =====
+function renderObsAnalytics() {
+    const observations = DB.get('observations');
+    const grid = document.getElementById('obsAnalyticsGrid');
+    if (!grid) return;
+
+    if (observations.length === 0) {
+        grid.innerHTML = '<div class="empty-state"><i class="fas fa-chart-pie"></i><h3>No data for analytics</h3><p>Add observations or import DMT Excel to see analytics</p></div>';
+        return;
+    }
+
+    // Destroy old charts
+    Object.values(obsActiveCharts).forEach(c => { try { c.destroy(); } catch(e){} });
+    obsActiveCharts = {};
+
+    // Rebuild canvas elements fresh every time
+    grid.innerHTML = `
+        <div class="obs-chart-card"><h3><i class="fas fa-chart-pie"></i> Engagement Distribution</h3><canvas id="obsChartEngagement"></canvas></div>
+        <div class="obs-chart-card"><h3><i class="fas fa-chart-bar"></i> Observations by Subject</h3><canvas id="obsChartSubject"></canvas></div>
+        <div class="obs-chart-card"><h3><i class="fas fa-chart-bar"></i> Practice Type Distribution</h3><canvas id="obsChartPracticeType"></canvas></div>
+        <div class="obs-chart-card"><h3><i class="fas fa-chart-bar"></i> Block-wise Observations</h3><canvas id="obsChartBlock"></canvas></div>
+        <div class="obs-chart-card"><h3><i class="fas fa-chart-line"></i> Monthly Observation Trend</h3><canvas id="obsChartTrend"></canvas></div>
+        <div class="obs-chart-card"><h3><i class="fas fa-chart-bar"></i> Observation Status</h3><canvas id="obsChartStatus"></canvas></div>
+        <div class="obs-chart-card obs-chart-wide"><h3><i class="fas fa-chart-bar"></i> Top 15 Practices Observed</h3><canvas id="obsChartPractices"></canvas></div>
+        <div class="obs-chart-card obs-chart-wide"><h3><i class="fas fa-chalkboard-teacher"></i> Top Observers</h3><canvas id="obsChartObservers"></canvas></div>
+    `;
+
+    const countBy = (arr, key) => {
+        const m = {};
+        arr.forEach(o => { const v = o[key] || 'Unknown'; m[v] = (m[v] || 0) + 1; });
+        return m;
+    };
+
+    const palette = ['#f59e0b', '#3b82f6', '#10b981', '#ef4444', '#8b5cf6', '#ec4899', '#06b6d4', '#f97316', '#14b8a6', '#6366f1', '#d946ef', '#84cc16'];
+
+    // 1. Engagement Distribution (Doughnut)
+    const engData = countBy(observations, 'engagementLevel');
+    const engLabels = Object.keys(engData);
+    obsActiveCharts.engagement = new Chart(document.getElementById('obsChartEngagement'), {
+        type: 'doughnut',
+        data: {
+            labels: engLabels,
+            datasets: [{ data: Object.values(engData), backgroundColor: ['#10b981', '#f59e0b', '#ef4444', '#6b7280'].slice(0, engLabels.length) }]
+        },
+        options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'bottom', labels: { color: '#ccc' } } } }
+    });
+
+    // 2. Subject Distribution (Bar)
+    const subData = countBy(observations, 'subject');
+    obsActiveCharts.subject = new Chart(document.getElementById('obsChartSubject'), {
+        type: 'bar',
+        data: {
+            labels: Object.keys(subData),
+            datasets: [{ label: 'Observations', data: Object.values(subData), backgroundColor: palette }]
+        },
+        options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { y: { ticks: { color: '#ccc' }, grid: { color: 'rgba(255,255,255,0.06)' } }, x: { ticks: { color: '#ccc', maxRotation: 45 }, grid: { display: false } } } }
+    });
+
+    // 3. Practice Type (Doughnut)
+    const ptData = countBy(observations, 'practiceType');
+    obsActiveCharts.practiceType = new Chart(document.getElementById('obsChartPracticeType'), {
+        type: 'doughnut',
+        data: {
+            labels: Object.keys(ptData),
+            datasets: [{ data: Object.values(ptData), backgroundColor: ['#3b82f6', '#f59e0b', '#10b981', '#6b7280'] }]
+        },
+        options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'bottom', labels: { color: '#ccc' } } } }
+    });
+
+    // 4. Block-wise (Bar)
+    const blockData = countBy(observations, 'block');
+    obsActiveCharts.block = new Chart(document.getElementById('obsChartBlock'), {
+        type: 'bar',
+        data: {
+            labels: Object.keys(blockData),
+            datasets: [{ label: 'Observations', data: Object.values(blockData), backgroundColor: palette }]
+        },
+        options: { responsive: true, maintainAspectRatio: false, indexAxis: 'y', plugins: { legend: { display: false } }, scales: { x: { ticks: { color: '#ccc' }, grid: { color: 'rgba(255,255,255,0.06)' } }, y: { ticks: { color: '#ccc' }, grid: { display: false } } } }
+    });
+
+    // 5. Monthly Trend (Line)
+    const monthCounts = {};
+    observations.forEach(o => {
+        if (!o.date) return;
+        const m = o.date.substring(0, 7); // YYYY-MM
+        monthCounts[m] = (monthCounts[m] || 0) + 1;
+    });
+    const sortedMonths = Object.keys(monthCounts).sort();
+    obsActiveCharts.trend = new Chart(document.getElementById('obsChartTrend'), {
+        type: 'line',
+        data: {
+            labels: sortedMonths.map(m => { const [y, mo] = m.split('-'); return `${['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][parseInt(mo)-1]} ${y}`; }),
+            datasets: [{ label: 'Observations', data: sortedMonths.map(m => monthCounts[m]), borderColor: '#f59e0b', backgroundColor: 'rgba(245,158,11,0.1)', fill: true, tension: 0.3 }]
+        },
+        options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { y: { ticks: { color: '#ccc' }, grid: { color: 'rgba(255,255,255,0.06)' } }, x: { ticks: { color: '#ccc', maxRotation: 45 }, grid: { display: false } } } }
+    });
+
+    // 6. Observation Status (Pie)
+    const statusData = countBy(observations, 'observationStatus');
+    obsActiveCharts.status = new Chart(document.getElementById('obsChartStatus'), {
+        type: 'pie',
+        data: {
+            labels: Object.keys(statusData).map(k => k === 'Yes' ? 'Observed' : k === 'Not_Observed' ? 'Not Observed' : k),
+            datasets: [{ data: Object.values(statusData), backgroundColor: ['#10b981', '#f59e0b', '#ef4444', '#6b7280'] }]
+        },
+        options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'bottom', labels: { color: '#ccc' } } } }
+    });
+
+    // 7. Top 15 Practices (Horizontal Bar)
+    const practiceData = countBy(observations, 'practice');
+    const topPractices = Object.entries(practiceData)
+        .filter(([k]) => k !== 'Unknown' && k)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 15);
+    obsActiveCharts.practices = new Chart(document.getElementById('obsChartPractices'), {
+        type: 'bar',
+        data: {
+            labels: topPractices.map(([k]) => k.length > 50 ? k.substring(0, 50) + '...' : k),
+            datasets: [{ label: 'Count', data: topPractices.map(([,v]) => v), backgroundColor: palette }]
+        },
+        options: { responsive: true, maintainAspectRatio: false, indexAxis: 'y', plugins: { legend: { display: false }, tooltip: { callbacks: { title: (items) => topPractices[items[0].dataIndex]?.[0] || '' } } }, scales: { x: { ticks: { color: '#ccc' }, grid: { color: 'rgba(255,255,255,0.06)' } }, y: { ticks: { color: '#ccc', font: { size: 10 } }, grid: { display: false } } } }
+    });
+
+    // 8. Top Observers (Bar)
+    const obsData = countBy(observations, 'observer');
+    const topObservers = Object.entries(obsData)
+        .filter(([k]) => k !== 'Unknown' && k)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 15);
+    obsActiveCharts.observers = new Chart(document.getElementById('obsChartObservers'), {
+        type: 'bar',
+        data: {
+            labels: topObservers.map(([k]) => k),
+            datasets: [{ label: 'Observations', data: topObservers.map(([,v]) => v), backgroundColor: palette }]
+        },
+        options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { y: { ticks: { color: '#ccc' }, grid: { color: 'rgba(255,255,255,0.06)' } }, x: { ticks: { color: '#ccc', maxRotation: 45 }, grid: { display: false } } } }
+    });
 }
 
 // ===== RESOURCES =====
@@ -2729,8 +5483,8 @@ function generateSummaryReport(output, visits, trainings, observations) {
     });
 
     // Average ratings
-    const ratedObs = observations.filter(o => o.engagement || o.methodology || o.tlm);
-    const avgEngagement = ratedObs.length ? (ratedObs.reduce((s, o) => s + (o.engagement || 0), 0) / ratedObs.length).toFixed(1) : '-';
+    const ratedObs = observations.filter(o => (o.engagementRating || o.engagement) || o.methodology || o.tlm);
+    const avgEngagement = ratedObs.length ? (ratedObs.reduce((s, o) => s + (o.engagementRating || o.engagement || 0), 0) / ratedObs.length).toFixed(1) : '-';
     const avgMethodology = ratedObs.length ? (ratedObs.reduce((s, o) => s + (o.methodology || 0), 0) / ratedObs.length).toFixed(1) : '-';
     const avgTLM = ratedObs.length ? (ratedObs.reduce((s, o) => s + (o.tlm || 0), 0) / ratedObs.length).toFixed(1) : '-';
 
@@ -3398,9 +6152,9 @@ function renderAnalyticsInsights(visits, trainings, observations, allVisits, all
     }
 
     // Average observation ratings
-    const ratedObs = observations.filter(o => o.engagement || o.methodology || o.tlm);
+    const ratedObs = observations.filter(o => (o.engagementRating || o.engagement) || o.methodology || o.tlm);
     if (ratedObs.length >= 2) {
-        const avgEng = (ratedObs.reduce((s, o) => s + (o.engagement || 0), 0) / ratedObs.length).toFixed(1);
+        const avgEng = (ratedObs.reduce((s, o) => s + (o.engagementRating || o.engagement || 0), 0) / ratedObs.length).toFixed(1);
         const avgMeth = (ratedObs.reduce((s, o) => s + (o.methodology || 0), 0) / ratedObs.length).toFixed(1);
         const avgTlm = (ratedObs.reduce((s, o) => s + (o.tlm || 0), 0) / ratedObs.length).toFixed(1);
         const lowest = Math.min(parseFloat(avgEng), parseFloat(avgMeth), parseFloat(avgTlm));
@@ -3445,9 +6199,9 @@ function renderAnalyticsKPIs(visits, trainings, observations) {
     visits.forEach(v => schools.add((v.school || '').toLowerCase().trim()));
     observations.forEach(o => schools.add((o.school || '').toLowerCase().trim()));
     
-    const ratedObs = observations.filter(o => o.engagement || o.methodology || o.tlm);
+    const ratedObs = observations.filter(o => (o.engagementRating || o.engagement) || o.methodology || o.tlm);
     const avgRating = ratedObs.length
-        ? ((ratedObs.reduce((s, o) => s + (o.engagement || 0) + (o.methodology || 0) + (o.tlm || 0), 0)) / (ratedObs.length * 3)).toFixed(1)
+        ? ((ratedObs.reduce((s, o) => s + (o.engagementRating || o.engagement || 0) + (o.methodology || 0) + (o.tlm || 0), 0)) / (ratedObs.length * 3)).toFixed(1)
         : '-';
     
     const completionRate = visits.length > 0 ? Math.round((completed / visits.length) * 100) : 0;
@@ -3562,7 +6316,7 @@ function renderObsRatingsChart(observations) {
     const canvas = document.getElementById('chartObsRatings');
     if (!canvas) return;
 
-    const rated = observations.filter(o => o.engagement || o.methodology || o.tlm);
+    const rated = observations.filter(o => (o.engagementRating || o.engagement) || o.methodology || o.tlm);
     if (rated.length === 0) {
         canvas.style.display = 'none';
         if (!canvas.parentElement.querySelector('.empty-state')) canvas.insertAdjacentHTML('afterend', '<div class="empty-state small"><i class="fas fa-star"></i><p>No rated observations in this period</p></div>');
@@ -3571,7 +6325,7 @@ function renderObsRatingsChart(observations) {
     canvas.style.display = '';
     { const e = canvas.parentElement.querySelector('.empty-state'); if (e) e.remove(); }
 
-    const avgEng = (rated.reduce((s, o) => s + (o.engagement || 0), 0) / rated.length).toFixed(1);
+    const avgEng = (rated.reduce((s, o) => s + (o.engagementRating || o.engagement || 0), 0) / rated.length).toFixed(1);
     const avgMeth = (rated.reduce((s, o) => s + (o.methodology || 0), 0) / rated.length).toFixed(1);
     const avgTlm = (rated.reduce((s, o) => s + (o.tlm || 0), 0) / rated.length).toFixed(1);
 
@@ -4051,11 +6805,39 @@ function buildIdeaCard(idea) {
                 <span class="idea-card-date">${dateStr}</span>
                 <div class="idea-card-actions" onclick="event.stopPropagation()">
                     <button onclick="openIdeaModal('${idea.id}')" title="Edit"><i class="fas fa-pen"></i></button>
+                    ${idea.status === 'archived'
+                        ? `<button onclick="unarchiveIdea('${idea.id}')" title="Unarchive" class="unarchive-btn"><i class="fas fa-box-open"></i></button>`
+                        : `<button onclick="archiveIdea('${idea.id}')" title="Archive" class="archive-btn"><i class="fas fa-archive"></i></button>`
+                    }
                     <button class="delete-btn" onclick="deleteIdea('${idea.id}')" title="Delete"><i class="fas fa-trash"></i></button>
                 </div>
             </div>
         </div>
     `;
+}
+
+function archiveIdea(id) {
+    const ideas = DB.get('ideas');
+    const idea = ideas.find(i => i.id === id);
+    if (idea) {
+        idea.status = 'archived';
+        idea.updatedAt = new Date().toISOString();
+        DB.set('ideas', ideas);
+        renderIdeas();
+        showToast('Idea archived 📦');
+    }
+}
+
+function unarchiveIdea(id) {
+    const ideas = DB.get('ideas');
+    const idea = ideas.find(i => i.id === id);
+    if (idea) {
+        idea.status = 'spark';
+        idea.updatedAt = new Date().toISOString();
+        DB.set('ideas', ideas);
+        renderIdeas();
+        showToast('Idea unarchived — moved back to Spark ✨');
+    }
 }
 
 function renderIdeas() {
@@ -4088,7 +6870,8 @@ function renderIdeaBoard(ideas, container) {
         { key: 'spark', title: '✨ Spark', color: '#f59e0b' },
         { key: 'exploring', title: '🔍 Exploring', color: '#3b82f6' },
         { key: 'in-progress', title: '🚀 In Progress', color: '#8b5cf6' },
-        { key: 'done', title: '✅ Done', color: '#10b981' }
+        { key: 'done', title: '✅ Done', color: '#10b981' },
+        { key: 'archived', title: '📦 Archived', color: '#6b7280' }
     ];
 
     const sortedByPriority = (arr) => {
@@ -4142,6 +6925,10 @@ function renderIdeaList(ideas, container) {
             <span class="idea-card-date">${new Date(idea.createdAt).toLocaleDateString('en-IN', { day:'numeric', month:'short' })}</span>
             <div class="idea-card-actions" onclick="event.stopPropagation()" style="opacity:1;">
                 <button onclick="openIdeaModal('${idea.id}')" title="Edit"><i class="fas fa-pen"></i></button>
+                ${idea.status === 'archived'
+                    ? `<button onclick="unarchiveIdea('${idea.id}')" title="Unarchive" class="unarchive-btn"><i class="fas fa-box-open"></i></button>`
+                    : `<button onclick="archiveIdea('${idea.id}')" title="Archive" class="archive-btn"><i class="fas fa-archive"></i></button>`
+                }
                 <button class="delete-btn" onclick="deleteIdea('${idea.id}')" title="Delete"><i class="fas fa-trash"></i></button>
             </div>
         </div>
@@ -4211,7 +6998,7 @@ function renderSchoolProfiles() {
     container.innerHTML = `<div class="school-cards-grid">${schools.map(school => {
         const lastVisit = school.visits.filter(v => v.date).sort((a, b) => b.date.localeCompare(a.date))[0];
         const avgRating = school.observations.length > 0
-            ? (school.observations.reduce((s, o) => s + ((o.engagement || 0) + (o.methodology || 0) + (o.tlm || 0)) / 3, 0) / school.observations.length).toFixed(1)
+            ? (school.observations.reduce((s, o) => s + (((o.engagementRating || o.engagement) || 0) + (o.methodology || 0) + (o.tlm || 0)) / 3, 0) / school.observations.length).toFixed(1)
             : null;
         const schoolKey = school.name.trim().toLowerCase();
         const safeKey = encodeURIComponent(schoolKey).replace(/'/g, '%27');
@@ -4249,7 +7036,7 @@ function showSchoolDetail(encodedKey) {
     const teachers = [...new Set(school.observations.map(o => o.teacher).filter(Boolean))];
     const subjects = [...new Set(school.observations.map(o => o.subject).filter(Boolean))];
     const avgRating = school.observations.length > 0
-        ? (school.observations.reduce((s, o) => s + ((o.engagement || 0) + (o.methodology || 0) + (o.tlm || 0)) / 3, 0) / school.observations.length).toFixed(1)
+        ? (school.observations.reduce((s, o) => s + (((o.engagementRating || o.engagement) || 0) + (o.methodology || 0) + (o.tlm || 0)) / 3, 0) / school.observations.length).toFixed(1)
         : 'N/A';
 
     // All activities timeline
@@ -4490,6 +7277,337 @@ function deleteContact(id) {
     showToast('Contact deleted');
 }
 
+function extractContactsFromObservations() {
+    document.getElementById('obsImportMenu')?.classList.remove('show');
+    const observations = DB.get('observations');
+    if (observations.length === 0) {
+        showToast('No observations found. Import DMT Excel first.', 'info');
+        return;
+    }
+
+    // Build unique teacher map from observations (key: name + phone)
+    const teacherMap = new Map();
+    observations.forEach(o => {
+        const name = (o.teacher || '').trim();
+        const phone = (o.teacherPhone || '').trim();
+        if (!name && !phone) return;
+        // Use name+phone as key to deduplicate
+        const key = `${name.toLowerCase()}|${phone}`;
+        if (!teacherMap.has(key)) {
+            teacherMap.set(key, {
+                name: name,
+                phone: phone,
+                school: (o.school || '').trim(),
+                block: (o.block || '').trim(),
+                cluster: (o.cluster || '').trim(),
+                stage: (o.teacherStage || '').trim(),
+                nid: (o.nid || '').trim()
+            });
+        }
+    });
+
+    if (teacherMap.size === 0) {
+        showToast('No teacher data found in observations', 'info');
+        return;
+    }
+
+    // Check existing contacts to avoid duplicates
+    const existingContacts = DB.get('contacts');
+    const existingKeys = new Set();
+    existingContacts.forEach(c => {
+        const n = (c.name || '').toLowerCase().trim();
+        const p = (c.phone || '').trim();
+        existingKeys.add(`${n}|${p}`);
+        if (p) existingKeys.add(`phone:${p}`);
+    });
+
+    // Filter out already-existing contacts
+    const newTeachers = [];
+    teacherMap.forEach((t, key) => {
+        const namePhone = `${t.name.toLowerCase()}|${t.phone}`;
+        const phoneOnly = t.phone ? `phone:${t.phone}` : null;
+        if (!existingKeys.has(namePhone) && (!phoneOnly || !existingKeys.has(phoneOnly))) {
+            newTeachers.push(t);
+        }
+    });
+
+    if (newTeachers.length === 0) {
+        showToast(`All ${teacherMap.size} teachers already exist in your contacts`, 'info');
+        return;
+    }
+
+    // Confirm with user
+    const withPhone = newTeachers.filter(t => t.phone).length;
+    const withoutPhone = newTeachers.length - withPhone;
+    let msg = `Found ${newTeachers.length} new teacher contact(s) from observations.\n\n`;
+    msg += `  ${withPhone} with phone numbers\n`;
+    msg += `  ${withoutPhone} without phone numbers\n\n`;
+    msg += `${teacherMap.size - newTeachers.length} already in your contacts (skipped).\n\n`;
+    msg += `Add ${newTeachers.length} new contacts?`;
+
+    if (!confirm(msg)) return;
+
+    // Ask if they want only contacts with phone numbers
+    let toAdd = newTeachers;
+    if (withoutPhone > 0 && withPhone > 0) {
+        if (confirm(`Import only teachers WITH phone numbers?\n\nYes = ${withPhone} contacts (with phone)\nNo = ${newTeachers.length} contacts (all)`)) {
+            toAdd = newTeachers.filter(t => t.phone);
+        }
+    }
+
+    // Add to contacts
+    const contacts = DB.get('contacts');
+    let added = 0;
+    toAdd.forEach(t => {
+        const notes = [t.stage ? `Stage: ${t.stage}` : '', t.cluster ? `Cluster: ${t.cluster}` : '', t.nid ? `NID: ${t.nid}` : ''].filter(Boolean).join(' | ');
+        contacts.push({
+            id: DB.generateId(),
+            name: t.name || 'Unknown Teacher',
+            role: 'Teacher',
+            school: t.school,
+            phone: t.phone,
+            email: '',
+            block: t.block,
+            notes: notes,
+            createdAt: new Date().toISOString(),
+            source: 'Observation Extract'
+        });
+        added++;
+    });
+
+    DB.set('contacts', contacts);
+    renderContacts();
+    showToast(`Added ${added} teacher contacts from observations!`, 'success', 5000);
+
+    // Switch to contacts section if not already there
+    if (document.querySelector('.content-section.active')?.id !== 'section-contacts') {
+        switchSection('contacts');
+    }
+}
+
+// ===== TRUECALLER VERIFICATION =====
+const TC_API_KEY = 'lVwbc02fc94a52fac4cfa837823b049379862';
+
+function openTruecallerSearch(prefillPhone) {
+    openModal('truecallerModal');
+    const phoneInput = document.getElementById('tcSearchPhone');
+    const resultArea = document.getElementById('tcSearchResult');
+    resultArea.innerHTML = '';
+    if (prefillPhone) {
+        phoneInput.value = prefillPhone.replace(/^\+91|^91/, '').replace(/[^\d]/g, '');
+    } else {
+        phoneInput.value = '';
+    }
+    phoneInput.focus();
+}
+
+async function truecallerSearch(phone, countryCode) {
+    const phoneNum = phone || document.getElementById('tcSearchPhone').value.replace(/[^\d]/g, '');
+    const cc = countryCode || document.getElementById('tcCountryCode').value;
+    const resultArea = document.getElementById('tcSearchResult');
+    const searchBtn = document.getElementById('tcSearchBtn');
+
+    if (!phoneNum || phoneNum.length < 7) {
+        showToast('Enter a valid phone number', 'error');
+        return null;
+    }
+
+    resultArea.innerHTML = `<div class="tc-loading"><i class="fas fa-spinner fa-spin"></i> Searching Truecaller...</div>`;
+    if (searchBtn) {
+        searchBtn.disabled = true;
+        searchBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Searching...';
+    }
+
+    try {
+        // Try multiple Truecaller endpoints and CORS proxy combinations
+        const endpoints = [
+            {
+                url: `https://search5-noneu.truecaller.com/v2/search?q=${encodeURIComponent(phoneNum)}&countryCode=${cc}&type=4`,
+                headers: { 'accountId': TC_API_KEY }
+            },
+            {
+                url: `https://asia-south1-truecaller-web.cloudfunctions.net/api/noneu/search/v1?q=${encodeURIComponent(phoneNum)}&countryCode=${cc}&type=4`,
+                headers: { 'Authorization': `Bearer ${TC_API_KEY}` }
+            }
+        ];
+
+        const proxyFns = [
+            (url) => `https://corsproxy.io/?${encodeURIComponent(url)}`,
+            (url) => `https://api.cors.lol/?url=${encodeURIComponent(url)}`,
+            (url) => `https://proxy.cors.sh/${url}`,
+            (url) => url  // direct (last resort)
+        ];
+
+        let resp = null;
+        let lastErr = null;
+        let data = null;
+
+        outer:
+        for (const endpoint of endpoints) {
+            for (const mkProxy of proxyFns) {
+                try {
+                    const proxyUrl = mkProxy(endpoint.url);
+                    const hdrs = { ...endpoint.headers };
+                    // cors.sh needs its own key header
+                    if (proxyUrl.includes('proxy.cors.sh')) {
+                        hdrs['x-cors-api-key'] = 'temp_' + Date.now();
+                    }
+                    resp = await fetch(proxyUrl, { headers: hdrs });
+                    if (resp.ok) {
+                        const text = await resp.text();
+                        try { data = JSON.parse(text); } catch(_) { data = null; }
+                        if (data && (data.data || data.status)) { break outer; }
+                        data = null; resp = null;
+                    } else {
+                        resp = null;
+                    }
+                } catch (e) {
+                    lastErr = e;
+                    resp = null;
+                }
+            }
+        }
+
+        if (!data) {
+            throw lastErr || new Error('All lookup attempts failed');
+        }
+
+        const info = data?.data?.[0] || null;
+
+        if (!info) {
+            resultArea.innerHTML = `
+                <div class="tc-result-card tc-not-found">
+                    <div class="tc-result-icon" style="background:rgba(239,68,68,0.15);color:#ef4444"><i class="fas fa-user-times"></i></div>
+                    <div class="tc-result-info">
+                        <div class="tc-result-label">No Results Found</div>
+                        <div class="tc-result-sub">This number is not registered on Truecaller</div>
+                    </div>
+                </div>`;
+            return null;
+        }
+
+        const name = info.name || 'Unknown';
+        const firstName = info.firstName || '';
+        const lastName = info.lastName || '';
+        const fullName = (firstName + ' ' + lastName).trim() || name;
+        const carrier = info.phones?.[0]?.carrier || '';
+        const numType = info.phones?.[0]?.numberType || '';
+        const city = info.addresses?.[0]?.city || '';
+        const timeZone = info.addresses?.[0]?.timeZone || '';
+        const spamScore = info.spamScore || 0;
+        const spamType = info.spamType || '';
+
+        let spamBadge = '';
+        if (spamScore > 0 || spamType) {
+            spamBadge = `<span class="tc-spam-badge"><i class="fas fa-exclamation-triangle"></i> Spam Risk (${spamScore})</span>`;
+        } else {
+            spamBadge = `<span class="tc-safe-badge"><i class="fas fa-shield-alt"></i> Safe</span>`;
+        }
+
+        resultArea.innerHTML = `
+            <div class="tc-result-card">
+                <div class="tc-result-header">
+                    <div class="tc-result-icon" style="background:rgba(33,150,243,0.15);color:#2196F3"><i class="fas fa-user-check"></i></div>
+                    <div class="tc-result-info">
+                        <div class="tc-result-name">${escapeHtml(fullName)}</div>
+                        ${spamBadge}
+                    </div>
+                </div>
+                <div class="tc-result-details">
+                    <div class="tc-detail"><i class="fas fa-phone"></i> <strong>${escapeHtml(phoneNum)}</strong></div>
+                    ${carrier ? `<div class="tc-detail"><i class="fas fa-broadcast-tower"></i> ${escapeHtml(carrier)}</div>` : ''}
+                    ${numType ? `<div class="tc-detail"><i class="fas fa-sim-card"></i> ${escapeHtml(numType)}</div>` : ''}
+                    ${city ? `<div class="tc-detail"><i class="fas fa-map-marker-alt"></i> ${escapeHtml(city)}</div>` : ''}
+                    ${timeZone ? `<div class="tc-detail"><i class="fas fa-clock"></i> ${escapeHtml(timeZone)}</div>` : ''}
+                </div>
+                <div class="tc-result-actions">
+                    <button class="btn btn-primary btn-sm" onclick="addTruecallerToContacts('${escapeHtml(fullName).replace(/'/g, "\\'")}', '${escapeHtml(phoneNum)}', '${escapeHtml(carrier)}', '${escapeHtml(city)}')" style="background:#2196F3">
+                        <i class="fas fa-user-plus"></i> Save to Contacts
+                    </button>
+                    <button class="btn btn-outline btn-sm" onclick="window.open('tel:${phoneNum.replace(/[^\d+]/g, '')}')">
+                        <i class="fas fa-phone"></i> Call
+                    </button>
+                </div>
+            </div>`;
+
+        return { name: fullName, phone: phoneNum, carrier, city, spamScore };
+
+    } catch (err) {
+        console.error('Truecaller API error:', err);
+        resultArea.innerHTML = `
+            <div class="tc-result-card tc-error">
+                <div class="tc-result-icon" style="background:rgba(239,68,68,0.15);color:#ef4444"><i class="fas fa-exclamation-circle"></i></div>
+                <div class="tc-result-info">
+                    <div class="tc-result-label">Lookup Failed</div>
+                    <div class="tc-result-sub">${escapeHtml(err.message)}<br><small>Tried multiple endpoints &amp; proxies. Check internet connection, API key, or try again. Works best on mobile browsers.</small></div>
+                </div>
+                <div style="margin-top:12px;text-align:center;">
+                    <a href="https://www.truecaller.com/search/in/${phoneNum}" target="_blank" class="btn btn-outline btn-sm" style="display:inline-flex;align-items:center;gap:6px;">
+                        <i class="fas fa-external-link-alt"></i> Try on Truecaller Website
+                    </a>
+                </div>
+            </div>`;
+        return null;
+    } finally {
+        if (searchBtn) {
+            searchBtn.disabled = false;
+            searchBtn.innerHTML = '<i class="fas fa-search"></i> Search on Truecaller';
+        }
+    }
+}
+
+function addTruecallerToContacts(name, phone, carrier, city) {
+    const contacts = DB.get('contacts');
+    // Check if already exists
+    const exists = contacts.some(c => (c.phone || '').replace(/[^\d]/g, '') === phone.replace(/[^\d]/g, ''));
+    if (exists) {
+        showToast('This number is already in your contacts', 'info');
+        return;
+    }
+    contacts.push({
+        id: DB.generateId(),
+        name: name,
+        role: 'Other',
+        school: '',
+        phone: phone,
+        email: '',
+        block: city || '',
+        notes: carrier ? `Carrier: ${carrier} | Added via Truecaller` : 'Added via Truecaller',
+        createdAt: new Date().toISOString(),
+        source: 'Truecaller'
+    });
+    DB.set('contacts', contacts);
+    renderContacts();
+    showToast(`${name} added to contacts!`, 'success');
+}
+
+async function verifyContactTruecaller(contactId) {
+    const contacts = DB.get('contacts');
+    const contact = contacts.find(c => c.id === contactId);
+    if (!contact || !contact.phone) {
+        showToast('No phone number to verify', 'error');
+        return;
+    }
+
+    const phone = contact.phone.replace(/[^\d]/g, '');
+    // Show in modal with prefilled phone
+    openTruecallerSearch(phone);
+    // Auto-search
+    const result = await truecallerSearch(phone, 'IN');
+
+    if (result && result.name) {
+        // Update the contact's truecaller verified name
+        const idx = contacts.findIndex(c => c.id === contactId);
+        if (idx !== -1) {
+            contacts[idx].tcVerified = true;
+            contacts[idx].tcName = result.name;
+            contacts[idx].tcSpamScore = result.spamScore || 0;
+            DB.set('contacts', contacts);
+            renderContacts();
+        }
+    }
+}
+
 function renderContacts() {
     let contacts = DB.get('contacts');
     const roleFilter = document.getElementById('contactRoleFilter').value;
@@ -4559,12 +7677,13 @@ function renderContacts() {
                 <div class="contact-card-details">
                     ${c.school ? `<div class="contact-detail-row"><i class="fas fa-building"></i> ${escapeHtml(c.school)}</div>` : ''}
                     ${c.block ? `<div class="contact-detail-row"><i class="fas fa-map-marker-alt"></i> ${escapeHtml(c.block)}</div>` : ''}
-                    ${c.phone ? `<div class="contact-detail-row"><i class="fas fa-phone"></i> <a href="tel:${escapeHtml(c.phone)}">${escapeHtml(c.phone)}</a></div>` : ''}
+                    ${c.phone ? `<div class="contact-detail-row"><i class="fas fa-phone"></i> <a href="tel:${escapeHtml(c.phone)}">${escapeHtml(c.phone)}</a>${c.tcVerified ? `<span class="tc-verified-inline" title="Truecaller: ${escapeHtml(c.tcName || '')}"><i class="fas fa-check-circle"></i> ${escapeHtml(c.tcName || 'Verified')}</span>` : ''}</div>` : ''}
                     ${c.email ? `<div class="contact-detail-row"><i class="fas fa-envelope"></i> <a href="mailto:${escapeHtml(c.email)}">${escapeHtml(c.email)}</a></div>` : ''}
                     ${c.notes ? `<div class="contact-detail-row"><i class="fas fa-sticky-note"></i> ${escapeHtml(c.notes)}</div>` : ''}
                 </div>
                 <div class="contact-card-actions">
                     ${c.phone ? `<button onclick="window.open('tel:${c.phone.replace(/[^\d+\-\s()]/g, '')}')"  ><i class="fas fa-phone"></i> Call</button>` : ''}
+                    ${c.phone ? `<button class="tc-verify-btn" onclick="verifyContactTruecaller('${c.id}')" title="Verify on Truecaller"><i class="fas fa-phone-square-alt"></i> ${c.tcVerified ? 'Re-verify' : 'Verify'}</button>` : ''}
                     <button onclick="openContactModal('${c.id}')"><i class="fas fa-pen"></i> Edit</button>
                     <button class="delete-btn" onclick="deleteContact('${c.id}')"><i class="fas fa-trash"></i></button>
                 </div>
@@ -4742,9 +7861,17 @@ function exportAllDataToExcel() {
 
     if (observations.length > 0) {
         const ws = XLSX.utils.json_to_sheet(observations.map(o => ({
-            Date: o.date, School: o.school, Teacher: o.teacher || '', Class: o.class || '', Subject: o.subject, Topic: o.topic || '',
-            'Engagement (1-5)': o.engagement || 0, 'Methodology (1-5)': o.methodology || 0, 'TLM Usage (1-5)': o.tlm || 0,
-            Strengths: o.strengths || '', 'Areas for Improvement': o.areas || '', Suggestions: o.suggestions || ''
+            Date: o.date, School: o.school, Teacher: o.teacher || '', 'Phone': o.teacherPhone || '',
+            'Teacher Stage': o.teacherStage || '', Class: o.class || '', Subject: o.subject || '',
+            'Observation': o.observationStatus || '', 'Observed While Teaching': o.observedWhileTeaching || '',
+            'Engagement Level': o.engagementLevel || '', 'Practice Type': o.practiceType || '',
+            'Practice Serial': o.practiceSerial || '', 'Practice': o.practice || '',
+            'Group': o.group || '', Topic: o.topic || '',
+            Cluster: o.cluster || '', Block: o.block || '',
+            Observer: o.observer || '', 'Status': o.stakeholderStatus || '',
+            'Engagement (1-5)': o.engagementRating || o.engagement || 0, 'Methodology (1-5)': o.methodology || 0, 'TLM Usage (1-5)': o.tlm || 0,
+            Notes: o.notes || '', Strengths: o.strengths || '', 'Areas for Improvement': o.areas || '', Suggestions: o.suggestions || '',
+            Source: o.source || 'Manual'
         })));
         XLSX.utils.book_append_sheet(wb, ws, 'Observations');
     }
@@ -4867,6 +7994,496 @@ function getTimeAgo(dateStr) {
     if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
     if (diff < 604800) return `${Math.floor(diff / 86400)}d ago`;
     return date.toLocaleDateString('en-IN');
+}
+
+// ===== DASHBOARD SMART ALERTS =====
+function renderDashboardAlerts() {
+    const el = document.getElementById('dashboardAlerts');
+    if (!el) return;
+    const alerts = [];
+    const visits = DB.get('visits');
+    const observations = DB.get('observations');
+    const now = new Date();
+    const today = now.toISOString().split('T')[0];
+
+    // 1. Overdue follow-ups
+    const followupStatus = DB.get('followupStatus') || {};
+    const pendingFollowups = visits.filter(v => v.followUp && v.followUp.trim() && !followupStatus[v.id]);
+    if (pendingFollowups.length > 0) {
+        alerts.push({
+            icon: 'fa-clipboard-list', color: '#f59e0b', rgb: '245,158,11',
+            title: 'Pending Follow-ups', desc: 'Action items need attention',
+            count: pendingFollowups.length, section: 'followups'
+        });
+    }
+
+    // 2. Upcoming visits this week
+    const weekEnd = new Date(now); weekEnd.setDate(now.getDate() + 7);
+    const upcomingThisWeek = visits.filter(v => v.status === 'planned' && new Date(v.date) >= now && new Date(v.date) <= weekEnd);
+    if (upcomingThisWeek.length > 0) {
+        alerts.push({
+            icon: 'fa-calendar-day', color: '#3b82f6', rgb: '59,130,246',
+            title: 'Visits This Week', desc: 'Planned school visits ahead',
+            count: upcomingThisWeek.length, section: 'visits'
+        });
+    }
+
+    // 3. Teachers not observed in 30+ days
+    const teacherLastObs = {};
+    observations.forEach(o => {
+        const key = (o.teacher || '').toLowerCase().trim();
+        if (!key) return;
+        const d = new Date(o.date);
+        if (!teacherLastObs[key] || d > teacherLastObs[key]) teacherLastObs[key] = d;
+    });
+    const staleTeachers = Object.entries(teacherLastObs).filter(([_, d]) => (now - d) / 86400000 > 30);
+    if (staleTeachers.length > 0) {
+        alerts.push({
+            icon: 'fa-user-clock', color: '#ef4444', rgb: '239,68,68',
+            title: 'Needs Revisit', desc: 'Teachers not seen in 30+ days',
+            count: staleTeachers.length, section: 'teachers'
+        });
+    }
+
+    // 4. Low engagement teachers
+    const teacherEng = {};
+    observations.forEach(o => {
+        const key = (o.teacher || '').toLowerCase().trim();
+        if (!key || !o.engagementLevel) return;
+        if (!teacherEng[key]) teacherEng[key] = [];
+        teacherEng[key].push(o.engagementLevel === 'More Engaged' ? 3 : o.engagementLevel === 'Engaged' ? 2 : 1);
+    });
+    const lowEngCount = Object.values(teacherEng).filter(arr => {
+        const avg = arr.reduce((a, b) => a + b, 0) / arr.length;
+        return avg < 2 && arr.length >= 2;
+    }).length;
+    if (lowEngCount > 0) {
+        alerts.push({
+            icon: 'fa-exclamation-triangle', color: '#ef4444', rgb: '239,68,68',
+            title: 'Low Engagement', desc: 'Teachers need support',
+            count: lowEngCount, section: 'teachers'
+        });
+    }
+
+    // 5. Overdue planner tasks
+    const tasks = DB.get('plannerTasks');
+    const overdueTasks = tasks.filter(t => !t.done && t.dateKey < today);
+    if (overdueTasks.length > 0) {
+        alerts.push({
+            icon: 'fa-tasks', color: '#8b5cf6', rgb: '139,92,246',
+            title: 'Overdue Tasks', desc: 'Planner tasks past due',
+            count: overdueTasks.length, section: 'planner'
+        });
+    }
+
+    if (alerts.length === 0) {
+        el.innerHTML = '';
+        return;
+    }
+
+    el.innerHTML = alerts.map(a => `
+        <div class="dash-alert" style="--alert-color:${a.color};--alert-rgb:${a.rgb}" onclick="navigateTo('${a.section}')">
+            <div class="dash-alert-icon"><i class="fas ${a.icon}"></i></div>
+            <div class="dash-alert-info"><h4>${a.title}</h4><p>${a.desc}</p></div>
+            <div class="dash-alert-badge">${a.count}</div>
+        </div>
+    `).join('');
+}
+
+// ===== QUICK CAPTURE =====
+function openQuickCapture() {
+    document.getElementById('quickCaptureForm').reset();
+    document.getElementById('qcDate').value = new Date().toISOString().split('T')[0];
+    document.getElementById('qcEngagement').value = 'More Engaged';
+    document.querySelectorAll('.qc-pill').forEach(p => p.classList.remove('active'));
+    document.querySelector('.qc-pill.high').classList.add('active');
+    openModal('quickCaptureModal');
+}
+
+function setQcEngagement(btn, val) {
+    document.querySelectorAll('.qc-pill').forEach(p => p.classList.remove('active'));
+    btn.classList.add('active');
+    document.getElementById('qcEngagement').value = val;
+}
+
+function saveQuickCapture() {
+    const school = document.getElementById('qcSchool').value.trim();
+    const teacher = document.getElementById('qcTeacher').value.trim();
+    if (!school || !teacher) { showToast('School and teacher are required', 'error'); return; }
+
+    const obs = {
+        id: 'obs_' + Date.now() + '_' + Math.random().toString(36).substr(2, 6),
+        date: document.getElementById('qcDate').value || new Date().toISOString().split('T')[0],
+        school: school,
+        teacher: teacher,
+        subject: document.getElementById('qcSubject').value || '',
+        engagementLevel: document.getElementById('qcEngagement').value || 'Engaged',
+        notes: document.getElementById('qcNote').value.trim(),
+        observationStatus: 'Yes',
+        source: 'Quick Capture',
+        createdAt: new Date().toISOString()
+    };
+
+    const observations = DB.get('observations');
+    observations.push(obs);
+    DB.set('observations', observations);
+    closeModal('quickCaptureModal');
+    showToast('Observation captured!', 'success');
+    renderDashboard();
+}
+
+// ===== TEACHER GROWTH TRACKER =====
+function _buildTeacherProfiles() {
+    const observations = DB.get('observations');
+    const map = {};
+    observations.forEach(o => {
+        const name = (o.teacher || '').trim();
+        if (!name) return;
+        const key = name.toLowerCase();
+        if (!map[key]) {
+            map[key] = {
+                name: name,
+                school: o.school || '',
+                cluster: o.cluster || '',
+                block: o.block || '',
+                observations: [],
+                subjects: new Set(),
+                engagementScores: [],
+            };
+        }
+        const t = map[key];
+        if (o.school && !t.school) t.school = o.school;
+        if (o.cluster && !t.cluster) t.cluster = o.cluster;
+        if (o.block && !t.block) t.block = o.block;
+        if (o.subject) t.subjects.add(o.subject);
+        t.observations.push(o);
+        if (o.engagementLevel) {
+            t.engagementScores.push(o.engagementLevel === 'More Engaged' ? 3 : o.engagementLevel === 'Engaged' ? 2 : 1);
+        }
+    });
+
+    return Object.values(map).map(t => {
+        t.observations.sort((a, b) => new Date(a.date) - new Date(b.date));
+        t.totalObs = t.observations.length;
+        t.avgEngagement = t.engagementScores.length ? t.engagementScores.reduce((a, b) => a + b, 0) / t.engagementScores.length : 0;
+        t.lastDate = t.observations[t.observations.length - 1]?.date || '';
+        t.daysSinceLast = t.lastDate ? Math.floor((new Date() - new Date(t.lastDate)) / 86400000) : 999;
+
+        // Trend: compare last 3 vs previous 3
+        if (t.engagementScores.length >= 4) {
+            const mid = Math.floor(t.engagementScores.length / 2);
+            const firstHalf = t.engagementScores.slice(0, mid);
+            const secondHalf = t.engagementScores.slice(mid);
+            const avg1 = firstHalf.reduce((a, b) => a + b, 0) / firstHalf.length;
+            const avg2 = secondHalf.reduce((a, b) => a + b, 0) / secondHalf.length;
+            t.trend = avg2 > avg1 + 0.15 ? 'up' : avg2 < avg1 - 0.15 ? 'down' : 'stable';
+        } else {
+            t.trend = 'stable';
+        }
+
+        t.subjectList = [...t.subjects];
+        return t;
+    });
+}
+
+function renderTeacherGrowth() {
+    const container = document.getElementById('teacherGrowthContainer');
+    const summaryEl = document.getElementById('tgSummary');
+    if (!container) return;
+
+    let teachers = _buildTeacherProfiles();
+    const search = (document.getElementById('teacherGrowthSearch')?.value || '').toLowerCase();
+    const sort = document.getElementById('teacherSortSelect')?.value || 'observations';
+
+    if (search) {
+        teachers = teachers.filter(t =>
+            t.name.toLowerCase().includes(search) ||
+            t.school.toLowerCase().includes(search) ||
+            t.block.toLowerCase().includes(search) ||
+            t.cluster.toLowerCase().includes(search)
+        );
+    }
+
+    switch (sort) {
+        case 'name': teachers.sort((a, b) => a.name.localeCompare(b.name)); break;
+        case 'engagement-low': teachers.sort((a, b) => a.avgEngagement - b.avgEngagement); break;
+        case 'engagement-high': teachers.sort((a, b) => b.avgEngagement - a.avgEngagement); break;
+        case 'recent': teachers.sort((a, b) => new Date(b.lastDate) - new Date(a.lastDate)); break;
+        case 'stale': teachers.sort((a, b) => b.daysSinceLast - a.daysSinceLast); break;
+        default: teachers.sort((a, b) => b.totalObs - a.totalObs);
+    }
+
+    // Summary stats
+    const totalTeachers = teachers.length;
+    const avgEng = teachers.length ? (teachers.reduce((s, t) => s + t.avgEngagement, 0) / teachers.length) : 0;
+    const improving = teachers.filter(t => t.trend === 'up').length;
+    const needsSupport = teachers.filter(t => t.avgEngagement < 2 && t.totalObs >= 2).length;
+
+    if (summaryEl) {
+        summaryEl.innerHTML = `
+            <div class="tg-stat"><span class="tg-stat-value">${totalTeachers}</span><span class="tg-stat-label">Total Teachers</span></div>
+            <div class="tg-stat"><span class="tg-stat-value">${avgEng.toFixed(1)}</span><span class="tg-stat-label">Avg Engagement</span></div>
+            <div class="tg-stat"><span class="tg-stat-value" style="color:#10b981">${improving}</span><span class="tg-stat-label">Improving</span></div>
+            <div class="tg-stat"><span class="tg-stat-value" style="color:#ef4444">${needsSupport}</span><span class="tg-stat-label">Need Support</span></div>
+        `;
+    }
+
+    if (teachers.length === 0) {
+        container.innerHTML = '<div class="empty-state"><i class="fas fa-user-graduate"></i><h3>No teacher data</h3><p>Import DMT Excel or add observations to see teacher profiles</p></div>';
+        return;
+    }
+
+    const colors = ['#6366f1', '#8b5cf6', '#ec4899', '#f59e0b', '#10b981', '#3b82f6', '#ef4444', '#0ea5e9'];
+
+    container.innerHTML = teachers.slice(0, 100).map((t, idx) => {
+        const color = colors[idx % colors.length];
+        const initials = t.name.split(' ').map(w => w[0]).join('').substring(0, 2);
+        const trendLabel = t.trend === 'up' ? '<i class="fas fa-arrow-up"></i> Improving' :
+                           t.trend === 'down' ? '<i class="fas fa-arrow-down"></i> Declining' : '<i class="fas fa-minus"></i> Stable';
+        const engLabel = t.avgEngagement >= 2.5 ? 'High' : t.avgEngagement >= 1.5 ? 'Medium' : 'Low';
+
+        // Sparkline bars (last 8 observations)
+        const sparkData = t.engagementScores.slice(-8);
+        const sparkBars = sparkData.map(s => {
+            const h = Math.round((s / 3) * 28);
+            const c = s >= 2.5 ? '#10b981' : s >= 1.5 ? '#f59e0b' : '#ef4444';
+            return `<div class="tg-spark-bar" style="height:${h}px;background:${c}"></div>`;
+        }).join('');
+
+        return `<div class="tg-card" id="tgCard_${idx}">
+            <div class="tg-card-header" onclick="toggleTeacherDetail(${idx})">
+                <div class="tg-avatar" style="background:${color}">${escapeHtml(initials)}</div>
+                <div class="tg-card-info">
+                    <h4>${escapeHtml(t.name)} <span class="tg-trend ${t.trend}">${trendLabel}</span></h4>
+                    <div class="tg-card-meta">
+                        ${t.school ? `<span><i class="fas fa-school"></i> ${escapeHtml(t.school)}</span>` : ''}
+                        ${t.block ? `<span><i class="fas fa-map-marker-alt"></i> ${escapeHtml(t.block)}</span>` : ''}
+                        ${t.cluster ? `<span><i class="fas fa-layer-group"></i> ${escapeHtml(t.cluster)}</span>` : ''}
+                    </div>
+                </div>
+                <div class="tg-card-stats">
+                    <div class="tg-mini-stat"><span class="tg-mini-stat-val">${t.totalObs}</span><span class="tg-mini-stat-label">Obs</span></div>
+                    <div class="tg-mini-stat"><span class="tg-mini-stat-val">${t.avgEngagement.toFixed(1)}</span><span class="tg-mini-stat-label">Eng</span></div>
+                    <div class="tg-mini-stat"><span class="tg-mini-stat-val">${t.daysSinceLast < 999 ? t.daysSinceLast + 'd' : '—'}</span><span class="tg-mini-stat-label">Last</span></div>
+                </div>
+                <div class="tg-sparkline">${sparkBars}</div>
+                <i class="fas fa-chevron-down tg-expand-icon"></i>
+            </div>
+        </div>`;
+    }).join('');
+}
+
+function toggleTeacherDetail(idx) {
+    const card = document.getElementById('tgCard_' + idx);
+    if (!card) return;
+    const existing = card.querySelector('.tg-card-detail');
+    if (existing) {
+        existing.remove();
+        card.classList.remove('expanded');
+        return;
+    }
+    card.classList.add('expanded');
+
+    const teachers = _buildTeacherProfiles();
+    const search = (document.getElementById('teacherGrowthSearch')?.value || '').toLowerCase();
+    const sort = document.getElementById('teacherSortSelect')?.value || 'observations';
+    let filtered = teachers;
+    if (search) filtered = filtered.filter(t => t.name.toLowerCase().includes(search) || t.school.toLowerCase().includes(search) || t.block.toLowerCase().includes(search) || t.cluster.toLowerCase().includes(search));
+    switch (sort) {
+        case 'name': filtered.sort((a, b) => a.name.localeCompare(b.name)); break;
+        case 'engagement-low': filtered.sort((a, b) => a.avgEngagement - b.avgEngagement); break;
+        case 'engagement-high': filtered.sort((a, b) => b.avgEngagement - a.avgEngagement); break;
+        case 'recent': filtered.sort((a, b) => new Date(b.lastDate) - new Date(a.lastDate)); break;
+        case 'stale': filtered.sort((a, b) => b.daysSinceLast - a.daysSinceLast); break;
+        default: filtered.sort((a, b) => b.totalObs - a.totalObs);
+    }
+
+    const t = filtered[idx];
+    if (!t) return;
+
+    const detailHtml = `<div class="tg-card-detail">
+        <div class="tg-detail-grid">
+            <div class="tg-detail-item"><strong>Subjects</strong>${t.subjectList.length ? t.subjectList.map(s => escapeHtml(s)).join(', ') : 'N/A'}</div>
+            <div class="tg-detail-item"><strong>Engagement Range</strong>${t.engagementScores.length ? Math.min(...t.engagementScores).toFixed(0) + ' — ' + Math.max(...t.engagementScores).toFixed(0) + ' / 3' : 'N/A'}</div>
+            <div class="tg-detail-item"><strong>First Observed</strong>${t.observations[0]?.date ? new Date(t.observations[0].date).toLocaleDateString('en-IN') : 'N/A'}</div>
+            <div class="tg-detail-item"><strong>Last Observed</strong>${t.lastDate ? new Date(t.lastDate).toLocaleDateString('en-IN') : 'N/A'}</div>
+        </div>
+        <div class="tg-timeline">
+            <div class="tg-timeline-title"><i class="fas fa-history"></i> Observation History (${t.observations.length})</div>
+            ${t.observations.slice().reverse().slice(0, 15).map(o => {
+                const engCls = o.engagementLevel === 'More Engaged' ? 'high' : o.engagementLevel === 'Engaged' ? 'mid' : 'low';
+                return `<div class="tg-obs-item">
+                    <span class="tg-obs-date">${new Date(o.date).toLocaleDateString('en-IN')}</span>
+                    ${o.engagementLevel ? `<span class="tg-obs-eng ${engCls}">${escapeHtml(o.engagementLevel)}</span>` : ''}
+                    <span class="tg-obs-detail">${escapeHtml([o.subject, o.practice, o.notes].filter(Boolean).join(' — ').substring(0, 100))}</span>
+                </div>`;
+            }).join('')}
+            ${t.observations.length > 15 ? `<div class="tg-obs-item" style="justify-content:center;color:var(--text-muted);font-style:italic">+ ${t.observations.length - 15} more observations</div>` : ''}
+        </div>
+    </div>`;
+
+    card.insertAdjacentHTML('beforeend', detailHtml);
+}
+
+// ===== PRINT OBSERVATION FEEDBACK =====
+function printObsFeedback(id) {
+    const observations = DB.get('observations');
+    const o = observations.find(x => x.id === id);
+    if (!o) { showToast('Observation not found', 'error'); return; }
+
+    const d = new Date(o.date);
+    const dateStr = d.toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' });
+    const engColor = o.engagementLevel === 'More Engaged' ? '#10b981' : o.engagementLevel === 'Engaged' ? '#f59e0b' : '#ef4444';
+
+    const starsHtml = (val) => {
+        if (!val) return '';
+        let s = '';
+        for (let i = 1; i <= 5; i++) s += i <= val ? '★' : '☆';
+        return s;
+    };
+
+    const html = `<!DOCTYPE html>
+<html><head><title>Observation Feedback — ${escapeHtml(o.teacher || 'Teacher')}</title>
+<style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: 'Segoe UI', Arial, sans-serif; padding: 30px 40px; color: #1e293b; font-size: 14px; line-height: 1.6; }
+    .header { text-align: center; border-bottom: 3px solid #6366f1; padding-bottom: 16px; margin-bottom: 20px; }
+    .header h1 { font-size: 20px; color: #6366f1; margin-bottom: 4px; }
+    .header p { color: #64748b; font-size: 12px; }
+    .info-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 24px; margin-bottom: 20px; padding: 14px; background: #f8fafc; border-radius: 8px; }
+    .info-item { font-size: 13px; }
+    .info-item strong { color: #475569; min-width: 100px; display: inline-block; }
+    .engagement-box { text-align: center; padding: 14px; border-radius: 8px; margin-bottom: 20px; font-weight: 700; font-size: 16px; color: ${engColor}; border: 2px solid ${engColor}; background: ${engColor}11; }
+    .section { margin-bottom: 16px; }
+    .section h3 { font-size: 14px; color: #6366f1; border-bottom: 1px solid #e2e8f0; padding-bottom: 4px; margin-bottom: 8px; }
+    .section p { font-size: 13px; color: #334155; white-space: pre-wrap; }
+    .ratings { display: flex; gap: 24px; justify-content: center; margin-bottom: 16px; }
+    .rating-item { text-align: center; }
+    .rating-item .stars { font-size: 18px; color: #f59e0b; }
+    .rating-item .label { font-size: 11px; color: #64748b; }
+    .footer { text-align: center; margin-top: 30px; padding-top: 12px; border-top: 1px solid #e2e8f0; font-size: 11px; color: #94a3b8; }
+    @media print { body { padding: 20px; } }
+</style></head><body>
+<div class="header">
+    <h1>Classroom Observation Feedback</h1>
+    <p>Azim Premji Foundation — APF Resource Person Dashboard</p>
+</div>
+<div class="info-grid">
+    <div class="info-item"><strong>Teacher:</strong> ${escapeHtml(o.teacher || 'N/A')}</div>
+    <div class="info-item"><strong>School:</strong> ${escapeHtml(o.school || 'N/A')}</div>
+    <div class="info-item"><strong>Date:</strong> ${dateStr}</div>
+    <div class="info-item"><strong>Subject:</strong> ${escapeHtml(o.subject || 'N/A')}</div>
+    <div class="info-item"><strong>Class:</strong> ${escapeHtml(o.class || 'N/A')}</div>
+    <div class="info-item"><strong>Block / Cluster:</strong> ${escapeHtml([o.block, o.cluster].filter(Boolean).join(' / ') || 'N/A')}</div>
+    ${o.practiceType ? `<div class="info-item"><strong>Practice Type:</strong> ${escapeHtml(o.practiceType)}</div>` : ''}
+    ${o.observer ? `<div class="info-item"><strong>Observer:</strong> ${escapeHtml(o.observer)}</div>` : ''}
+</div>
+${o.engagementLevel ? `<div class="engagement-box">Engagement Level: ${escapeHtml(o.engagementLevel)}</div>` : ''}
+${(o.engagementRating || o.engagement || o.methodology || o.tlm) ? `<div class="ratings">
+    ${(o.engagementRating || o.engagement) ? `<div class="rating-item"><div class="stars">${starsHtml(o.engagementRating || o.engagement)}</div><div class="label">Engagement</div></div>` : ''}
+    ${o.methodology ? `<div class="rating-item"><div class="stars">${starsHtml(o.methodology)}</div><div class="label">Methodology</div></div>` : ''}
+    ${o.tlm ? `<div class="rating-item"><div class="stars">${starsHtml(o.tlm)}</div><div class="label">TLM Use</div></div>` : ''}
+</div>` : ''}
+${o.practice ? `<div class="section"><h3>Teaching Practice Observed</h3><p>${escapeHtml(o.practice)}</p></div>` : ''}
+${o.strengths ? `<div class="section"><h3>Strengths Observed</h3><p>${escapeHtml(o.strengths)}</p></div>` : ''}
+${o.areas ? `<div class="section"><h3>Areas for Improvement</h3><p>${escapeHtml(o.areas)}</p></div>` : ''}
+${o.suggestions ? `<div class="section"><h3>Suggestions / Action Points</h3><p>${escapeHtml(o.suggestions)}</p></div>` : ''}
+${o.notes ? `<div class="section"><h3>Additional Notes</h3><p>${escapeHtml(o.notes)}</p></div>` : ''}
+<div class="footer">Generated from APF Resource Person Dashboard — ${new Date().toLocaleDateString('en-IN')}</div>
+</body></html>`;
+
+    const w = window.open('', '_blank', 'width=800,height=900');
+    w.document.write(html);
+    w.document.close();
+    setTimeout(() => w.print(), 500);
+}
+
+// ===== PERIOD COMPARISON =====
+let _periodCompareVisible = false;
+function togglePeriodComparison() {
+    _periodCompareVisible = !_periodCompareVisible;
+    const panel = document.getElementById('periodComparePanel');
+    const btn = document.getElementById('periodCompareBtn');
+    if (!panel) return;
+    panel.style.display = _periodCompareVisible ? 'block' : 'none';
+    if (btn) btn.classList.toggle('btn-primary', _periodCompareVisible);
+    if (btn) btn.classList.toggle('btn-outline', !_periodCompareVisible);
+    if (_periodCompareVisible) renderPeriodComparison();
+}
+
+function renderPeriodComparison() {
+    const panel = document.getElementById('periodComparePanel');
+    if (!panel) return;
+
+    const now = new Date();
+    const curMonth = now.getMonth(), curYear = now.getFullYear();
+    const prevMonth = curMonth === 0 ? 11 : curMonth - 1;
+    const prevYear = curMonth === 0 ? curYear - 1 : curYear;
+
+    const curLabel = new Date(curYear, curMonth).toLocaleDateString('en', { month: 'long', year: 'numeric' });
+    const prevLabel = new Date(prevYear, prevMonth).toLocaleDateString('en', { month: 'long', year: 'numeric' });
+
+    const visits = DB.get('visits');
+    const trainings = DB.get('trainings');
+    const observations = DB.get('observations');
+
+    const inMonth = (arr, y, m) => arr.filter(item => {
+        const d = new Date(item.date);
+        return d.getFullYear() === y && d.getMonth() === m;
+    });
+
+    const curVisits = inMonth(visits, curYear, curMonth);
+    const prevVisits = inMonth(visits, prevYear, prevMonth);
+    const curTrainings = inMonth(trainings, curYear, curMonth);
+    const prevTrainings = inMonth(trainings, prevYear, prevMonth);
+    const curObs = inMonth(observations, curYear, curMonth);
+    const prevObs = inMonth(observations, prevYear, prevMonth);
+
+    const curSchools = new Set(curObs.map(o => (o.school || '').toLowerCase().trim()).filter(Boolean));
+    const prevSchools = new Set(prevObs.map(o => (o.school || '').toLowerCase().trim()).filter(Boolean));
+    const curTeachers = new Set(curObs.map(o => (o.teacher || '').toLowerCase().trim()).filter(Boolean));
+    const prevTeachers = new Set(prevObs.map(o => (o.teacher || '').toLowerCase().trim()).filter(Boolean));
+
+    const avgEng = (arr) => {
+        const scores = arr.filter(o => o.engagementLevel).map(o => o.engagementLevel === 'More Engaged' ? 3 : o.engagementLevel === 'Engaged' ? 2 : 1);
+        return scores.length ? (scores.reduce((a, b) => a + b, 0) / scores.length) : 0;
+    };
+
+    const metrics = [
+        { label: 'Visits', cur: curVisits.length, prev: prevVisits.length },
+        { label: 'Trainings', cur: curTrainings.length, prev: prevTrainings.length },
+        { label: 'Observations', cur: curObs.length, prev: prevObs.length },
+        { label: 'Schools Covered', cur: curSchools.size, prev: prevSchools.size },
+        { label: 'Teachers Reached', cur: curTeachers.size, prev: prevTeachers.size },
+        { label: 'Avg Engagement', cur: avgEng(curObs), prev: avgEng(prevObs), decimal: true },
+    ];
+
+    panel.innerHTML = `
+        <div class="period-compare-header">
+            <h3><i class="fas fa-columns"></i> ${curLabel} vs ${prevLabel}</h3>
+            <button class="btn btn-sm btn-ghost" onclick="togglePeriodComparison()"><i class="fas fa-times"></i></button>
+        </div>
+        <div class="period-compare-grid">
+            ${metrics.map(m => {
+                const diff = m.cur - m.prev;
+                const pct = m.prev > 0 ? Math.round((diff / m.prev) * 100) : (m.cur > 0 ? 100 : 0);
+                const arrowCls = diff > 0 ? 'up' : diff < 0 ? 'down' : 'same';
+                const arrowIcon = diff > 0 ? '<i class="fas fa-arrow-up"></i>' : diff < 0 ? '<i class="fas fa-arrow-down"></i>' : '<i class="fas fa-minus"></i>';
+                const changeCls = diff > 0 ? 'positive' : diff < 0 ? 'negative' : 'neutral';
+                const curVal = m.decimal ? m.cur.toFixed(1) : m.cur;
+                const prevVal = m.decimal ? m.prev.toFixed(1) : m.prev;
+                return `<div class="pc-metric">
+                    <div class="pc-metric-label">${m.label}</div>
+                    <div class="pc-metric-values">
+                        <div class="pc-val current"><span class="pc-val-num">${curVal}</span><span class="pc-val-label">Current</span></div>
+                        <span class="pc-arrow ${arrowCls}">${arrowIcon}</span>
+                        <div class="pc-val previous"><span class="pc-val-num">${prevVal}</span><span class="pc-val-label">Previous</span></div>
+                    </div>
+                    <div class="pc-change ${changeCls}">${diff > 0 ? '+' : ''}${m.decimal ? diff.toFixed(1) : diff} (${pct > 0 ? '+' : ''}${pct}%)</div>
+                </div>`;
+            }).join('')}
+        </div>
+    `;
 }
 
 // ===== Initialization =====
