@@ -1493,7 +1493,7 @@ function refreshSection(section) {
         case 'visits': renderVisits(); break;
         case 'training': renderTrainings(); break;
         case 'observations': renderObservations(); break;
-        case 'reports': break;
+        case 'reports': _reportPopulateFilters(); break;
         case 'resources': renderResources(); break;
         case 'excel': break;
         case 'notes': renderNotes(); break;
@@ -2898,7 +2898,7 @@ function saveVisit(e) {
 }
 
 function deleteVisit(id) {
-    if (!confirm('Delete this school visit?')) return;
+    if (!confirmAction('Delete this school visit?')) return;
     let visits = DB.get('visits');
     visits = visits.filter(v => v.id !== id);
     DB.set('visits', visits);
@@ -2934,7 +2934,7 @@ function renderVisits() {
         return;
     }
 
-    const pg = getPaginatedItems(filtered, 'visits', 20);
+    const pg = getPaginatedItems(filtered, 'visits', getPageSize(20));
 
     container.innerHTML = pg.items.map(v => {
         const d = new Date(v.date);
@@ -3158,7 +3158,7 @@ function saveTraining(e) {
 }
 
 function deleteTraining(id) {
-    if (!confirm('Delete this training session?')) return;
+    if (!confirmAction('Delete this training session?')) return;
     let trainings = DB.get('trainings');
     trainings = trainings.filter(t => t.id !== id);
     DB.set('trainings', trainings);
@@ -3185,7 +3185,7 @@ function renderTrainings() {
         return;
     }
 
-    const pg = getPaginatedItems(filtered, 'trainings', 15);
+    const pg = getPaginatedItems(filtered, 'trainings', getPageSize(15));
 
     container.innerHTML = pg.items.map(t => {
         const d = new Date(t.date);
@@ -4201,7 +4201,7 @@ function saveObservation(e) {
 }
 
 function deleteObservation(id) {
-    if (!confirm('Delete this observation?')) return;
+    if (!confirmAction('Delete this observation?')) return;
     let observations = DB.get('observations');
     observations = observations.filter(o => o.id !== id);
     DB.set('observations', observations);
@@ -6884,7 +6884,7 @@ function saveResource(e) {
 }
 
 function deleteResource(id) {
-    if (!confirm('Delete this resource?')) return;
+    if (!confirmAction('Delete this resource?')) return;
     let resources = DB.get('resources');
     resources = resources.filter(r => r.id !== id);
     DB.set('resources', resources);
@@ -6921,7 +6921,7 @@ function renderResources() {
         'Other': { icon: 'fa-file', cls: 'other' },
     };
 
-    const pg = getPaginatedItems(filtered, 'resources', 18);
+    const pg = getPaginatedItems(filtered, 'resources', getPageSize(18));
 
     container.innerHTML = pg.items.map(r => {
         const ti = typeIcons[r.type] || typeIcons['Other'];
@@ -6953,206 +6953,1399 @@ function setReportType(type) {
     currentReportType = type;
     document.querySelectorAll('.report-type-btn').forEach(b => b.classList.remove('active'));
     document.querySelector(`.report-type-btn[data-type="${type}"]`)?.classList.add('active');
+    // Show/hide date filters based on type
+    const monthF = document.getElementById('reportMonthFilter');
+    const yearF = document.getElementById('reportYearFilter');
+    const clusterF = document.getElementById('reportClusterFilter');
+    const blockF = document.getElementById('reportBlockFilter');
+    if (monthF) monthF.style.display = ['monthly', 'cluster', 'block', 'district', 'health', 'visits', 'training'].includes(type) ? '' : 'none';
+    if (yearF) yearF.style.display = ['monthly', 'cluster', 'block', 'district', 'health', 'visits', 'training'].includes(type) ? '' : 'none';
+    if (clusterF) clusterF.style.display = ['cluster'].includes(type) ? '' : 'none';
+    if (blockF) blockF.style.display = ['block', 'district'].includes(type) ? '' : 'none';
+}
+
+function _reportPopulateFilters() {
+    const visits = DB.get('visits');
+    const observations = DB.get('observations');
+    const trainings = DB.get('trainings');
+    const clusters = new Set();
+    const blocks = new Set();
+    [visits, observations].forEach(arr => arr.forEach(item => {
+        if (item.cluster) clusters.add(item.cluster.trim());
+        if (item.block) blocks.add(item.block.trim());
+    }));
+    trainings.forEach(t => {
+        if (t.venue) clusters.add(t.venue.trim());
+    });
+    const clusterF = document.getElementById('reportClusterFilter');
+    const blockF = document.getElementById('reportBlockFilter');
+    if (clusterF) {
+        const cur = clusterF.value;
+        clusterF.innerHTML = '<option value="all">All Clusters</option>' + [...clusters].sort().map(c => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join('');
+        clusterF.value = cur || 'all';
+    }
+    if (blockF) {
+        const cur = blockF.value;
+        blockF.innerHTML = '<option value="all">All Blocks</option>' + [...blocks].sort().map(b => `<option value="${escapeHtml(b)}">${escapeHtml(b)}</option>`).join('');
+        blockF.value = cur || 'all';
+    }
+    // Hide filters by default
+    if (clusterF) clusterF.style.display = 'none';
+    if (blockF) blockF.style.display = 'none';
+    // Set current month/year
+    const monthF = document.getElementById('reportMonthFilter');
+    if (monthF && !monthF.dataset.init) {
+        monthF.value = new Date().getMonth().toString();
+        monthF.dataset.init = '1';
+    }
+}
+
+function _reportFilterByPeriod(items, monthVal, year) {
+    if (year === 'all' || isNaN(year)) {
+        if (monthVal === 'all') return [...items];
+        const month = parseInt(monthVal);
+        return items.filter(item => {
+            const d = new Date(item.date);
+            return d.getMonth() === month;
+        });
+    }
+    if (monthVal === 'all') {
+        return items.filter(item => {
+            const d = new Date(item.date);
+            return d.getFullYear() === year;
+        });
+    }
+    const month = parseInt(monthVal);
+    return items.filter(item => {
+        const d = new Date(item.date);
+        return d.getMonth() === month && d.getFullYear() === year;
+    });
+}
+
+function _reportPeriodLabel(monthVal, year) {
+    if ((year === 'all' || isNaN(year)) && monthVal === 'all') return 'All Time';
+    if (year === 'all' || isNaN(year)) return new Date(2000, parseInt(monthVal)).toLocaleString('en', { month: 'long' }) + ' (All Years)';
+    if (monthVal === 'all') return `Year ${year}`;
+    return new Date(year, parseInt(monthVal)).toLocaleString('en', { month: 'long' }) + ' ' + year;
 }
 
 function generateReport() {
-    const month = parseInt(document.getElementById('reportMonthFilter').value);
-    const year = parseInt(document.getElementById('reportYearFilter').value);
+    const monthVal = document.getElementById('reportMonthFilter').value;
+    const yearRaw = document.getElementById('reportYearFilter').value;
+    const year = yearRaw === 'all' ? 'all' : parseInt(yearRaw);
+    const clusterFilter = document.getElementById('reportClusterFilter')?.value || 'all';
+    const blockFilter = document.getElementById('reportBlockFilter')?.value || 'all';
     const output = document.getElementById('reportOutput');
+
+    _reportPopulateFilters();
 
     const visits = DB.get('visits');
     const trainings = DB.get('trainings');
     const observations = DB.get('observations');
 
-    if (currentReportType === 'monthly') {
-        generateMonthlyReport(output, visits, trainings, observations, month, year);
-    } else if (currentReportType === 'school') {
-        generateSchoolReport(output, visits, trainings, observations);
-    } else {
-        generateSummaryReport(output, visits, trainings, observations);
+    switch (currentReportType) {
+        case 'monthly': generateMonthlyReport(output, visits, trainings, observations, monthVal, year); break;
+        case 'cluster': generateClusterReport(output, visits, trainings, observations, monthVal, year, clusterFilter); break;
+        case 'block': generateBlockReport(output, visits, trainings, observations, monthVal, year, blockFilter); break;
+        case 'district': generateDistrictReport(output, visits, trainings, observations, monthVal, year); break;
+        case 'health': generateHealthReport(output, visits, trainings, observations, monthVal, year); break;
+        case 'visits': generateVisitsReport(output, visits, monthVal, year); break;
+        case 'training': generateTrainingReport(output, trainings, monthVal, year); break;
+        case 'school': generateSchoolReport(output, visits, trainings, observations); break;
+        case 'summary': generateSummaryReport(output, visits, trainings, observations); break;
+        default: generateMonthlyReport(output, visits, trainings, observations, monthVal, year);
     }
 }
 
-function generateMonthlyReport(output, visits, trainings, observations, month, year) {
-    const monthName = new Date(year, month).toLocaleString('en', { month: 'long' });
+function _reportHeader(title, periodLabel) {
+    const p = getProfile();
+    return `<h2>${title}</h2>
+    <p class="report-subtitle">Report by ${escapeHtml(p.name || 'Resource Person')}${p.district ? ' — ' + escapeHtml(p.district) : ''}${p.block ? ', ' + escapeHtml(p.block) : ''} &bull; ${periodLabel} &bull; Generated on ${new Date().toLocaleDateString('en-IN')}</p>`;
+}
 
-    const monthVisits = visits.filter(v => {
-        const d = new Date(v.date);
-        return d.getMonth() === month && d.getFullYear() === year;
-    });
-    const monthTrainings = trainings.filter(t => {
-        const d = new Date(t.date);
-        return d.getMonth() === month && d.getFullYear() === year;
-    });
-    const monthObs = observations.filter(o => {
-        const d = new Date(o.date);
-        return d.getMonth() === month && d.getFullYear() === year;
-    });
+function _reportStatsHTML(stats) {
+    return `<div class="report-stats-grid">${stats.map(s => `<div class="report-stat${s.color ? ' report-stat--' + s.color : ''}"><div class="stat-value">${s.value}</div><div class="stat-label">${s.label}</div></div>`).join('')}</div>`;
+}
+
+function _reportTableHTML(headers, rows) {
+    if (rows.length === 0) return '';
+    return `<table class="report-table"><thead><tr>${headers.map(h => `<th>${h}</th>`).join('')}</tr></thead><tbody>${rows.map(r => `<tr>${r.map(c => `<td>${c}</td>`).join('')}</tr>`).join('')}</tbody></table>`;
+}
+
+function _rptAvg(arr, key) {
+    const vals = arr.map(o => o[key] || 0).filter(v => v > 0);
+    return vals.length ? (vals.reduce((s, v) => s + v, 0) / vals.length).toFixed(1) : '-';
+}
+
+// ===== MONTHLY REPORT =====
+function generateMonthlyReport(output, visits, trainings, observations, monthVal, year) {
+    const periodLabel = _reportPeriodLabel(monthVal, year);
+    const monthVisits = _reportFilterByPeriod(visits, monthVal, year);
+    const monthTrainings = _reportFilterByPeriod(trainings, monthVal, year);
+    const monthObs = _reportFilterByPeriod(observations, monthVal, year);
 
     const completedVisits = monthVisits.filter(v => v.status === 'completed').length;
-    const totalAttendees = monthTrainings.reduce((sum, t) => sum + (t.attendees || 0), 0);
-    const totalTrainingHours = monthTrainings.reduce((sum, t) => sum + (t.duration || 0), 0);
+    const totalAttendees = monthTrainings.reduce((s, t) => s + (t.attendees || 0), 0);
+    const totalTrainingHours = monthTrainings.reduce((s, t) => s + (t.duration || 0), 0);
+    const uniqueSchools = new Set([...monthVisits.map(v => (v.school || '').toLowerCase().trim()), ...monthObs.map(o => (o.school || '').toLowerCase().trim())]);
 
     output.innerHTML = `<div class="report-content">
-        <h2>Monthly Report — ${monthName} ${year}</h2>
-        <p class="report-subtitle">Report by ${escapeHtml(getProfile().name || 'Resource Person')}${getProfile().district ? ' — ' + escapeHtml(getProfile().district) : ''} &bull; Generated on ${new Date().toLocaleDateString('en-IN')}</p>
-
-        <div class="report-stats-grid">
-            <div class="report-stat">
-                <div class="stat-value">${monthVisits.length}</div>
-                <div class="stat-label">School Visits</div>
-            </div>
-            <div class="report-stat">
-                <div class="stat-value">${completedVisits}</div>
-                <div class="stat-label">Completed</div>
-            </div>
-            <div class="report-stat">
-                <div class="stat-value">${monthTrainings.length}</div>
-                <div class="stat-label">Trainings</div>
-            </div>
-            <div class="report-stat">
-                <div class="stat-value">${totalAttendees}</div>
-                <div class="stat-label">Teachers Trained</div>
-            </div>
-            <div class="report-stat">
-                <div class="stat-value">${totalTrainingHours}h</div>
-                <div class="stat-label">Training Hours</div>
-            </div>
-            <div class="report-stat">
-                <div class="stat-value">${monthObs.length}</div>
-                <div class="stat-label">Observations</div>
-            </div>
-        </div>
+        ${_reportHeader('Monthly Report — ' + periodLabel, periodLabel)}
+        ${_reportStatsHTML([
+            { value: monthVisits.length, label: 'School Visits' },
+            { value: completedVisits, label: 'Completed' },
+            { value: uniqueSchools.size, label: 'Schools' },
+            { value: monthTrainings.length, label: 'Trainings' },
+            { value: totalAttendees, label: 'Teachers Trained' },
+            { value: totalTrainingHours + 'h', label: 'Training Hours' },
+            { value: monthObs.length, label: 'Observations' }
+        ])}
 
         ${monthVisits.length > 0 ? `<h3>School Visits</h3>
-        <table class="report-table">
-            <thead><tr><th>Date</th><th>School</th><th>Purpose</th><th>Status</th></tr></thead>
-            <tbody>${monthVisits.sort((a, b) => new Date(a.date) - new Date(b.date)).map(v => `<tr>
-                <td>${new Date(v.date).toLocaleDateString('en-IN')}</td>
-                <td>${escapeHtml(v.school)}</td>
-                <td>${escapeHtml(v.purpose || '-')}</td>
-                <td><span class="badge badge-${v.status}">${v.status}</span></td>
-            </tr>`).join('')}</tbody>
-        </table>` : ''}
+        ${_reportTableHTML(['Date', 'School', 'Cluster', 'Purpose', 'Status'],
+            monthVisits.sort((a, b) => new Date(a.date) - new Date(b.date)).map(v => [
+                new Date(v.date).toLocaleDateString('en-IN'),
+                `<strong>${escapeHtml(v.school)}</strong>`,
+                escapeHtml(v.cluster || '-'),
+                escapeHtml(v.purpose || '-'),
+                `<span class="badge badge-${v.status}">${v.status}</span>`
+            ])
+        )}` : ''}
 
         ${monthTrainings.length > 0 ? `<h3>Training Sessions</h3>
-        <table class="report-table">
-            <thead><tr><th>Date</th><th>Title</th><th>Duration</th><th>Attendees</th><th>Target</th></tr></thead>
-            <tbody>${monthTrainings.sort((a, b) => new Date(a.date) - new Date(b.date)).map(t => `<tr>
-                <td>${new Date(t.date).toLocaleDateString('en-IN')}</td>
-                <td>${escapeHtml(t.title)}</td>
-                <td>${t.duration}h</td>
-                <td>${t.attendees || '-'}</td>
-                <td>${escapeHtml(t.target || '-')}</td>
-            </tr>`).join('')}</tbody>
-        </table>` : ''}
+        ${_reportTableHTML(['Date', 'Title', 'Duration', 'Attendees', 'Target', 'Status'],
+            monthTrainings.sort((a, b) => new Date(a.date) - new Date(b.date)).map(t => [
+                new Date(t.date).toLocaleDateString('en-IN'),
+                escapeHtml(t.title),
+                t.duration + 'h',
+                t.attendees || '-',
+                escapeHtml(t.target || '-'),
+                `<span class="badge badge-${t.status}">${t.status}</span>`
+            ])
+        )}` : ''}
 
         ${monthObs.length > 0 ? `<h3>Classroom Observations</h3>
-        <table class="report-table">
-            <thead><tr><th>Date</th><th>School</th><th>Teacher</th><th>Subject</th><th>Class</th></tr></thead>
-            <tbody>${monthObs.sort((a, b) => new Date(a.date) - new Date(b.date)).map(o => `<tr>
-                <td>${new Date(o.date).toLocaleDateString('en-IN')}</td>
-                <td>${escapeHtml(o.school)}</td>
-                <td>${escapeHtml(o.teacher || '-')}</td>
-                <td>${escapeHtml(o.subject)}</td>
-                <td>${escapeHtml(o.class || '-')}</td>
-            </tr>`).join('')}</tbody>
-        </table>` : ''}
+        ${_reportTableHTML(['Date', 'School', 'Teacher', 'Subject', 'Class', 'Engagement'],
+            monthObs.sort((a, b) => new Date(a.date) - new Date(b.date)).map(o => [
+                new Date(o.date).toLocaleDateString('en-IN'),
+                escapeHtml(o.school),
+                escapeHtml(o.teacher || '-'),
+                escapeHtml(o.subject),
+                escapeHtml(o.class || '-'),
+                escapeHtml(o.engagementLevel || '-')
+            ])
+        )}` : ''}
 
         ${monthVisits.length === 0 && monthTrainings.length === 0 && monthObs.length === 0 ?
-            '<div class="empty-state"><i class="fas fa-inbox"></i><h3>No data for this month</h3><p>No visits, trainings, or observations recorded for this period.</p></div>' : ''}
+            '<div class="empty-state"><i class="fas fa-inbox"></i><h3>No data for this period</h3><p>No visits, trainings, or observations recorded.</p></div>' : ''}
     </div>`;
 }
 
+// ===== CLUSTER REPORT =====
+function generateClusterReport(output, visits, trainings, observations, monthVal, year, clusterFilter) {
+    const periodLabel = _reportPeriodLabel(monthVal, year);
+    let fVisits = _reportFilterByPeriod(visits, monthVal, year);
+    let fObs = _reportFilterByPeriod(observations, monthVal, year);
+    let fTrainings = _reportFilterByPeriod(trainings, monthVal, year);
+
+    // Build cluster-wise aggregation
+    const clusterMap = {};
+    const addCluster = (name) => {
+        const key = (name || '').toLowerCase().trim();
+        if (!key) return null;
+        if (!clusterMap[key]) clusterMap[key] = { name: name.trim(), visits: 0, completedVisits: 0, observations: 0, trainings: 0, attendees: 0, hours: 0, schools: new Set(), teachers: new Set(), avgEngagement: [], avgMethodology: [], avgTLM: [] };
+        return clusterMap[key];
+    };
+
+    fVisits.forEach(v => {
+        const c = addCluster(v.cluster);
+        if (c) { c.visits++; if (v.status === 'completed') c.completedVisits++; if (v.school) c.schools.add(v.school.toLowerCase().trim()); }
+    });
+    fObs.forEach(o => {
+        const c = addCluster(o.cluster);
+        if (c) {
+            c.observations++;
+            if (o.teacher) c.teachers.add(o.teacher.toLowerCase().trim());
+            if (o.engagementRating || o.engagement) c.avgEngagement.push(o.engagementRating || o.engagement || 0);
+            if (o.methodology) c.avgMethodology.push(o.methodology);
+            if (o.tlm) c.avgTLM.push(o.tlm);
+        }
+    });
+    fTrainings.forEach(t => {
+        const c = addCluster(t.venue);
+        if (c) { c.trainings++; c.attendees += (t.attendees || 0); c.hours += (t.duration || 0); }
+    });
+
+    let clusters = Object.values(clusterMap).sort((a, b) => (b.visits + b.observations) - (a.visits + a.observations));
+    if (clusterFilter !== 'all') {
+        clusters = clusters.filter(c => c.name.toLowerCase().trim() === clusterFilter.toLowerCase().trim());
+    }
+
+    if (clusters.length === 0) {
+        output.innerHTML = '<div class="empty-state"><i class="fas fa-layer-group"></i><h3>No cluster data available</h3><p>Add visits/observations with cluster information to generate this report.</p></div>';
+        return;
+    }
+
+    // Totals
+    const totals = clusters.reduce((t, c) => ({
+        visits: t.visits + c.visits, completed: t.completed + c.completedVisits,
+        observations: t.observations + c.observations, trainings: t.trainings + c.trainings,
+        attendees: t.attendees + c.attendees, hours: t.hours + c.hours,
+        schools: t.schools + c.schools.size, teachers: t.teachers + c.teachers.size
+    }), { visits: 0, completed: 0, observations: 0, trainings: 0, attendees: 0, hours: 0, schools: 0, teachers: 0 });
+
+    const avg = arr => arr.length ? (arr.reduce((s, v) => s + v, 0) / arr.length).toFixed(1) : '-';
+
+    // Observation quality summary
+    const allEngagement = clusters.flatMap(c => c.avgEngagement);
+    const allMethodology = clusters.flatMap(c => c.avgMethodology);
+    const allTLM = clusters.flatMap(c => c.avgTLM);
+    const avgEngagement = allEngagement.length ? (allEngagement.reduce((s, v) => s + v, 0) / allEngagement.length).toFixed(1) : '-';
+    const avgMethodology = allMethodology.length ? (allMethodology.reduce((s, v) => s + v, 0) / allMethodology.length).toFixed(1) : '-';
+    const avgTLM = allTLM.length ? (allTLM.reduce((s, v) => s + v, 0) / allTLM.length).toFixed(1) : '-';
+
+    // Visit purpose breakdown
+    const purposeCount = {};
+    fVisits.forEach(v => { const cl = (v.cluster || '').toLowerCase().trim(); if (clusterFilter === 'all' || cl === clusterFilter.toLowerCase().trim()) { purposeCount[v.purpose || 'Other'] = (purposeCount[v.purpose || 'Other'] || 0) + 1; } });
+
+    // Subject-wise observations
+    const subjectCount = {};
+    fObs.forEach(o => { const cl = (o.cluster || '').toLowerCase().trim(); if (clusterFilter === 'all' || cl === clusterFilter.toLowerCase().trim()) { if (o.subject) subjectCount[o.subject] = (subjectCount[o.subject] || 0) + 1; } });
+
+    // Training target breakdown
+    const targetCount = {};
+    fTrainings.forEach(t => { const venue = (t.venue || '').toLowerCase().trim(); const matched = clusters.some(c => c.name.toLowerCase().trim() === venue); if (clusterFilter === 'all' || matched) { if (t.target) targetCount[t.target] = (targetCount[t.target] || 0) + 1; } });
+
+    // Filtered lists for detail tables
+    const clusterNames = new Set(clusters.map(c => c.name.toLowerCase().trim()));
+    const filteredVisits = fVisits.filter(v => clusterNames.has((v.cluster || '').toLowerCase().trim()));
+    const filteredObs = fObs.filter(o => clusterNames.has((o.cluster || '').toLowerCase().trim()));
+    const filteredTrainings = fTrainings.filter(t => clusterNames.has((t.venue || '').toLowerCase().trim()));
+
+    output.innerHTML = `<div class="report-content">
+        ${_reportHeader('Cluster Report', periodLabel)}
+        ${_reportStatsHTML([
+            { value: clusters.length, label: 'Clusters' },
+            { value: totals.visits, label: 'Total Visits' },
+            { value: totals.completed, label: 'Completed' },
+            { value: totals.schools, label: 'Schools' },
+            { value: totals.observations, label: 'Observations' },
+            { value: totals.teachers, label: 'Teachers Observed' },
+            { value: totals.trainings, label: 'Trainings' },
+            { value: totals.attendees, label: 'Teachers Trained' },
+            { value: totals.hours + 'h', label: 'Training Hours' }
+        ])}
+
+        <h3>Cluster-wise Breakdown</h3>
+        ${_reportTableHTML(['Cluster', 'Visits', 'Completed', 'Schools', 'Observations', 'Teachers', 'Trainings', 'Attendees', 'Hours', 'Avg Engagement'],
+            clusters.map(c => [
+                `<strong>${escapeHtml(c.name)}</strong>`,
+                c.visits, c.completedVisits, c.schools.size, c.observations,
+                c.teachers.size, c.trainings, c.attendees, c.hours + 'h',
+                avg(c.avgEngagement) !== '-' ? avg(c.avgEngagement) + '/5' : '-'
+            ])
+        )}
+
+        ${clusters.length > 1 ? `<h3>Cluster Comparison (Visits + Observations + Trainings)</h3>
+        <div class="report-bar-chart">
+            ${clusters.slice(0, 15).map(c => {
+                const total = c.visits + c.observations + c.trainings;
+                const maxVal = Math.max(...clusters.slice(0, 15).map(x => x.visits + x.observations + x.trainings), 1);
+                const pct = (total / maxVal * 100).toFixed(0);
+                return `<div class="report-bar-row"><span class="report-bar-label">${escapeHtml(c.name)}</span><div class="report-bar-track"><div class="report-bar-fill" style="width:${pct}%"><span>${total} (V:${c.visits} O:${c.observations} T:${c.trainings})</span></div></div></div>`;
+            }).join('')}
+        </div>` : ''}
+
+        ${allEngagement.length > 0 ? `<h3>Observation Quality Summary</h3>
+        ${_reportStatsHTML([
+            { value: avgEngagement + '/5', label: 'Avg Engagement' },
+            { value: avgMethodology + '/5', label: 'Avg Methodology' },
+            { value: avgTLM + '/5', label: 'Avg TLM Usage' },
+            { value: totals.observations, label: 'Total Observations' }
+        ])}` : ''}
+
+        ${Object.keys(purposeCount).length > 0 ? `<h3>Visits by Purpose</h3>
+        <div class="report-bar-chart">
+            ${Object.entries(purposeCount).sort((a, b) => b[1] - a[1]).map(([purpose, cnt]) => {
+                const totalV = Object.values(purposeCount).reduce((s, v) => s + v, 0);
+                const pct = (cnt / totalV * 100).toFixed(0);
+                return `<div class="report-bar-row"><span class="report-bar-label">${escapeHtml(purpose)}</span><div class="report-bar-track"><div class="report-bar-fill" style="width:${pct}%"><span>${cnt} (${pct}%)</span></div></div></div>`;
+            }).join('')}
+        </div>` : ''}
+
+        ${Object.keys(subjectCount).length > 0 ? `<h3>Subject-wise Observations</h3>
+        ${_reportTableHTML(['Subject', 'Observations', 'Percentage'],
+            Object.entries(subjectCount).sort((a, b) => b[1] - a[1]).map(([subj, cnt]) => [
+                `<strong>${escapeHtml(subj)}</strong>`, cnt, Math.round(cnt / totals.observations * 100) + '%'
+            ])
+        )}` : ''}
+
+        ${Object.keys(targetCount).length > 0 ? `<h3>Training Target Groups</h3>
+        ${_reportTableHTML(['Target Group', 'Sessions', 'Percentage'],
+            Object.entries(targetCount).sort((a, b) => b[1] - a[1]).map(([tgt, cnt]) => [
+                `<strong>${escapeHtml(tgt)}</strong>`, cnt, Math.round(cnt / totals.trainings * 100) + '%'
+            ])
+        )}` : ''}
+
+        ${filteredVisits.length > 0 ? `<h3>School Visits</h3>
+        ${_reportTableHTML(['Date', 'School', 'Cluster', 'Purpose', 'Duration', 'People Met', 'Status'],
+            filteredVisits.sort((a, b) => new Date(a.date) - new Date(b.date)).map(v => [
+                new Date(v.date).toLocaleDateString('en-IN'),
+                `<strong>${escapeHtml(v.school || '-')}</strong>`,
+                escapeHtml(v.cluster || '-'),
+                escapeHtml(v.purpose || '-'),
+                v.duration || '-',
+                escapeHtml(v.peopleMet || '-'),
+                `<span class="badge badge-${v.status}">${v.status}</span>`
+            ])
+        )}` : ''}
+
+        ${filteredObs.length > 0 ? `<h3>Classroom Observations</h3>
+        ${_reportTableHTML(['Date', 'School', 'Teacher', 'Subject', 'Class', 'Engagement', 'Methodology', 'TLM'],
+            filteredObs.sort((a, b) => new Date(a.date) - new Date(b.date)).map(o => [
+                new Date(o.date).toLocaleDateString('en-IN'),
+                `<strong>${escapeHtml(o.school || '-')}</strong>`,
+                escapeHtml(o.teacher || '-'),
+                escapeHtml(o.subject || '-'),
+                o.class || '-',
+                (o.engagementRating || o.engagement || '-') + (o.engagementRating || o.engagement ? '/5' : ''),
+                (o.methodology || '-') + (o.methodology ? '/5' : ''),
+                (o.tlm || '-') + (o.tlm ? '/5' : '')
+            ])
+        )}` : ''}
+
+        ${filteredTrainings.length > 0 ? `<h3>Training Sessions</h3>
+        ${_reportTableHTML(['Date', 'Title', 'Venue', 'Attendees', 'Duration', 'Target', 'Status'],
+            filteredTrainings.sort((a, b) => new Date(a.date) - new Date(b.date)).map(t => [
+                new Date(t.date).toLocaleDateString('en-IN'),
+                `<strong>${escapeHtml(t.title)}</strong>`,
+                escapeHtml(t.venue || '-'),
+                t.attendees || '-',
+                t.duration + 'h',
+                escapeHtml(t.target || '-'),
+                `<span class="badge badge-${t.status}">${t.status}</span>`
+            ])
+        )}` : ''}
+    </div>`;
+}
+
+// ===== BLOCK REPORT (Visits + Observations + Training) =====
+function generateBlockReport(output, visits, trainings, observations, monthVal, year, blockFilter) {
+    const periodLabel = _reportPeriodLabel(monthVal, year);
+    let fVisits = _reportFilterByPeriod(visits, monthVal, year);
+    let fObs = _reportFilterByPeriod(observations, monthVal, year);
+    let fTrainings = _reportFilterByPeriod(trainings, monthVal, year);
+
+    const blockMap = {};
+    const addBlock = (name) => {
+        const key = (name || '').toLowerCase().trim();
+        if (!key) return null;
+        if (!blockMap[key]) blockMap[key] = { name: name.trim(), visits: 0, completedVisits: 0, observations: 0, trainings: 0, attendees: 0, hours: 0, schools: new Set(), clusters: new Set(), teachers: new Set(), avgEngagement: [], avgMethodology: [], avgTLM: [] };
+        return blockMap[key];
+    };
+
+    fVisits.forEach(v => {
+        const b = addBlock(v.block);
+        if (b) { b.visits++; if (v.status === 'completed') b.completedVisits++; if (v.school) b.schools.add(v.school.toLowerCase().trim()); if (v.cluster) b.clusters.add(v.cluster.trim()); }
+    });
+    fObs.forEach(o => {
+        const b = addBlock(o.block);
+        if (b) {
+            b.observations++;
+            if (o.teacher) b.teachers.add(o.teacher.toLowerCase().trim());
+            if (o.cluster) b.clusters.add(o.cluster.trim());
+            if (o.engagementRating || o.engagement) b.avgEngagement.push(o.engagementRating || o.engagement || 0);
+            if (o.methodology) b.avgMethodology.push(o.methodology);
+            if (o.tlm) b.avgTLM.push(o.tlm);
+        }
+    });
+    // Map trainings to blocks via cluster/venue matching
+    fTrainings.forEach(t => {
+        const venue = (t.venue || '').toLowerCase().trim();
+        if (!venue) return;
+        // Find which block this training venue/cluster belongs to
+        let matched = false;
+        Object.values(blockMap).forEach(blk => {
+            const clusterNames = [...blk.clusters].map(c => c.toLowerCase().trim());
+            if (clusterNames.includes(venue)) {
+                blk.trainings++;
+                blk.attendees += (t.attendees || 0);
+                blk.hours += (t.duration || 0);
+                matched = true;
+            }
+        });
+    });
+
+    let blocks = Object.values(blockMap).sort((a, b) => (b.visits + b.observations) - (a.visits + a.observations));
+    if (blockFilter !== 'all') {
+        blocks = blocks.filter(b => b.name.toLowerCase().trim() === blockFilter.toLowerCase().trim());
+    }
+
+    if (blocks.length === 0) {
+        output.innerHTML = '<div class="empty-state"><i class="fas fa-building"></i><h3>No block data available</h3><p>Add visits/observations with block information to generate this report.</p></div>';
+        return;
+    }
+
+    const totals = blocks.reduce((t, b) => ({
+        visits: t.visits + b.visits, completed: t.completed + b.completedVisits,
+        observations: t.observations + b.observations, schools: t.schools + b.schools.size,
+        teachers: t.teachers + b.teachers.size, clusters: t.clusters + b.clusters.size,
+        trainings: t.trainings + b.trainings, attendees: t.attendees + b.attendees, hours: t.hours + b.hours
+    }), { visits: 0, completed: 0, observations: 0, schools: 0, teachers: 0, clusters: 0, trainings: 0, attendees: 0, hours: 0 });
+
+    const avg = arr => arr.length ? (arr.reduce((s, v) => s + v, 0) / arr.length).toFixed(1) : '-';
+
+    output.innerHTML = `<div class="report-content">
+        ${_reportHeader('Block Report', periodLabel)}
+        ${_reportStatsHTML([
+            { value: blocks.length, label: 'Blocks' },
+            { value: totals.clusters, label: 'Clusters' },
+            { value: totals.visits, label: 'Total Visits' },
+            { value: totals.completed, label: 'Completed' },
+            { value: totals.schools, label: 'Schools' },
+            { value: totals.observations, label: 'Observations' },
+            { value: totals.teachers, label: 'Teachers Observed' },
+            { value: totals.trainings, label: 'Trainings' },
+            { value: totals.attendees, label: 'Teachers Trained' },
+            { value: totals.hours + 'h', label: 'Training Hours' }
+        ])}
+
+        <h3>Block-wise Breakdown</h3>
+        ${_reportTableHTML(['Block', 'Clusters', 'Visits', 'Completed', 'Schools', 'Observations', 'Teachers', 'Trainings', 'Attendees', 'Avg Engagement'],
+            blocks.map(b => [
+                `<strong>${escapeHtml(b.name)}</strong>`,
+                b.clusters.size, b.visits, b.completedVisits, b.schools.size,
+                b.observations, b.teachers.size, b.trainings, b.attendees,
+                avg(b.avgEngagement) !== '-' ? avg(b.avgEngagement) + '/5' : '-'
+            ])
+        )}
+
+        ${blocks.length > 0 && blocks.some(b => b.avgEngagement.length > 0) ? `<h3>Block-wise Quality Comparison</h3>
+        <div class="report-bar-chart">
+            ${blocks.filter(b => b.avgEngagement.length > 0).map(b => {
+                const avgE = (b.avgEngagement.reduce((s, v) => s + v, 0) / b.avgEngagement.length);
+                const pct = (avgE / 5 * 100).toFixed(0);
+                return `<div class="report-bar-row"><span class="report-bar-label">${escapeHtml(b.name)}</span><div class="report-bar-track"><div class="report-bar-fill report-bar-fill--quality" style="width:${pct}%"><span>${avgE.toFixed(1)}/5</span></div></div></div>`;
+            }).join('')}
+        </div>` : ''}
+
+        ${fTrainings.length > 0 ? `<h3>Training Sessions</h3>
+        ${_reportTableHTML(['Date', 'Title', 'Venue', 'Attendees', 'Duration', 'Target', 'Status'],
+            fTrainings.sort((a, b) => new Date(a.date) - new Date(b.date)).map(t => [
+                new Date(t.date).toLocaleDateString('en-IN'),
+                `<strong>${escapeHtml(t.title)}</strong>`,
+                escapeHtml(t.venue || '-'),
+                t.attendees || '-',
+                t.duration + 'h',
+                escapeHtml(t.target || '-'),
+                `<span class="badge badge-${t.status}">${t.status}</span>`
+            ])
+        )}` : ''}
+    </div>`;
+}
+
+// ===== DISTRICT REPORT =====
+function generateDistrictReport(output, visits, trainings, observations, monthVal, year) {
+    const periodLabel = _reportPeriodLabel(monthVal, year);
+    let fVisits = _reportFilterByPeriod(visits, monthVal, year);
+    let fObs = _reportFilterByPeriod(observations, monthVal, year);
+    let fTrainings = _reportFilterByPeriod(trainings, monthVal, year);
+
+    const completedVisits = fVisits.filter(v => v.status === 'completed').length;
+    const totalAttendees = fTrainings.reduce((s, t) => s + (t.attendees || 0), 0);
+    const totalHours = fTrainings.reduce((s, t) => s + (t.duration || 0), 0);
+    const allSchools = new Set([...fVisits.map(v => (v.school || '').toLowerCase().trim()), ...fObs.map(o => (o.school || '').toLowerCase().trim())]);
+    const allClusters = new Set([...fVisits.map(v => (v.cluster || '')).filter(Boolean), ...fObs.map(o => (o.cluster || '')).filter(Boolean)]);
+    const allBlocks = new Set([...fVisits.map(v => (v.block || '')).filter(Boolean), ...fObs.map(o => (o.block || '')).filter(Boolean)]);
+    const allTeachers = new Set([...fObs.map(o => (o.teacher || '').toLowerCase().trim()).filter(Boolean)]);
+
+    // Subject breakdown
+    const subjectCount = {};
+    fObs.forEach(o => { subjectCount[o.subject] = (subjectCount[o.subject] || 0) + 1; });
+
+    // Purpose breakdown
+    const purposeCount = {};
+    fVisits.forEach(v => { purposeCount[v.purpose || 'Other'] = (purposeCount[v.purpose || 'Other'] || 0) + 1; });
+
+    // Engagement distribution
+    const engagementDist = {};
+    fObs.forEach(o => { if (o.engagementLevel) engagementDist[o.engagementLevel] = (engagementDist[o.engagementLevel] || 0) + 1; });
+
+    // Cluster summary
+    const clusterSummary = {};
+    fVisits.forEach(v => {
+        const cl = (v.cluster || '').trim();
+        if (!cl) return;
+        if (!clusterSummary[cl]) clusterSummary[cl] = { visits: 0, observations: 0, schools: new Set() };
+        clusterSummary[cl].visits++;
+        if (v.school) clusterSummary[cl].schools.add(v.school.toLowerCase().trim());
+    });
+    fObs.forEach(o => {
+        const cl = (o.cluster || '').trim();
+        if (!cl) return;
+        if (!clusterSummary[cl]) clusterSummary[cl] = { visits: 0, observations: 0, schools: new Set() };
+        clusterSummary[cl].observations++;
+    });
+
+    // Monthly trend
+    const monthlyTrend = {};
+    [...fVisits, ...fObs, ...fTrainings].forEach(item => {
+        const d = new Date(item.date);
+        const key = d.toLocaleString('en', { month: 'short', year: 'numeric' });
+        if (!monthlyTrend[key]) monthlyTrend[key] = { visits: 0, observations: 0, trainings: 0 };
+    });
+    fVisits.forEach(v => { const k = new Date(v.date).toLocaleString('en', { month: 'short', year: 'numeric' }); if (monthlyTrend[k]) monthlyTrend[k].visits++; });
+    fObs.forEach(o => { const k = new Date(o.date).toLocaleString('en', { month: 'short', year: 'numeric' }); if (monthlyTrend[k]) monthlyTrend[k].observations++; });
+    fTrainings.forEach(t => { const k = new Date(t.date).toLocaleString('en', { month: 'short', year: 'numeric' }); if (monthlyTrend[k]) monthlyTrend[k].trainings++; });
+
+    const p = getProfile();
+    output.innerHTML = `<div class="report-content">
+        ${_reportHeader('District Report' + (p.district ? ' — ' + escapeHtml(p.district) : ''), periodLabel)}
+        ${_reportStatsHTML([
+            { value: allBlocks.size, label: 'Blocks' },
+            { value: allClusters.size, label: 'Clusters' },
+            { value: allSchools.size, label: 'Schools' },
+            { value: fVisits.length, label: 'Total Visits' },
+            { value: completedVisits, label: 'Completed' },
+            { value: fObs.length, label: 'Observations' },
+            { value: allTeachers.size, label: 'Teachers' },
+            { value: fTrainings.length, label: 'Trainings' },
+            { value: totalAttendees, label: 'Teachers Trained' },
+            { value: totalHours + 'h', label: 'Training Hours' }
+        ])}
+
+        ${Object.keys(clusterSummary).length > 0 ? `<h3>Cluster-wise Summary</h3>
+        ${_reportTableHTML(['Cluster', 'Visits', 'Observations', 'Schools'],
+            Object.entries(clusterSummary).sort((a, b) => (b[1].visits + b[1].observations) - (a[1].visits + a[1].observations)).map(([cl, d]) => [
+                `<strong>${escapeHtml(cl)}</strong>`, d.visits, d.observations, d.schools.size
+            ])
+        )}` : ''}
+
+        ${Object.keys(purposeCount).length > 0 ? `<h3>Visits by Purpose</h3>
+        ${_reportTableHTML(['Purpose', 'Count'],
+            Object.entries(purposeCount).sort((a, b) => b[1] - a[1]).map(([p, c]) => [escapeHtml(p), c])
+        )}` : ''}
+
+        ${Object.keys(subjectCount).length > 0 ? `<h3>Observations by Subject</h3>
+        ${_reportTableHTML(['Subject', 'Count'],
+            Object.entries(subjectCount).sort((a, b) => b[1] - a[1]).map(([s, c]) => [escapeHtml(s), c])
+        )}` : ''}
+
+        ${Object.keys(engagementDist).length > 0 ? `<h3>Student Engagement Distribution</h3>
+        <div class="report-bar-chart">
+            ${Object.entries(engagementDist).sort((a, b) => b[1] - a[1]).map(([level, cnt]) => {
+                const pct = (cnt / fObs.length * 100).toFixed(0);
+                return `<div class="report-bar-row"><span class="report-bar-label">${escapeHtml(level)}</span><div class="report-bar-track"><div class="report-bar-fill" style="width:${pct}%"><span>${cnt} (${pct}%)</span></div></div></div>`;
+            }).join('')}
+        </div>` : ''}
+
+        ${Object.keys(monthlyTrend).length > 1 ? `<h3>Activity Trend</h3>
+        ${_reportTableHTML(['Month', 'Visits', 'Observations', 'Trainings'],
+            Object.entries(monthlyTrend).map(([m, d]) => [m, d.visits, d.observations, d.trainings])
+        )}` : ''}
+    </div>`;
+}
+
+// ===== HEALTH REPORT (based on Observations, Visits & Training) =====
+function generateHealthReport(output, visits, trainings, observations, monthVal, year) {
+    const periodLabel = _reportPeriodLabel(monthVal, year);
+    const fObs = _reportFilterByPeriod(observations, monthVal, year);
+    const fVisits = _reportFilterByPeriod(visits, monthVal, year);
+    const fTrainings = _reportFilterByPeriod(trainings, monthVal, year);
+
+    if (fObs.length === 0 && fVisits.length === 0 && fTrainings.length === 0) {
+        output.innerHTML = '<div class="empty-state"><i class="fas fa-heartbeat"></i><h3>No data for this period</h3><p>Add observations, visits, or trainings to generate the health report.</p></div>';
+        return;
+    }
+
+    // Visit & Training stats
+    const completedVisits = fVisits.filter(v => v.status === 'completed').length;
+    const totalAttendees = fTrainings.reduce((s, t) => s + (t.attendees || 0), 0);
+    const totalTrainingHours = fTrainings.reduce((s, t) => s + (t.duration || 0), 0);
+    const visitSchools = new Set(fVisits.map(v => (v.school || '').toLowerCase().trim()).filter(Boolean));
+    const obsSchools = new Set(fObs.map(o => (o.school || '').toLowerCase().trim()).filter(Boolean));
+    const allSchools = new Set([...visitSchools, ...obsSchools]);
+
+    // Overall averages
+    const ratedObs = fObs.filter(o => (o.engagementRating || o.engagement) || o.methodology || o.tlm);
+    const avgEngagement = _rptAvg(ratedObs, 'engagementRating');
+    const avgMethodology = _rptAvg(ratedObs, 'methodology');
+    const avgTLM = _rptAvg(ratedObs, 'tlm');
+
+    // Engagement level distribution
+    const engDist = {};
+    fObs.forEach(o => { if (o.engagementLevel) engDist[o.engagementLevel] = (engDist[o.engagementLevel] || 0) + 1; });
+
+    // Practice type distribution
+    const pracDist = {};
+    fObs.forEach(o => { if (o.practiceType) pracDist[o.practiceType] = (pracDist[o.practiceType] || 0) + 1; });
+
+    // Subject-wise quality
+    const subjectQuality = {};
+    fObs.forEach(o => {
+        const sub = o.subject || 'Other';
+        if (!subjectQuality[sub]) subjectQuality[sub] = { count: 0, engagement: [], methodology: [], tlm: [], engaged: 0, total: 0 };
+        subjectQuality[sub].count++;
+        subjectQuality[sub].total++;
+        if (o.engagementLevel === 'More Engaged' || o.engagementLevel === 'Engaged') subjectQuality[sub].engaged++;
+        if (o.engagementRating || o.engagement) subjectQuality[sub].engagement.push(o.engagementRating || o.engagement || 0);
+        if (o.methodology) subjectQuality[sub].methodology.push(o.methodology);
+        if (o.tlm) subjectQuality[sub].tlm.push(o.tlm);
+    });
+
+    // School-wise health (visits + observations + trainings)
+    const schoolHealth = {};
+    fObs.forEach(o => {
+        const sch = (o.school || '').trim();
+        if (!sch) return;
+        const key = sch.toLowerCase();
+        if (!schoolHealth[key]) schoolHealth[key] = { name: sch, observations: 0, visits: 0, trainings: 0, engagement: [], methodology: [], tlm: [], engaged: 0, teachers: new Set() };
+        schoolHealth[key].observations++;
+        if (o.engagementLevel === 'More Engaged' || o.engagementLevel === 'Engaged') schoolHealth[key].engaged++;
+        if (o.teacher) schoolHealth[key].teachers.add(o.teacher.toLowerCase().trim());
+        if (o.engagementRating || o.engagement) schoolHealth[key].engagement.push(o.engagementRating || o.engagement || 0);
+        if (o.methodology) schoolHealth[key].methodology.push(o.methodology);
+        if (o.tlm) schoolHealth[key].tlm.push(o.tlm);
+    });
+    fVisits.forEach(v => {
+        const sch = (v.school || '').trim();
+        if (!sch) return;
+        const key = sch.toLowerCase();
+        if (!schoolHealth[key]) schoolHealth[key] = { name: sch, observations: 0, visits: 0, trainings: 0, engagement: [], methodology: [], tlm: [], engaged: 0, teachers: new Set() };
+        schoolHealth[key].visits++;
+    });
+
+    // Teacher-wise observation frequency
+    const teacherObs = {};
+    fObs.forEach(o => {
+        const t = (o.teacher || '').trim();
+        if (!t) return;
+        const key = t.toLowerCase();
+        if (!teacherObs[key]) teacherObs[key] = { name: t, count: 0, school: o.school || '', engagement: [], methodology: [], tlm: [], subjects: new Set() };
+        teacherObs[key].count++;
+        if (o.subject) teacherObs[key].subjects.add(o.subject);
+        if (o.engagementRating || o.engagement) teacherObs[key].engagement.push(o.engagementRating || o.engagement || 0);
+        if (o.methodology) teacherObs[key].methodology.push(o.methodology);
+        if (o.tlm) teacherObs[key].tlm.push(o.tlm);
+    });
+
+    // Compute overall health score (0-100)
+    const healthScores = [];
+    if (ratedObs.length > 0) {
+        const eScore = avgEngagement !== '-' ? parseFloat(avgEngagement) : 0;
+        const mScore = avgMethodology !== '-' ? parseFloat(avgMethodology) : 0;
+        const tScore = avgTLM !== '-' ? parseFloat(avgTLM) : 0;
+        const rated = [eScore, mScore, tScore].filter(v => v > 0);
+        if (rated.length > 0) {
+            const avgScore = rated.reduce((s, v) => s + v, 0) / rated.length;
+            healthScores.push(avgScore);
+        }
+    }
+    const engagedPct = fObs.length > 0 ? (fObs.filter(o => o.engagementLevel === 'More Engaged' || o.engagementLevel === 'Engaged').length / fObs.length * 100) : 0;
+    const overallHealth = healthScores.length > 0 ? Math.round(healthScores[0] / 5 * 100) : Math.round(engagedPct);
+    const healthColor = overallHealth >= 75 ? '#10b981' : overallHealth >= 50 ? '#f59e0b' : '#ef4444';
+    const healthLabel = overallHealth >= 75 ? 'Good' : overallHealth >= 50 ? 'Needs Attention' : 'Critical';
+
+    // Visit purpose breakdown
+    const purposeCount = {};
+    fVisits.forEach(v => { purposeCount[v.purpose || 'Other'] = (purposeCount[v.purpose || 'Other'] || 0) + 1; });
+
+    const avg = arr => arr.length ? (arr.reduce((s, v) => s + v, 0) / arr.length).toFixed(1) : '-';
+
+    output.innerHTML = `<div class="report-content">
+        ${_reportHeader('Classroom Health Report', periodLabel)}
+
+        <div class="report-health-overview">
+            <div class="report-health-score" style="--health-color: ${healthColor}">
+                <div class="health-circle">
+                    <svg viewBox="0 0 120 120"><circle cx="60" cy="60" r="52" stroke="rgba(255,255,255,0.1)" stroke-width="8" fill="none"/><circle cx="60" cy="60" r="52" stroke="${healthColor}" stroke-width="8" fill="none" stroke-dasharray="${52 * 2 * Math.PI}" stroke-dashoffset="${52 * 2 * Math.PI * (1 - overallHealth / 100)}" stroke-linecap="round" transform="rotate(-90 60 60)"/></svg>
+                    <div class="health-circle-text"><span class="health-value">${overallHealth}%</span><span class="health-label">${healthLabel}</span></div>
+                </div>
+                <div class="health-title">Overall Health</div>
+            </div>
+            <div class="report-health-metrics">
+                <div class="health-metric"><i class="fas fa-star" style="color:#f59e0b"></i><div><strong>${avgEngagement}/5</strong><span>Engagement</span></div></div>
+                <div class="health-metric"><i class="fas fa-chalkboard" style="color:#8b5cf6"></i><div><strong>${avgMethodology}/5</strong><span>Methodology</span></div></div>
+                <div class="health-metric"><i class="fas fa-tools" style="color:#3b82f6"></i><div><strong>${avgTLM}/5</strong><span>TLM Usage</span></div></div>
+                <div class="health-metric"><i class="fas fa-users" style="color:#10b981"></i><div><strong>${engagedPct.toFixed(0)}%</strong><span>Students Engaged</span></div></div>
+                <div class="health-metric"><i class="fas fa-clipboard-check" style="color:#06b6d4"></i><div><strong>${fObs.length}</strong><span>Observations</span></div></div>
+                <div class="health-metric"><i class="fas fa-user-tie" style="color:#ec4899"></i><div><strong>${Object.keys(teacherObs).length}</strong><span>Teachers Observed</span></div></div>
+                <div class="health-metric"><i class="fas fa-school" style="color:#f97316"></i><div><strong>${fVisits.length}</strong><span>School Visits</span></div></div>
+                <div class="health-metric"><i class="fas fa-chalkboard-teacher" style="color:#a855f7"></i><div><strong>${fTrainings.length}</strong><span>Trainings</span></div></div>
+            </div>
+        </div>
+
+        ${_reportStatsHTML([
+            { value: allSchools.size, label: 'Schools Covered' },
+            { value: fVisits.length, label: 'School Visits' },
+            { value: completedVisits, label: 'Completed Visits' },
+            { value: fTrainings.length, label: 'Training Sessions' },
+            { value: totalAttendees, label: 'Teachers Trained' },
+            { value: totalTrainingHours + 'h', label: 'Training Hours' }
+        ])}
+
+        ${Object.keys(engDist).length > 0 ? `<h3>Student Engagement Distribution</h3>
+        <div class="report-bar-chart">
+            ${Object.entries(engDist).sort((a, b) => b[1] - a[1]).map(([level, cnt]) => {
+                const pct = (cnt / fObs.length * 100).toFixed(0);
+                const color = level === 'More Engaged' ? '#10b981' : level === 'Engaged' ? '#3b82f6' : level === 'Less Engaged' ? '#f59e0b' : '#ef4444';
+                return `<div class="report-bar-row"><span class="report-bar-label">${escapeHtml(level)}</span><div class="report-bar-track"><div class="report-bar-fill" style="width:${pct}%;background:${color}"><span>${cnt} (${pct}%)</span></div></div></div>`;
+            }).join('')}
+        </div>` : ''}
+
+        ${Object.keys(pracDist).length > 0 ? `<h3>Practice Type Distribution</h3>
+        <div class="report-bar-chart">
+            ${Object.entries(pracDist).sort((a, b) => b[1] - a[1]).map(([type, cnt]) => {
+                const pct = (cnt / fObs.length * 100).toFixed(0);
+                return `<div class="report-bar-row"><span class="report-bar-label">${escapeHtml(type)}</span><div class="report-bar-track"><div class="report-bar-fill report-bar-fill--practice" style="width:${pct}%"><span>${cnt} (${pct}%)</span></div></div></div>`;
+            }).join('')}
+        </div>` : ''}
+
+        ${Object.keys(purposeCount).length > 0 ? `<h3>School Visits by Purpose</h3>
+        <div class="report-bar-chart">
+            ${Object.entries(purposeCount).sort((a, b) => b[1] - a[1]).map(([p, cnt]) => {
+                const pct = (cnt / fVisits.length * 100).toFixed(0);
+                return `<div class="report-bar-row"><span class="report-bar-label">${escapeHtml(p)}</span><div class="report-bar-track"><div class="report-bar-fill" style="width:${pct}%"><span>${cnt} (${pct}%)</span></div></div></div>`;
+            }).join('')}
+        </div>` : ''}
+
+        ${Object.keys(subjectQuality).length > 0 ? `<h3>Subject-wise Quality</h3>
+        ${_reportTableHTML(['Subject', 'Observations', 'Engagement', 'Methodology', 'TLM', 'Engaged %'],
+            Object.entries(subjectQuality).sort((a, b) => b[1].count - a[1].count).map(([sub, d]) => [
+                `<strong>${escapeHtml(sub)}</strong>`, d.count,
+                avg(d.engagement) !== '-' ? avg(d.engagement) + '/5' : '-',
+                avg(d.methodology) !== '-' ? avg(d.methodology) + '/5' : '-',
+                avg(d.tlm) !== '-' ? avg(d.tlm) + '/5' : '-',
+                d.total > 0 ? Math.round(d.engaged / d.total * 100) + '%' : '-'
+            ])
+        )}` : ''}
+
+        ${Object.keys(schoolHealth).length > 0 ? `<h3>School-wise Health (Visits + Observations)</h3>
+        ${_reportTableHTML(['School', 'Visits', 'Observations', 'Teachers', 'Engagement', 'Methodology', 'TLM', 'Engaged %'],
+            Object.values(schoolHealth).sort((a, b) => (b.observations + b.visits) - (a.observations + a.visits)).map(s => [
+                `<strong>${escapeHtml(s.name)}</strong>`, s.visits, s.observations, s.teachers.size,
+                avg(s.engagement) !== '-' ? avg(s.engagement) + '/5' : '-',
+                avg(s.methodology) !== '-' ? avg(s.methodology) + '/5' : '-',
+                avg(s.tlm) !== '-' ? avg(s.tlm) + '/5' : '-',
+                s.observations > 0 ? Math.round(s.engaged / s.observations * 100) + '%' : '-'
+            ])
+        )}` : ''}
+
+        ${Object.keys(teacherObs).length > 0 ? `<h3>Teacher-wise Observations</h3>
+        ${_reportTableHTML(['Teacher', 'School', 'Observations', 'Subjects', 'Engagement', 'Methodology', 'TLM'],
+            Object.values(teacherObs).sort((a, b) => b.count - a.count).slice(0, 30).map(t => [
+                `<strong>${escapeHtml(t.name)}</strong>`,
+                escapeHtml(t.school),
+                t.count,
+                [...t.subjects].join(', '),
+                avg(t.engagement) !== '-' ? avg(t.engagement) + '/5' : '-',
+                avg(t.methodology) !== '-' ? avg(t.methodology) + '/5' : '-',
+                avg(t.tlm) !== '-' ? avg(t.tlm) + '/5' : '-'
+            ])
+        )}` : ''}
+
+        ${fTrainings.length > 0 ? `<h3>Training Sessions</h3>
+        ${_reportTableHTML(['Date', 'Title', 'Venue', 'Attendees', 'Duration', 'Target', 'Status'],
+            fTrainings.sort((a, b) => new Date(a.date) - new Date(b.date)).map(t => [
+                new Date(t.date).toLocaleDateString('en-IN'),
+                `<strong>${escapeHtml(t.title)}</strong>`,
+                escapeHtml(t.venue || '-'),
+                t.attendees || '-',
+                t.duration + 'h',
+                escapeHtml(t.target || '-'),
+                `<span class="badge badge-${t.status}">${t.status}</span>`
+            ])
+        )}` : ''}
+    </div>`;
+}
+
+// ===== VISITS REPORT (with Observations & Training context) =====
+function generateVisitsReport(output, visits, monthVal, year) {
+    const periodLabel = _reportPeriodLabel(monthVal, year);
+    const fVisits = _reportFilterByPeriod(visits, monthVal, year);
+    const observations = DB.get('observations');
+    const trainings = DB.get('trainings');
+    const fObs = _reportFilterByPeriod(observations, monthVal, year);
+    const fTrainings = _reportFilterByPeriod(trainings, monthVal, year);
+
+    if (fVisits.length === 0 && fObs.length === 0 && fTrainings.length === 0) {
+        output.innerHTML = '<div class="empty-state"><i class="fas fa-school"></i><h3>No data for this period</h3><p>Add school visits, observations, or trainings to generate this report.</p></div>';
+        return;
+    }
+
+    const completed = fVisits.filter(v => v.status === 'completed').length;
+    const planned = fVisits.filter(v => v.status === 'planned').length;
+    const visitSchools = new Set(fVisits.map(v => (v.school || '').toLowerCase().trim()).filter(Boolean));
+    const obsSchools = new Set(fObs.map(o => (o.school || '').toLowerCase().trim()).filter(Boolean));
+    const allSchools = new Set([...visitSchools, ...obsSchools]);
+    const clusters = new Set([...fVisits.map(v => (v.cluster || '').trim()).filter(Boolean), ...fObs.map(o => (o.cluster || '').trim()).filter(Boolean)]);
+    const blocks = new Set([...fVisits.map(v => (v.block || '').trim()).filter(Boolean), ...fObs.map(o => (o.block || '').trim()).filter(Boolean)]);
+    const totalAttendees = fTrainings.reduce((s, t) => s + (t.attendees || 0), 0);
+    const totalTrainingHours = fTrainings.reduce((s, t) => s + (t.duration || 0), 0);
+    const uniqueTeachers = new Set(fObs.map(o => (o.teacher || '').toLowerCase().trim()).filter(Boolean));
+
+    // Purpose breakdown
+    const purposeCount = {};
+    fVisits.forEach(v => { purposeCount[v.purpose || 'Other'] = (purposeCount[v.purpose || 'Other'] || 0) + 1; });
+
+    // Status breakdown
+    const statusCount = {};
+    fVisits.forEach(v => { statusCount[v.status || 'unknown'] = (statusCount[v.status || 'unknown'] || 0) + 1; });
+
+    // Cluster-wise breakdown (visits + observations + trainings)
+    const clusterData = {};
+    fVisits.forEach(v => {
+        const cl = (v.cluster || 'Unspecified').trim();
+        if (!clusterData[cl]) clusterData[cl] = { visits: 0, completed: 0, observations: 0, trainings: 0, attendees: 0, schools: new Set(), teachers: new Set() };
+        clusterData[cl].visits++;
+        if (v.status === 'completed') clusterData[cl].completed++;
+        if (v.school) clusterData[cl].schools.add(v.school.toLowerCase().trim());
+    });
+    fObs.forEach(o => {
+        const cl = (o.cluster || 'Unspecified').trim();
+        if (!clusterData[cl]) clusterData[cl] = { visits: 0, completed: 0, observations: 0, trainings: 0, attendees: 0, schools: new Set(), teachers: new Set() };
+        clusterData[cl].observations++;
+        if (o.school) clusterData[cl].schools.add(o.school.toLowerCase().trim());
+        if (o.teacher) clusterData[cl].teachers.add(o.teacher.toLowerCase().trim());
+    });
+    fTrainings.forEach(t => {
+        const cl = (t.venue || 'Unspecified').trim();
+        if (!clusterData[cl]) clusterData[cl] = { visits: 0, completed: 0, observations: 0, trainings: 0, attendees: 0, schools: new Set(), teachers: new Set() };
+        clusterData[cl].trainings++;
+        clusterData[cl].attendees += (t.attendees || 0);
+    });
+
+    // School frequency (visits + observations)
+    const schoolFreq = {};
+    fVisits.forEach(v => {
+        const sch = (v.school || '').trim();
+        if (!sch) return;
+        const key = sch.toLowerCase();
+        if (!schoolFreq[key]) schoolFreq[key] = { name: sch, visits: 0, observations: 0, lastDate: '' };
+        schoolFreq[key].visits++;
+        if (v.date > schoolFreq[key].lastDate) schoolFreq[key].lastDate = v.date;
+    });
+    fObs.forEach(o => {
+        const sch = (o.school || '').trim();
+        if (!sch) return;
+        const key = sch.toLowerCase();
+        if (!schoolFreq[key]) schoolFreq[key] = { name: sch, visits: 0, observations: 0, lastDate: '' };
+        schoolFreq[key].observations++;
+        if (o.date > schoolFreq[key].lastDate) schoolFreq[key].lastDate = o.date;
+    });
+
+    // Observation quality summary
+    const ratedObs = fObs.filter(o => (o.engagementRating || o.engagement) || o.methodology || o.tlm);
+    const avgEngagement = _rptAvg(ratedObs, 'engagementRating');
+    const avgMethodology = _rptAvg(ratedObs, 'methodology');
+    const avgTLM = _rptAvg(ratedObs, 'tlm');
+
+    output.innerHTML = `<div class="report-content">
+        ${_reportHeader('Visits Report', periodLabel)}
+        ${_reportStatsHTML([
+            { value: fVisits.length, label: 'School Visits' },
+            { value: completed, label: 'Completed' },
+            { value: planned, label: 'Planned' },
+            { value: allSchools.size, label: 'Schools' },
+            { value: clusters.size, label: 'Clusters' },
+            { value: blocks.size, label: 'Blocks' },
+            { value: fObs.length, label: 'Observations' },
+            { value: uniqueTeachers.size, label: 'Teachers Observed' },
+            { value: fTrainings.length, label: 'Trainings' },
+            { value: totalAttendees, label: 'Teachers Trained' },
+            { value: totalTrainingHours + 'h', label: 'Training Hours' }
+        ])}
+
+        ${Object.keys(purposeCount).length > 0 ? `<h3>Visits by Purpose</h3>
+        <div class="report-bar-chart">
+            ${Object.entries(purposeCount).sort((a, b) => b[1] - a[1]).map(([purpose, cnt]) => {
+                const pct = (cnt / fVisits.length * 100).toFixed(0);
+                return `<div class="report-bar-row"><span class="report-bar-label">${escapeHtml(purpose)}</span><div class="report-bar-track"><div class="report-bar-fill" style="width:${pct}%"><span>${cnt} (${pct}%)</span></div></div></div>`;
+            }).join('')}
+        </div>` : ''}
+
+        ${Object.keys(statusCount).length > 0 ? `<h3>Visit Status</h3>
+        ${_reportTableHTML(['Status', 'Count', 'Percentage'],
+            Object.entries(statusCount).sort((a, b) => b[1] - a[1]).map(([s, c]) => [
+                `<span class="badge badge-${s}">${s}</span>`, c, Math.round(c / fVisits.length * 100) + '%'
+            ])
+        )}` : ''}
+
+        ${Object.keys(clusterData).length > 1 ? `<h3>Cluster-wise Breakdown (Visits + Observations + Trainings)</h3>
+        ${_reportTableHTML(['Cluster', 'Visits', 'Completed', 'Schools', 'Observations', 'Teachers', 'Trainings', 'Attendees'],
+            Object.entries(clusterData).sort((a, b) => (b[1].visits + b[1].observations) - (a[1].visits + a[1].observations)).map(([cl, d]) => [
+                `<strong>${escapeHtml(cl)}</strong>`, d.visits, d.completed, d.schools.size,
+                d.observations, d.teachers.size, d.trainings, d.attendees
+            ])
+        )}` : ''}
+
+        ${ratedObs.length > 0 ? `<h3>Observation Quality Summary</h3>
+        ${_reportStatsHTML([
+            { value: avgEngagement + '/5', label: 'Avg Engagement' },
+            { value: avgMethodology + '/5', label: 'Avg Methodology' },
+            { value: avgTLM + '/5', label: 'Avg TLM Usage' }
+        ])}` : ''}
+
+        ${Object.keys(schoolFreq).length > 0 ? `<h3>School Activity (Visits + Observations)</h3>
+        ${_reportTableHTML(['School', 'Visits', 'Observations', 'Total Activity', 'Last Date'],
+            Object.values(schoolFreq).sort((a, b) => (b.visits + b.observations) - (a.visits + a.observations)).slice(0, 30).map(s => [
+                `<strong>${escapeHtml(s.name)}</strong>`, s.visits, s.observations, s.visits + s.observations,
+                s.lastDate ? new Date(s.lastDate).toLocaleDateString('en-IN') : '-'
+            ])
+        )}` : ''}
+
+        ${fTrainings.length > 0 ? `<h3>Training Sessions Conducted</h3>
+        ${_reportTableHTML(['Date', 'Title', 'Duration', 'Attendees', 'Target', 'Venue', 'Status'],
+            fTrainings.sort((a, b) => new Date(a.date) - new Date(b.date)).map(t => [
+                new Date(t.date).toLocaleDateString('en-IN'),
+                `<strong>${escapeHtml(t.title)}</strong>`,
+                t.duration + 'h',
+                t.attendees || '-',
+                escapeHtml(t.target || '-'),
+                escapeHtml(t.venue || '-'),
+                `<span class="badge badge-${t.status}">${t.status}</span>`
+            ])
+        )}` : ''}
+
+        ${fVisits.length > 0 ? `<h3>All School Visits</h3>
+        ${_reportTableHTML(['Date', 'School', 'Cluster', 'Block', 'Purpose', 'Duration', 'People Met', 'Status'],
+            fVisits.sort((a, b) => new Date(a.date) - new Date(b.date)).map(v => [
+                new Date(v.date).toLocaleDateString('en-IN'),
+                `<strong>${escapeHtml(v.school || '-')}</strong>`,
+                escapeHtml(v.cluster || '-'),
+                escapeHtml(v.block || '-'),
+                escapeHtml(v.purpose || '-'),
+                escapeHtml(v.duration || '-'),
+                escapeHtml(v.peopleMet || '-'),
+                `<span class="badge badge-${v.status}">${v.status}</span>`
+            ])
+        )}` : ''}
+
+        ${fObs.length > 0 ? `<h3>Classroom Observations</h3>
+        ${_reportTableHTML(['Date', 'School', 'Teacher', 'Subject', 'Class', 'Engagement', 'Practice Type'],
+            fObs.sort((a, b) => new Date(a.date) - new Date(b.date)).map(o => [
+                new Date(o.date).toLocaleDateString('en-IN'),
+                escapeHtml(o.school || '-'),
+                escapeHtml(o.teacher || '-'),
+                escapeHtml(o.subject || '-'),
+                escapeHtml(o.class || '-'),
+                escapeHtml(o.engagementLevel || '-'),
+                escapeHtml(o.practiceType || '-')
+            ])
+        )}` : ''}
+    </div>`;
+}
+
+// ===== TRAINING REPORT (with Visits & Observations context) =====
+function generateTrainingReport(output, trainings, monthVal, year) {
+    const periodLabel = _reportPeriodLabel(monthVal, year);
+    const fTrainings = _reportFilterByPeriod(trainings, monthVal, year);
+    const visits = DB.get('visits');
+    const observations = DB.get('observations');
+    const fVisits = _reportFilterByPeriod(visits, monthVal, year);
+    const fObs = _reportFilterByPeriod(observations, monthVal, year);
+
+    if (fTrainings.length === 0 && fVisits.length === 0 && fObs.length === 0) {
+        output.innerHTML = '<div class="empty-state"><i class="fas fa-chalkboard-teacher"></i><h3>No data for this period</h3><p>Add trainings, visits, or observations to generate this report.</p></div>';
+        return;
+    }
+
+    const totalAttendees = fTrainings.reduce((s, t) => s + (t.attendees || 0), 0);
+    const totalHours = fTrainings.reduce((s, t) => s + (t.duration || 0), 0);
+    const completedTrainings = fTrainings.filter(t => t.status === 'completed').length;
+    const completedVisits = fVisits.filter(v => v.status === 'completed').length;
+    const uniqueSchools = new Set([...fVisits.map(v => (v.school || '').toLowerCase().trim()), ...fObs.map(o => (o.school || '').toLowerCase().trim())]);
+    const uniqueTeachers = new Set(fObs.map(o => (o.teacher || '').toLowerCase().trim()).filter(Boolean));
+
+    // Target group distribution
+    const targetDist = {};
+    fTrainings.forEach(t => { targetDist[t.target || 'Other'] = (targetDist[t.target || 'Other'] || 0) + 1; });
+
+    // Target with attendees
+    const targetAttendees = {};
+    fTrainings.forEach(t => {
+        const tgt = t.target || 'Other';
+        if (!targetAttendees[tgt]) targetAttendees[tgt] = { sessions: 0, attendees: 0, hours: 0 };
+        targetAttendees[tgt].sessions++;
+        targetAttendees[tgt].attendees += (t.attendees || 0);
+        targetAttendees[tgt].hours += (t.duration || 0);
+    });
+
+    // Venue distribution
+    const venueCount = {};
+    fTrainings.forEach(t => { if (t.venue) venueCount[t.venue.trim()] = (venueCount[t.venue.trim()] || 0) + 1; });
+
+    // Avg attendees & duration
+    const avgAttendees = fTrainings.length > 0 ? (totalAttendees / fTrainings.length).toFixed(0) : 0;
+    const avgDuration = fTrainings.length > 0 ? (totalHours / fTrainings.length).toFixed(1) : 0;
+
+    // Observation quality summary
+    const ratedObs = fObs.filter(o => (o.engagementRating || o.engagement) || o.methodology || o.tlm);
+    const avgEngagement = _rptAvg(ratedObs, 'engagementRating');
+    const avgMethodology = _rptAvg(ratedObs, 'methodology');
+    const avgTLM = _rptAvg(ratedObs, 'tlm');
+
+    // Visit purpose breakdown
+    const purposeCount = {};
+    fVisits.forEach(v => { purposeCount[v.purpose || 'Other'] = (purposeCount[v.purpose || 'Other'] || 0) + 1; });
+
+    // Subject-wise observations
+    const subjectCount = {};
+    fObs.forEach(o => { if (o.subject) subjectCount[o.subject] = (subjectCount[o.subject] || 0) + 1; });
+
+    output.innerHTML = `<div class="report-content">
+        ${_reportHeader('Training Report', periodLabel)}
+        ${_reportStatsHTML([
+            { value: fTrainings.length, label: 'Training Sessions' },
+            { value: completedTrainings, label: 'Completed' },
+            { value: totalAttendees, label: 'Total Attendees' },
+            { value: avgAttendees, label: 'Avg Attendees' },
+            { value: totalHours + 'h', label: 'Total Hours' },
+            { value: avgDuration + 'h', label: 'Avg Duration' },
+            { value: fVisits.length, label: 'School Visits' },
+            { value: completedVisits, label: 'Visits Completed' },
+            { value: fObs.length, label: 'Observations' },
+            { value: uniqueTeachers.size, label: 'Teachers Observed' },
+            { value: uniqueSchools.size, label: 'Schools Covered' }
+        ])}
+
+        ${Object.keys(targetAttendees).length > 0 ? `<h3>Training by Target Group</h3>
+        ${_reportTableHTML(['Target Group', 'Sessions', 'Attendees', 'Hours', 'Avg Attendees'],
+            Object.entries(targetAttendees).sort((a, b) => b[1].sessions - a[1].sessions).map(([tgt, d]) => [
+                `<strong>${escapeHtml(tgt)}</strong>`, d.sessions, d.attendees, d.hours + 'h',
+                d.sessions > 0 ? Math.round(d.attendees / d.sessions) : '-'
+            ])
+        )}` : ''}
+
+        ${Object.keys(targetDist).length > 0 ? `<h3>Target Distribution</h3>
+        <div class="report-bar-chart">
+            ${Object.entries(targetDist).sort((a, b) => b[1] - a[1]).map(([tgt, cnt]) => {
+                const pct = (cnt / fTrainings.length * 100).toFixed(0);
+                return `<div class="report-bar-row"><span class="report-bar-label">${escapeHtml(tgt)}</span><div class="report-bar-track"><div class="report-bar-fill report-bar-fill--training" style="width:${pct}%"><span>${cnt} (${pct}%)</span></div></div></div>`;
+            }).join('')}
+        </div>` : ''}
+
+        ${Object.keys(venueCount).length > 1 ? `<h3>Venue-wise Sessions</h3>
+        ${_reportTableHTML(['Venue', 'Sessions'],
+            Object.entries(venueCount).sort((a, b) => b[1] - a[1]).map(([v, c]) => [escapeHtml(v), c])
+        )}` : ''}
+
+        ${ratedObs.length > 0 ? `<h3>Classroom Observation Quality</h3>
+        ${_reportStatsHTML([
+            { value: avgEngagement + '/5', label: 'Avg Engagement' },
+            { value: avgMethodology + '/5', label: 'Avg Methodology' },
+            { value: avgTLM + '/5', label: 'Avg TLM Usage' }
+        ])}` : ''}
+
+        ${Object.keys(subjectCount).length > 0 ? `<h3>Observations by Subject</h3>
+        ${_reportTableHTML(['Subject', 'Observations'],
+            Object.entries(subjectCount).sort((a, b) => b[1] - a[1]).map(([sub, cnt]) => [escapeHtml(sub), cnt])
+        )}` : ''}
+
+        ${Object.keys(purposeCount).length > 0 ? `<h3>School Visits by Purpose</h3>
+        ${_reportTableHTML(['Purpose', 'Count'],
+            Object.entries(purposeCount).sort((a, b) => b[1] - a[1]).map(([p, c]) => [escapeHtml(p), c])
+        )}` : ''}
+
+        ${fTrainings.length > 0 ? `<h3>All Training Sessions</h3>
+        ${_reportTableHTML(['Date', 'Title', 'Topic', 'Duration', 'Attendees', 'Target', 'Venue', 'Status'],
+            fTrainings.sort((a, b) => new Date(a.date) - new Date(b.date)).map(t => [
+                new Date(t.date).toLocaleDateString('en-IN'),
+                `<strong>${escapeHtml(t.title)}</strong>`,
+                escapeHtml(t.topic || '-'),
+                t.duration + 'h',
+                t.attendees || '-',
+                escapeHtml(t.target || '-'),
+                escapeHtml(t.venue || '-'),
+                `<span class="badge badge-${t.status}">${t.status}</span>`
+            ])
+        )}` : ''}
+
+        ${fVisits.length > 0 ? `<h3>School Visits</h3>
+        ${_reportTableHTML(['Date', 'School', 'Cluster', 'Purpose', 'People Met', 'Status'],
+            fVisits.sort((a, b) => new Date(a.date) - new Date(b.date)).map(v => [
+                new Date(v.date).toLocaleDateString('en-IN'),
+                `<strong>${escapeHtml(v.school || '-')}</strong>`,
+                escapeHtml(v.cluster || '-'),
+                escapeHtml(v.purpose || '-'),
+                escapeHtml(v.peopleMet || '-'),
+                `<span class="badge badge-${v.status}">${v.status}</span>`
+            ])
+        )}` : ''}
+
+        ${fObs.length > 0 ? `<h3>Classroom Observations</h3>
+        ${_reportTableHTML(['Date', 'School', 'Teacher', 'Subject', 'Class', 'Engagement', 'Practice Type'],
+            fObs.sort((a, b) => new Date(a.date) - new Date(b.date)).map(o => [
+                new Date(o.date).toLocaleDateString('en-IN'),
+                escapeHtml(o.school || '-'),
+                escapeHtml(o.teacher || '-'),
+                escapeHtml(o.subject || '-'),
+                escapeHtml(o.class || '-'),
+                escapeHtml(o.engagementLevel || '-'),
+                escapeHtml(o.practiceType || '-')
+            ])
+        )}` : ''}
+    </div>`;
+}
+
+// ===== SCHOOL REPORT (Visits + Observations + Trainings) =====
 function generateSchoolReport(output, visits, trainings, observations) {
     const schoolMap = {};
 
     visits.forEach(v => {
         const key = (v.school || '').toLowerCase().trim();
-        if (!schoolMap[key]) schoolMap[key] = { name: v.school || '', visits: 0, observations: 0, lastVisit: null };
+        if (!key) return;
+        if (!schoolMap[key]) schoolMap[key] = { name: v.school || '', visits: 0, completedVisits: 0, observations: 0, trainings: 0, attendees: 0, lastVisit: null, cluster: v.cluster || '', block: v.block || '', purposes: new Set(), teachers: new Set(), subjects: new Set(), engagement: [], methodology: [], tlm: [] };
         schoolMap[key].visits++;
+        if (v.status === 'completed') schoolMap[key].completedVisits++;
+        if (v.purpose) schoolMap[key].purposes.add(v.purpose);
         const d = new Date(v.date);
         if (!schoolMap[key].lastVisit || d > schoolMap[key].lastVisit) schoolMap[key].lastVisit = d;
+        if (v.cluster && !schoolMap[key].cluster) schoolMap[key].cluster = v.cluster;
+        if (v.block && !schoolMap[key].block) schoolMap[key].block = v.block;
     });
 
     observations.forEach(o => {
         const key = (o.school || '').toLowerCase().trim();
-        if (!schoolMap[key]) schoolMap[key] = { name: o.school || '', visits: 0, observations: 0, lastVisit: null };
+        if (!key) return;
+        if (!schoolMap[key]) schoolMap[key] = { name: o.school || '', visits: 0, completedVisits: 0, observations: 0, trainings: 0, attendees: 0, lastVisit: null, cluster: o.cluster || '', block: o.block || '', purposes: new Set(), teachers: new Set(), subjects: new Set(), engagement: [], methodology: [], tlm: [] };
         schoolMap[key].observations++;
+        if (o.teacher) schoolMap[key].teachers.add(o.teacher.trim());
+        if (o.subject) schoolMap[key].subjects.add(o.subject);
+        if (o.engagementRating || o.engagement) schoolMap[key].engagement.push(o.engagementRating || o.engagement || 0);
+        if (o.methodology) schoolMap[key].methodology.push(o.methodology);
+        if (o.tlm) schoolMap[key].tlm.push(o.tlm);
+        if (o.cluster && !schoolMap[key].cluster) schoolMap[key].cluster = o.cluster;
+        if (o.block && !schoolMap[key].block) schoolMap[key].block = o.block;
+    });
+
+    // Map trainings by venue to related schools/clusters
+    trainings.forEach(t => {
+        const venue = (t.venue || '').toLowerCase().trim();
+        if (!venue) return;
+        // Check if venue matches a school name
+        if (schoolMap[venue]) {
+            schoolMap[venue].trainings++;
+            schoolMap[venue].attendees += (t.attendees || 0);
+        } else {
+            // Check if venue matches a cluster — assign to all schools in that cluster
+            Object.values(schoolMap).forEach(s => {
+                if ((s.cluster || '').toLowerCase().trim() === venue) {
+                    s.trainings++;
+                    s.attendees += Math.round((t.attendees || 0) / Math.max(Object.values(schoolMap).filter(x => (x.cluster || '').toLowerCase().trim() === venue).length, 1));
+                }
+            });
+        }
     });
 
     const schools = Object.values(schoolMap).sort((a, b) => (b.visits + b.observations) - (a.visits + a.observations));
 
     if (schools.length === 0) {
-        output.innerHTML = '<div class="empty-state"><i class="fas fa-school"></i><h3>No school data available</h3><p>Add school visits or observations to generate this report.</p></div>';
+        output.innerHTML = '<div class="empty-state"><i class="fas fa-school"></i><h3>No school data available</h3><p>Add school visits, observations, or trainings to generate this report.</p></div>';
         return;
     }
+
+    const totalVisits = schools.reduce((s, sc) => s + sc.visits, 0);
+    const totalObs = schools.reduce((s, sc) => s + sc.observations, 0);
+    const totalCompleted = schools.reduce((s, sc) => s + sc.completedVisits, 0);
+    const totalTeachers = new Set();
+    schools.forEach(s => s.teachers.forEach(t => totalTeachers.add(t)));
+    const totalTrainingSessions = trainings.length;
+    const totalTrainAttendees = trainings.reduce((s, t) => s + (t.attendees || 0), 0);
+    const totalTrainHours = trainings.reduce((s, t) => s + (t.duration || 0), 0);
+    const avg = arr => arr.length ? (arr.reduce((s, v) => s + v, 0) / arr.length).toFixed(1) : '-';
 
     output.innerHTML = `<div class="report-content">
         <h2>School-wise Report</h2>
         <p class="report-subtitle">${schools.length} schools covered | Report generated on ${new Date().toLocaleDateString('en-IN')}</p>
-        <table class="report-table">
-            <thead><tr><th>School</th><th>Total Visits</th><th>Observations</th><th>Last Visit</th></tr></thead>
-            <tbody>${schools.map(s => `<tr>
-                <td><strong>${escapeHtml(s.name)}</strong></td>
-                <td>${s.visits}</td>
-                <td>${s.observations}</td>
-                <td>${s.lastVisit ? s.lastVisit.toLocaleDateString('en-IN') : '-'}</td>
-            </tr>`).join('')}</tbody>
-        </table>
+        ${_reportStatsHTML([
+            { value: schools.length, label: 'Schools' },
+            { value: totalVisits, label: 'Total Visits' },
+            { value: totalCompleted, label: 'Completed' },
+            { value: totalObs, label: 'Observations' },
+            { value: totalTeachers.size, label: 'Teachers Observed' },
+            { value: new Set(schools.map(s => s.cluster).filter(Boolean)).size, label: 'Clusters' },
+            { value: totalTrainingSessions, label: 'Training Sessions' },
+            { value: totalTrainAttendees, label: 'Teachers Trained' },
+            { value: totalTrainHours + 'h', label: 'Training Hours' }
+        ])}
+        <h3>School-wise Breakdown</h3>
+        ${_reportTableHTML(['School', 'Cluster', 'Block', 'Visits', 'Completed', 'Observations', 'Teachers', 'Subjects', 'Avg Engagement', 'Last Visit'],
+            schools.map(s => [
+                `<strong>${escapeHtml(s.name)}</strong>`,
+                escapeHtml(s.cluster || '-'),
+                escapeHtml(s.block || '-'),
+                s.visits,
+                s.completedVisits,
+                s.observations,
+                s.teachers.size,
+                [...s.subjects].join(', ') || '-',
+                avg(s.engagement) !== '-' ? avg(s.engagement) + '/5' : '-',
+                s.lastVisit ? s.lastVisit.toLocaleDateString('en-IN') : '-'
+            ])
+        )}
+
+        ${trainings.length > 0 ? `<h3>Training Sessions</h3>
+        ${_reportTableHTML(['Date', 'Title', 'Venue', 'Attendees', 'Duration', 'Target', 'Status'],
+            trainings.sort((a, b) => new Date(b.date) - new Date(a.date)).slice(0, 30).map(t => [
+                new Date(t.date).toLocaleDateString('en-IN'),
+                `<strong>${escapeHtml(t.title)}</strong>`,
+                escapeHtml(t.venue || '-'),
+                t.attendees || '-',
+                t.duration + 'h',
+                escapeHtml(t.target || '-'),
+                `<span class="badge badge-${t.status}">${t.status}</span>`
+            ])
+        )}` : ''}
     </div>`;
 }
 
+// ===== SUMMARY REPORT (All Data Sources) =====
 function generateSummaryReport(output, visits, trainings, observations) {
     const totalAttendees = trainings.reduce((sum, t) => sum + (t.attendees || 0), 0);
     const totalHours = trainings.reduce((sum, t) => sum + (t.duration || 0), 0);
     const completedVisits = visits.filter(v => v.status === 'completed').length;
+    const completedTrainings = trainings.filter(t => t.status === 'completed').length;
 
-    // Subject breakdown
     const subjectCount = {};
-    observations.forEach(o => {
-        subjectCount[o.subject] = (subjectCount[o.subject] || 0) + 1;
-    });
+    observations.forEach(o => { if (o.subject) subjectCount[o.subject] = (subjectCount[o.subject] || 0) + 1; });
 
-    // Average ratings
     const ratedObs = observations.filter(o => (o.engagementRating || o.engagement) || o.methodology || o.tlm);
-    const avgEngagement = ratedObs.length ? (ratedObs.reduce((s, o) => s + (o.engagementRating || o.engagement || 0), 0) / ratedObs.length).toFixed(1) : '-';
-    const avgMethodology = ratedObs.length ? (ratedObs.reduce((s, o) => s + (o.methodology || 0), 0) / ratedObs.length).toFixed(1) : '-';
-    const avgTLM = ratedObs.length ? (ratedObs.reduce((s, o) => s + (o.tlm || 0), 0) / ratedObs.length).toFixed(1) : '-';
+    const avgEngagement = _rptAvg(ratedObs, 'engagementRating');
+    const avgMethodology = _rptAvg(ratedObs, 'methodology');
+    const avgTLM = _rptAvg(ratedObs, 'tlm');
 
-    const schools = new Set();
-    visits.forEach(v => schools.add((v.school || '').toLowerCase().trim()));
-    observations.forEach(o => schools.add((o.school || '').toLowerCase().trim()));
+    const schoolSet = new Set();
+    visits.forEach(v => { if (v.school) schoolSet.add(v.school.toLowerCase().trim()); });
+    observations.forEach(o => { if (o.school) schoolSet.add(o.school.toLowerCase().trim()); });
+
+    const clusterSet = new Set();
+    visits.forEach(v => { if (v.cluster) clusterSet.add(v.cluster.trim()); });
+    observations.forEach(o => { if (o.cluster) clusterSet.add(o.cluster.trim()); });
+
+    const blockSet = new Set();
+    visits.forEach(v => { if (v.block) blockSet.add(v.block.trim()); });
+    observations.forEach(o => { if (o.block) blockSet.add(o.block.trim()); });
+
+    const teacherSet = new Set();
+    observations.forEach(o => { if (o.teacher) teacherSet.add(o.teacher.toLowerCase().trim()); });
+
+    const meetings = DB.get('meetings') || [];
+    const followups = DB.get('followups') || [];
+    const teacherRecords = DB.get('teacherRecords') || [];
+
+    // Purpose breakdown
+    const purposeCount = {};
+    visits.forEach(v => { purposeCount[v.purpose || 'Other'] = (purposeCount[v.purpose || 'Other'] || 0) + 1; });
+
+    // Training target group
+    const targetCount = {};
+    trainings.forEach(t => { targetCount[t.target || 'Other'] = (targetCount[t.target || 'Other'] || 0) + 1; });
+
+    // Engagement distribution
+    const engDist = {};
+    observations.forEach(o => { if (o.engagementLevel) engDist[o.engagementLevel] = (engDist[o.engagementLevel] || 0) + 1; });
+
+    // Monthly activity trend
+    const monthlyTrend = {};
+    [...visits, ...observations, ...trainings].forEach(item => {
+        if (!item.date) return;
+        const d = new Date(item.date);
+        const key = d.toLocaleString('en', { month: 'short', year: 'numeric' });
+        if (!monthlyTrend[key]) monthlyTrend[key] = { visits: 0, observations: 0, trainings: 0, sortKey: d.getFullYear() * 100 + d.getMonth() };
+    });
+    visits.forEach(v => { if (!v.date) return; const k = new Date(v.date).toLocaleString('en', { month: 'short', year: 'numeric' }); if (monthlyTrend[k]) monthlyTrend[k].visits++; });
+    observations.forEach(o => { if (!o.date) return; const k = new Date(o.date).toLocaleString('en', { month: 'short', year: 'numeric' }); if (monthlyTrend[k]) monthlyTrend[k].observations++; });
+    trainings.forEach(t => { if (!t.date) return; const k = new Date(t.date).toLocaleString('en', { month: 'short', year: 'numeric' }); if (monthlyTrend[k]) monthlyTrend[k].trainings++; });
 
     output.innerHTML = `<div class="report-content">
-        <h2>Overall Summary</h2>
-        <p class="report-subtitle">All-time summary report | Generated on ${new Date().toLocaleDateString('en-IN')}</p>
+        <h2>Overall Summary Report</h2>
+        <p class="report-subtitle">All-time summary — School Visits, Observations & Training | Generated on ${new Date().toLocaleDateString('en-IN')}</p>
 
-        <div class="report-stats-grid">
-            <div class="report-stat"><div class="stat-value">${schools.size}</div><div class="stat-label">Schools Covered</div></div>
-            <div class="report-stat"><div class="stat-value">${visits.length}</div><div class="stat-label">Total Visits</div></div>
-            <div class="report-stat"><div class="stat-value">${completedVisits}</div><div class="stat-label">Completed Visits</div></div>
-            <div class="report-stat"><div class="stat-value">${trainings.length}</div><div class="stat-label">Trainings</div></div>
-            <div class="report-stat"><div class="stat-value">${totalAttendees}</div><div class="stat-label">Teachers Trained</div></div>
-            <div class="report-stat"><div class="stat-value">${totalHours}h</div><div class="stat-label">Training Hours</div></div>
-            <div class="report-stat"><div class="stat-value">${observations.length}</div><div class="stat-label">Observations</div></div>
-        </div>
-
-        ${Object.keys(subjectCount).length > 0 ? `<h3>Observations by Subject</h3>
-        <table class="report-table">
-            <thead><tr><th>Subject</th><th>Observations</th></tr></thead>
-            <tbody>${Object.entries(subjectCount).sort((a, b) => b[1] - a[1]).map(([sub, cnt]) =>
-        `<tr><td>${escapeHtml(sub)}</td><td>${cnt}</td></tr>`
-    ).join('')}</tbody>
-        </table>` : ''}
+        ${_reportStatsHTML([
+            { value: schoolSet.size, label: 'Schools Covered' },
+            { value: clusterSet.size, label: 'Clusters' },
+            { value: blockSet.size, label: 'Blocks' },
+            { value: visits.length, label: 'Total Visits' },
+            { value: completedVisits, label: 'Completed Visits' },
+            { value: observations.length, label: 'Observations' },
+            { value: teacherSet.size, label: 'Teachers Observed' },
+            { value: trainings.length, label: 'Trainings' },
+            { value: completedTrainings, label: 'Completed Trainings' },
+            { value: totalAttendees, label: 'Teachers Trained' },
+            { value: totalHours + 'h', label: 'Training Hours' },
+            { value: meetings.length, label: 'Meetings' },
+            { value: followups.length, label: 'Follow-ups' },
+            { value: teacherRecords.length, label: 'Teacher Records' }
+        ])}
 
         ${ratedObs.length > 0 ? `<h3>Average Classroom Ratings</h3>
-        <div class="report-stats-grid">
-            <div class="report-stat"><div class="stat-value">${avgEngagement}/5</div><div class="stat-label">Engagement</div></div>
-            <div class="report-stat"><div class="stat-value">${avgMethodology}/5</div><div class="stat-label">Methodology</div></div>
-            <div class="report-stat"><div class="stat-value">${avgTLM}/5</div><div class="stat-label">TLM Usage</div></div>
+        ${_reportStatsHTML([
+            { value: avgEngagement + '/5', label: 'Engagement' },
+            { value: avgMethodology + '/5', label: 'Methodology' },
+            { value: avgTLM + '/5', label: 'TLM Usage' }
+        ])}` : ''}
+
+        ${Object.keys(purposeCount).length > 0 ? `<h3>School Visits by Purpose</h3>
+        <div class="report-bar-chart">
+            ${Object.entries(purposeCount).sort((a, b) => b[1] - a[1]).map(([p, cnt]) => {
+                const pct = (cnt / visits.length * 100).toFixed(0);
+                return `<div class="report-bar-row"><span class="report-bar-label">${escapeHtml(p)}</span><div class="report-bar-track"><div class="report-bar-fill" style="width:${pct}%"><span>${cnt} (${pct}%)</span></div></div></div>`;
+            }).join('')}
         </div>` : ''}
+
+        ${Object.keys(targetCount).length > 0 ? `<h3>Training by Target Group</h3>
+        <div class="report-bar-chart">
+            ${Object.entries(targetCount).sort((a, b) => b[1] - a[1]).map(([tgt, cnt]) => {
+                const pct = (cnt / trainings.length * 100).toFixed(0);
+                return `<div class="report-bar-row"><span class="report-bar-label">${escapeHtml(tgt)}</span><div class="report-bar-track"><div class="report-bar-fill report-bar-fill--training" style="width:${pct}%"><span>${cnt} (${pct}%)</span></div></div></div>`;
+            }).join('')}
+        </div>` : ''}
+
+        ${Object.keys(subjectCount).length > 0 ? `<h3>Observations by Subject</h3>
+        ${_reportTableHTML(['Subject', 'Observations'],
+            Object.entries(subjectCount).sort((a, b) => b[1] - a[1]).map(([sub, cnt]) => [escapeHtml(sub), cnt])
+        )}` : ''}
+
+        ${Object.keys(engDist).length > 0 ? `<h3>Student Engagement Distribution</h3>
+        <div class="report-bar-chart">
+            ${Object.entries(engDist).sort((a, b) => b[1] - a[1]).map(([level, cnt]) => {
+                const pct = (cnt / observations.length * 100).toFixed(0);
+                const color = level === 'More Engaged' ? '#10b981' : level === 'Engaged' ? '#3b82f6' : level === 'Less Engaged' ? '#f59e0b' : '#ef4444';
+                return `<div class="report-bar-row"><span class="report-bar-label">${escapeHtml(level)}</span><div class="report-bar-track"><div class="report-bar-fill" style="width:${pct}%;background:${color}"><span>${cnt} (${pct}%)</span></div></div></div>`;
+            }).join('')}
+        </div>` : ''}
+
+        ${Object.keys(monthlyTrend).length > 1 ? `<h3>Monthly Activity Trend</h3>
+        ${_reportTableHTML(['Month', 'Visits', 'Observations', 'Trainings', 'Total'],
+            Object.entries(monthlyTrend).sort((a, b) => a[1].sortKey - b[1].sortKey).map(([m, d]) => [
+                m, d.visits, d.observations, d.trainings, d.visits + d.observations + d.trainings
+            ])
+        )}` : ''}
     </div>`;
+}
+
+// ===== EXPORT REPORT TO EXCEL =====
+function exportReportExcel() {
+    if (typeof XLSX === 'undefined') {
+        showToast('XLSX library not loaded', 'error');
+        return;
+    }
+    const output = document.getElementById('reportOutput');
+    const tables = output.querySelectorAll('.report-table');
+    if (tables.length === 0) {
+        showToast('Generate a report first', 'error');
+        return;
+    }
+    const wb = XLSX.utils.book_new();
+    tables.forEach((table, i) => {
+        const ws = XLSX.utils.table_to_sheet(table);
+        const heading = table.previousElementSibling;
+        const name = heading && heading.tagName === 'H3' ? heading.textContent.trim().substring(0, 31) : ('Sheet' + (i + 1));
+        XLSX.utils.book_append_sheet(wb, ws, name);
+    });
+    XLSX.writeFile(wb, `APF_Report_${currentReportType}_${new Date().toISOString().split('T')[0]}.xlsx`);
+    showToast('Report exported to Excel');
 }
 
 function printReport() {
@@ -7217,7 +8410,7 @@ function editNote(id) {
 }
 
 function deleteNote(id) {
-    if (!confirm('Delete this note?')) return;
+    if (!confirmAction('Delete this note?')) return;
     let notes = DB.get('notes');
     notes = notes.filter(n => n.id !== id);
     DB.set('notes', notes);
@@ -7239,7 +8432,7 @@ function renderNotes() {
         return;
     }
 
-    const pg = getPaginatedItems(notes, 'notes', 18);
+    const pg = getPaginatedItems(notes, 'notes', getPageSize(18));
 
     container.innerHTML = pg.items.map(n => {
         if (n.editing) {
@@ -8334,7 +9527,7 @@ function renderFollowups() {
         return;
     }
 
-    const pg = getPaginatedItems(followups, 'followups', 20);
+    const pg = getPaginatedItems(followups, 'followups', getPageSize(20));
 
     container.innerHTML = pg.items.map(f => {
         const d = new Date(f.date);
@@ -8464,7 +9657,7 @@ function saveIdea(e) {
 }
 
 function deleteIdea(id) {
-    if (!confirm('Delete this idea?')) return;
+    if (!confirmAction('Delete this idea?')) return;
     let ideas = DB.get('ideas');
     ideas = ideas.filter(i => i.id !== id);
     DB.set('ideas', ideas);
@@ -8645,7 +9838,7 @@ function renderIdeaBoard(ideas, container) {
 
 function renderIdeaGrid(ideas, container) {
     const sorted = [...ideas].sort((a, b) => new Date(b.updatedAt || b.createdAt) - new Date(a.updatedAt || a.createdAt));
-    const pg = getPaginatedItems(sorted, 'ideas', 18);
+    const pg = getPaginatedItems(sorted, 'ideas', getPageSize(18));
     container.innerHTML = `<div class="idea-grid">${pg.items.map(idea => {
         const statusLabels = { spark: '✨ Spark', exploring: '🔍 Exploring', 'in-progress': '🚀 In Progress', done: '✅ Done', archived: '📦 Archived' };
         // Wrap card with status badge overlay
@@ -8658,7 +9851,7 @@ function renderIdeaGrid(ideas, container) {
 
 function renderIdeaList(ideas, container) {
     const sorted = [...ideas].sort((a, b) => new Date(b.updatedAt || b.createdAt) - new Date(a.updatedAt || a.createdAt));
-    const pg = getPaginatedItems(sorted, 'ideas', 20);
+    const pg = getPaginatedItems(sorted, 'ideas', getPageSize(20));
     const statusLabels = { spark: '✨ Spark', exploring: '🔍 Exploring', 'in-progress': '🚀 In Progress', done: '✅ Done', archived: '📦 Archived' };
     container.innerHTML = `<div class="idea-list">${pg.items.map(idea => `
         <div class="idea-card" style="--card-accent: ${idea.color || '#f59e0b'}" onclick="openIdeaModal('${idea.id}')">
@@ -9277,7 +10470,7 @@ function renderSchoolProfiles() {
         return;
     }
 
-    const pg = getPaginatedItems(schools, 'schools', 18);
+    const pg = getPaginatedItems(schools, 'schools', getPageSize(18));
     const allStudentRecords = DB.get('schoolStudentRecords') || {};
 
     container.innerHTML = `<div class="school-cards-grid">${pg.items.map(school => {
@@ -9773,7 +10966,7 @@ function saveSchoolStudentRecords(encodedKey) {
 
 function clearSchoolStudentRecords(encodedKey) {
     const schoolKey = decodeURIComponent(encodedKey);
-    if (!confirm('Clear all student records for this school?')) return;
+    if (!confirmAction('Clear all student records for this school?')) return;
     const allRecords = DB.get('schoolStudentRecords') || {};
     delete allRecords[schoolKey];
     DB.set('schoolStudentRecords', allRecords);
@@ -9823,7 +11016,7 @@ function renderMeetings() {
 
     const typeColors = { 'BRC Meeting': '#6366f1', 'Cluster Meeting': '#10b981', 'District Meeting': '#f59e0b', 'SDMC Meeting': '#ec4899', 'Parent-Teacher Meeting': '#8b5cf6', 'Convergence Meeting': '#3b82f6', 'Review Meeting': '#ef4444', 'Other': '#64748b' };
 
-    const pg = getPaginatedItems(filtered, 'meetings', 10);
+    const pg = getPaginatedItems(filtered, 'meetings', getPageSize(10));
 
     container.innerHTML = pg.items.map(m => {
         const color = typeColors[m.type] || '#64748b';
@@ -9960,7 +11153,7 @@ function saveMeeting(e) {
 }
 
 function deleteMeeting(id) {
-    if (!confirm('Delete this meeting?')) return;
+    if (!confirmAction('Delete this meeting?')) return;
     let meetings = DB.get('meetings');
     meetings = meetings.filter(m => m.id !== id);
     DB.set('meetings', meetings);
@@ -10213,7 +11406,7 @@ function saveReflection(e) {
 }
 
 function deleteReflection(id) {
-    if (!confirm('Delete this reflection?')) return;
+    if (!confirmAction('Delete this reflection?')) return;
     let reflections = DB.get('reflections');
     reflections = reflections.filter(r => r.id !== id);
     DB.set('reflections', reflections);
@@ -10240,7 +11433,7 @@ function renderReflections() {
 
     const moodEmojis = { great: '😊', good: '🙂', okay: '😐', challenging: '😟', difficult: '😔' };
 
-    const pg = getPaginatedItems(reflections, 'reflections', 12);
+    const pg = getPaginatedItems(reflections, 'reflections', getPageSize(12));
 
     container.innerHTML = `<div class="reflections-grid">${pg.items.map(r => {
         const monthLabel = r.month ? new Date(r.month + '-01').toLocaleDateString('en-IN', { month: 'long', year: 'numeric' }) : 'Unknown';
@@ -10333,7 +11526,7 @@ function saveContact(e) {
 }
 
 function deleteContact(id) {
-    if (!confirm('Delete this contact?')) return;
+    if (!confirmAction('Delete this contact?')) return;
     let contacts = DB.get('contacts');
     contacts = contacts.filter(c => c.id !== id);
     DB.set('contacts', contacts);
@@ -10680,7 +11873,7 @@ function renderContacts() {
 
     const avatarColors = ['#f59e0b', '#10b981', '#3b82f6', '#8b5cf6', '#ef4444', '#ec4899', '#06b6d4', '#f97316'];
 
-    const pg = getPaginatedItems(contacts, 'contacts', 18);
+    const pg = getPaginatedItems(contacts, 'contacts', getPageSize(18));
 
     container.innerHTML = `<div class="contacts-grid">${pg.items.map((c, i) => {
         const initials = c.name ? c.name.split(' ').map(w => w[0]).join('').substring(0, 2).toUpperCase() : '?';
@@ -10846,7 +12039,7 @@ function renderTeacherRecords() {
         return;
     }
 
-    const pg = getPaginatedItems(records, 'teacherrecords', 20);
+    const pg = getPaginatedItems(records, 'teacherrecords', getPageSize(20));
     const avatarColors = ['#f59e0b', '#10b981', '#3b82f6', '#8b5cf6', '#ef4444', '#ec4899', '#06b6d4', '#f97316'];
 
     const desigColors = {
@@ -10989,7 +12182,7 @@ function saveTeacherRecord(e) {
 }
 
 function deleteTeacherRecord(id) {
-    if (!confirm('Delete this teacher record?')) return;
+    if (!confirmAction('Delete this teacher record?')) return;
     let records = DB.get('teacherRecords') || [];
     records = records.filter(r => r.id !== id);
     DB.set('teacherRecords', records);
@@ -11708,7 +12901,7 @@ function renderMaraiTracking() {
     const isFiltered = searchTerm || stageFilter !== 'all' || schoolFilter !== 'all' || blockFilter !== 'all' || smartFilter !== 'none';
     const filterInfo = isFiltered ? `<div class="marai-filter-info"><i class="fas fa-filter"></i> Showing <strong>${teachers.length}</strong> of ${allTeachers.length} teachers${smartFilter !== 'none' ? ` — <em>${chipData.find(c => c.key === smartFilter)?.label || smartFilter}</em>` : ''} <button class="btn btn-sm btn-outline" onclick="resetMaraiFilters()"><i class="fas fa-undo"></i> Reset</button></div>` : '';
 
-    const pg = getPaginatedItems(teachers, 'marai', 15);
+    const pg = getPaginatedItems(teachers, 'marai', getPageSize(15));
 
     container.innerHTML = filterInfo + pg.items.map(t => {
         const sorted = [...t.records].sort((a, b) => (b.date || '').localeCompare(a.date || ''));
@@ -11853,7 +13046,7 @@ function updateMaraiStagePreview() {
 }
 
 function deleteMaraiRecord(id) {
-    if (!confirm('Delete this MARAI record?')) return;
+    if (!confirmAction('Delete this MARAI record?')) return;
     let records = DB.get('maraiTracking');
     records = records.filter(r => r.id !== id);
     DB.set('maraiTracking', records);
@@ -12101,7 +13294,7 @@ function renderSchoolWork() {
         return;
     }
 
-    const pg = getPaginatedItems(filtered, 'schoolWork', 15);
+    const pg = getPaginatedItems(filtered, 'schoolWork', getPageSize(15));
 
     container.innerHTML = pg.items.map(r => {
         const typeInfo = SCHOOL_WORK_TYPES.find(t => t.key === r.type) || SCHOOL_WORK_TYPES[5];
@@ -12270,7 +13463,7 @@ function saveSchoolWork(e) {
 }
 
 function deleteSchoolWork(id) {
-    if (!confirm('Delete this school work record?')) return;
+    if (!confirmAction('Delete this school work record?')) return;
     let records = DB.get('schoolWork');
     records = records.filter(r => r.id !== id);
     DB.set('schoolWork', records);
@@ -12900,7 +14093,7 @@ function saveVisitPlanEntry(event) {
 }
 
 function deleteVisitPlanEntry(id) {
-    if (!confirm('Delete this visit plan entry?')) return;
+    if (!confirmAction('Delete this visit plan entry?')) return;
     let entries = DB.get('visitPlanEntries') || [];
     entries = entries.filter(e => e.id !== id);
     DB.set('visitPlanEntries', entries);
@@ -13155,7 +14348,7 @@ function renderVisitPlan() {
     }
 
     // Pagination
-    const p = getPaginatedItems(filtered, 'visitplan', 25);
+    const p = getPaginatedItems(filtered, 'visitplan', getPageSize(25));
     const paged = p.items;
 
     // Group by date
@@ -13514,6 +14707,10 @@ function getDefaultSettings() {
         worklogAuto: true,
         saveToast: true,
         quickCapture: true,
+        confirmDeletes: true,
+        reduceMotion: false,
+        cardsPerPage: 'default',
+        hiddenSections: [],
         ssrClasses: { '1': true, '2': true, '3': true, '4': true, '5': true, '6': true, '7': true, '8': true }
     };
 }
@@ -13548,6 +14745,10 @@ function saveAppSettings() {
         worklogAuto: document.getElementById('settingWorklogAuto')?.checked ?? true,
         saveToast: document.getElementById('settingSaveToast')?.checked ?? true,
         quickCapture: document.getElementById('settingQuickCapture')?.checked ?? true,
+        confirmDeletes: document.getElementById('settingConfirmDeletes')?.checked ?? true,
+        reduceMotion: document.getElementById('settingReduceMotion')?.checked ?? false,
+        cardsPerPage: document.getElementById('settingCardsPerPage')?.value || 'default',
+        hiddenSections: getAppSettings().hiddenSections || [],
         ssrClasses: getAppSettings().ssrClasses || getDefaultSettings().ssrClasses
     };
 
@@ -13610,7 +14811,9 @@ function renderSettings() {
         settingVisitReminder: s.visitReminder,
         settingWorklogAuto: s.worklogAuto,
         settingSaveToast: s.saveToast,
-        settingQuickCapture: s.quickCapture
+        settingQuickCapture: s.quickCapture,
+        settingConfirmDeletes: s.confirmDeletes,
+        settingReduceMotion: s.reduceMotion
     };
     Object.entries(toggles).forEach(([id, val]) => {
         const el = document.getElementById(id);
@@ -13620,6 +14823,13 @@ function renderSettings() {
     // Start page
     const startPage = document.getElementById('settingStartPage');
     if (startPage) startPage.value = s.startPage;
+
+    // Cards per page
+    const cpp = document.getElementById('settingCardsPerPage');
+    if (cpp) cpp.value = s.cardsPerPage || 'default';
+
+    // Sidebar section visibility
+    renderSidebarSectionToggles();
 
     // SSR class toggles
     renderSSRClassToggles();
@@ -13812,6 +15022,93 @@ function applyAppSettings() {
     // Apply Quick Capture FAB visibility
     const fab = document.getElementById('quickCaptureFab');
     if (fab) fab.style.display = s.quickCapture === false ? 'none' : '';
+
+    // Apply reduce motion
+    document.body.classList.toggle('reduce-motion', s.reduceMotion === true);
+
+    // Apply hidden sidebar sections
+    applySidebarVisibility();
+}
+
+// ===== SIDEBAR SECTION VISIBILITY =====
+const SIDEBAR_SECTIONS = [
+    { key: 'visits', label: 'School Visits', icon: 'fa-school', core: false },
+    { key: 'training', label: 'Teacher Training', icon: 'fa-chalkboard-teacher', core: false },
+    { key: 'observations', label: 'Observations', icon: 'fa-clipboard-check', core: false },
+    { key: 'reports', label: 'Reports', icon: 'fa-chart-bar', core: false },
+    { key: 'resources', label: 'Resource Library', icon: 'fa-book-open', core: false },
+    { key: 'excel', label: 'Excel Analytics', icon: 'fa-file-excel', core: false },
+    { key: 'notes', label: 'Quick Notes', icon: 'fa-sticky-note', core: false },
+    { key: 'planner', label: 'Weekly Planner', icon: 'fa-calendar-week', core: false },
+    { key: 'goals', label: 'Goal Tracker', icon: 'fa-bullseye', core: false },
+    { key: 'analytics', label: 'Analytics', icon: 'fa-chart-pie', core: false },
+    { key: 'followups', label: 'Follow-ups', icon: 'fa-tasks', core: false },
+    { key: 'ideas', label: 'Idea Tracker', icon: 'fa-lightbulb', core: false },
+    { key: 'schools', label: 'School Profiles', icon: 'fa-map-marker-alt', core: false },
+    { key: 'teachers', label: 'Teacher Growth', icon: 'fa-user-graduate', core: false },
+    { key: 'marai', label: 'MARAI Tracking', icon: 'fa-route', core: false },
+    { key: 'schoolwork', label: 'School Work', icon: 'fa-chalkboard', core: false },
+    { key: 'visitplan', label: 'Visit Plan', icon: 'fa-clipboard-check', core: false },
+    { key: 'reflections', label: 'Reflections', icon: 'fa-journal-whills', core: false },
+    { key: 'growth', label: 'Growth Framework', icon: 'fa-seedling', core: false },
+    { key: 'teacherrecords', label: 'Teachers Record', icon: 'fa-id-card-alt', core: false },
+    { key: 'contacts', label: 'Contacts', icon: 'fa-address-book', core: false },
+    { key: 'meetings', label: 'Meetings', icon: 'fa-handshake', core: false },
+    { key: 'livesync', label: 'Live Sync', icon: 'fa-sync-alt', core: false },
+    { key: 'worklog', label: 'Work Log', icon: 'fa-clipboard-list', core: false }
+];
+
+function applySidebarVisibility() {
+    const hidden = getAppSettings().hiddenSections || [];
+    SIDEBAR_SECTIONS.forEach(sec => {
+        const navEl = document.getElementById('nav-' + sec.key);
+        if (navEl) navEl.style.display = hidden.includes(sec.key) ? 'none' : '';
+    });
+}
+
+function renderSidebarSectionToggles() {
+    const container = document.getElementById('sidebarSectionToggleGrid');
+    if (!container) return;
+    const hidden = getAppSettings().hiddenSections || [];
+    container.innerHTML = SIDEBAR_SECTIONS.map(sec => {
+        const visible = !hidden.includes(sec.key);
+        return `<label class="ssr-class-toggle-item ${visible ? 'active' : ''}" title="${sec.label}">
+            <input type="checkbox" ${visible ? 'checked' : ''} onchange="toggleSidebarSection('${sec.key}', this.checked)">
+            <span class="ssr-class-toggle-label"><i class="fas ${sec.icon}" style="margin-right:5px;opacity:0.7;"></i>${sec.label}</span>
+        </label>`;
+    }).join('');
+}
+
+function toggleSidebarSection(key, visible) {
+    const s = getAppSettings();
+    let hidden = s.hiddenSections || [];
+    if (visible) {
+        hidden = hidden.filter(k => k !== key);
+    } else {
+        if (!hidden.includes(key)) hidden.push(key);
+    }
+    s.hiddenSections = hidden;
+    try { localStorage.setItem(APP_SETTINGS_KEY, JSON.stringify(s)); } catch(e) {}
+    applySidebarVisibility();
+    renderSidebarSectionToggles();
+    showToast(`${SIDEBAR_SECTIONS.find(s => s.key === key)?.label || key} ${visible ? 'shown' : 'hidden'}`, 'success', 1200);
+}
+
+// ===== CONFIRM DELETES HELPER =====
+function confirmAction(message) {
+    const s = getAppSettings();
+    if (s.confirmDeletes === false) return true;
+    return confirm(message);
+}
+
+// ===== CARDS PER PAGE HELPER =====
+function getPageSize(defaultSize) {
+    const s = getAppSettings();
+    const mode = s.cardsPerPage || 'default';
+    if (mode === 'compact') return Math.max(8, Math.round(defaultSize * 0.6));
+    if (mode === 'comfortable') return Math.round(defaultSize * 1.5);
+    if (mode === 'all') return 99999;
+    return defaultSize;
 }
 
 function exportSettingsJSON() {
@@ -14128,7 +15425,7 @@ async function sendFeedbackToTelegram(entry) {
 }
 
 function deleteFeedback(id) {
-    if (!confirm('Delete this report?')) return;
+    if (!confirmAction('Delete this report?')) return;
     let reports = DB.get('feedbackReports') || [];
     reports = reports.filter(r => r.id !== id);
     DB.set('feedbackReports', reports);
@@ -14711,7 +16008,7 @@ function saveGrowthAssessment() {
 }
 
 function deleteGrowthAssessment(id) {
-    if (!confirm('Delete this assessment? This cannot be undone.')) return;
+    if (!confirmAction('Delete this assessment? This cannot be undone.')) return;
     let assessments = getGrowthAssessments();
     assessments = assessments.filter(a => a.id !== id);
     DB.set('growthAssessments', assessments);
@@ -15134,7 +16431,7 @@ function saveGrowthAction() {
 }
 
 function deleteGrowthAction(id) {
-    if (!confirm('Delete this action plan?')) return;
+    if (!confirmAction('Delete this action plan?')) return;
     let actions = getGrowthActions();
     actions = actions.filter(a => a.id !== id);
     DB.set('growthActionPlans', actions);
@@ -15730,7 +17027,7 @@ function saveWorkLogEntry(e) {
 }
 
 function deleteWorkLogEntry(id) {
-    if (!confirm('Delete this work log entry?')) return;
+    if (!confirmAction('Delete this work log entry?')) return;
     let worklog = DB.get('worklog');
     worklog = worklog.filter(w => w.id !== id);
     DB.set('worklog', worklog);
@@ -16431,15 +17728,32 @@ function initApp() {
     // Star ratings
     initStarRatings();
 
-    // Report year selector
+    // Report year selector — include years from actual data
     const yearSelect = document.getElementById('reportYearFilter');
     const currentYear = new Date().getFullYear();
-    for (let y = currentYear; y >= currentYear - 5; y--) {
+    const dataYears = new Set();
+    [DB.get('visits'), DB.get('observations'), DB.get('trainings')].forEach(arr => {
+        (arr || []).forEach(item => {
+            if (item.date) {
+                const y = new Date(item.date).getFullYear();
+                if (y > 2000 && y <= currentYear + 1) dataYears.add(y);
+            }
+        });
+    });
+    for (let y = currentYear; y >= currentYear - 5; y--) dataYears.add(y);
+    const sortedYears = [...dataYears].sort((a, b) => b - a);
+    // Add All Years option
+    const allOpt = document.createElement('option');
+    allOpt.value = 'all';
+    allOpt.textContent = 'All Years';
+    yearSelect.appendChild(allOpt);
+    sortedYears.forEach(y => {
         const opt = document.createElement('option');
         opt.value = y;
         opt.textContent = y;
         yearSelect.appendChild(opt);
-    }
+    });
+    yearSelect.value = currentYear;
     // Set current month
     document.getElementById('reportMonthFilter').value = new Date().getMonth();
 

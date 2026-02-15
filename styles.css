@@ -4781,6 +4781,206 @@ body.light-mode .obs-form-section-label {
     background: rgba(255, 255, 255, 0.02);
 }
 
+/* Report Bar Charts */
+.report-bar-chart {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin-bottom: 24px;
+}
+
+.report-bar-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.report-bar-label {
+    min-width: 140px;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text-secondary);
+    text-align: right;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.report-bar-track {
+    flex: 1;
+    background: var(--bg-secondary);
+    border-radius: 6px;
+    height: 28px;
+    overflow: hidden;
+}
+
+.report-bar-fill {
+    height: 100%;
+    background: var(--accent);
+    border-radius: 6px;
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    padding: 0 10px;
+    min-width: fit-content;
+    transition: width 0.5s ease;
+}
+
+.report-bar-fill span {
+    font-size: 11px;
+    font-weight: 600;
+    color: #fff;
+    white-space: nowrap;
+}
+
+.report-bar-fill--quality {
+    background: linear-gradient(90deg, #ef4444, #f59e0b, #10b981);
+}
+
+.report-bar-fill--practice {
+    background: #8b5cf6;
+}
+
+.report-bar-fill--training {
+    background: #3b82f6;
+}
+
+/* Health Report */
+.report-health-overview {
+    display: flex;
+    gap: 32px;
+    align-items: center;
+    margin-bottom: 32px;
+    padding: 24px;
+    background: var(--bg-secondary);
+    border-radius: var(--radius-lg);
+    flex-wrap: wrap;
+}
+
+.report-health-score {
+    text-align: center;
+    flex-shrink: 0;
+}
+
+.health-circle {
+    position: relative;
+    width: 120px;
+    height: 120px;
+    margin: 0 auto 8px;
+}
+
+.health-circle svg {
+    width: 100%;
+    height: 100%;
+    transform: rotate(0deg);
+}
+
+.health-circle-text {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+}
+
+.health-circle-text .health-value {
+    font-size: 24px;
+    font-weight: 800;
+    color: var(--text-primary);
+}
+
+.health-circle-text .health-label {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--text-muted);
+}
+
+.health-title {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text-secondary);
+}
+
+.report-health-metrics {
+    flex: 1;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: 16px;
+}
+
+.health-metric {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 12px;
+    background: var(--bg-card);
+    border-radius: var(--radius);
+    border: 1px solid var(--border);
+}
+
+.health-metric i {
+    font-size: 20px;
+    width: 24px;
+    text-align: center;
+}
+
+.health-metric div {
+    display: flex;
+    flex-direction: column;
+}
+
+.health-metric strong {
+    font-size: 16px;
+    font-weight: 700;
+    color: var(--text-primary);
+}
+
+.health-metric span {
+    font-size: 11px;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+}
+
+/* Report type selector responsive */
+@media (max-width: 768px) {
+    .report-type-selector {
+        flex-wrap: wrap;
+    }
+    .report-type-btn {
+        font-size: 11px;
+        padding: 8px 12px;
+    }
+    .report-bar-label {
+        min-width: 90px;
+        font-size: 11px;
+    }
+    .report-health-overview {
+        flex-direction: column;
+        gap: 16px;
+    }
+    .report-filters {
+        flex-wrap: wrap;
+    }
+}
+
+@media print {
+    .report-health-overview {
+        break-inside: avoid;
+    }
+    .report-bar-fill {
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
+    }
+    .health-circle svg circle {
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
+    }
+}
+
 /* ===== Modals ===== */
 body.modal-open {
     overflow: hidden !important;
@@ -11058,6 +11258,16 @@ body.modal-open {
     font-weight: 600;
     color: var(--text-primary);
     white-space: nowrap;
+}
+
+/* ===== Reduce Motion ===== */
+body.reduce-motion *,
+body.reduce-motion *::before,
+body.reduce-motion *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
 }
 
 @media (max-width: 600px) {
