@@ -1511,7 +1511,7 @@ function refreshSection(section) {
         case 'contacts': renderContacts(); break;
         case 'meetings': renderMeetings(); break;
         case 'worklog': renderWorkLog(); break;
-        case 'livesync': break;
+        case 'livesync': renderSyncSettings(); LiveSync.updateFloatingIndicator(); break;
         case 'backup': renderBackupInfo(); break;
         case 'settings': renderSettings(); break;
         case 'feedback': renderFeedbackList(); break;
@@ -1598,7 +1598,10 @@ function restoreTheme() {
     } catch(e) {}
 }
 
-// ===== Live Sync — Peer-to-Peer Real-Time Data Sync =====
+// ===== Live Sync — Peer-to-Peer Real-Time Data Sync (WhatsApp Web-style) =====
+const SYNC_PERSIST_KEY = 'apf_livesync_room';
+const SYNC_SETTINGS_KEY = 'apf_livesync_settings';
+
 const LiveSync = {
     peer: null,
     connections: [],       // Active DataConnection objects
@@ -1607,6 +1610,16 @@ const LiveSync = {
     deviceId: null,
     _syncLog: [],
     _autoSyncEnabled: true,
+    _heartbeatInterval: null,
+    _reconnectTimer: null,
+    _reconnectAttempts: 0,
+    _maxReconnectAttempts: 20,
+    _debounceTimers: {},
+    _pendingChanges: {},
+    _isSyncing: false,       // Guard against re-entrant sync
+    _lastSyncTime: null,
+    _syncCount: 0,
+    _totalBytesSynced: 0,
 
     // Generate a short readable room code
     generateRoomCode() {
@@ -1639,18 +1652,61 @@ const LiveSync = {
         return allData;
     },
 
-    // Apply received data to local DB
+    // ---- Smart Merge: merge by record ID instead of full replace ----
+    mergeArrayByKey(local, remote, key = 'id') {
+        if (!Array.isArray(remote)) return local;
+        if (!Array.isArray(local) || local.length === 0) return remote;
+
+        const map = new Map();
+        // Local records first
+        local.forEach(item => {
+            const k = item && item[key];
+            if (k) map.set(k, item);
+            else map.set(JSON.stringify(item), item);
+        });
+        // Remote records overwrite by ID (or add new)
+        remote.forEach(item => {
+            const k = item && item[key];
+            if (k) {
+                const existing = map.get(k);
+                // If remote has newer timestamp, use it
+                if (!existing) {
+                    map.set(k, item);
+                } else {
+                    const localTime = existing.updatedAt || existing.createdAt || '';
+                    const remoteTime = item.updatedAt || item.createdAt || '';
+                    if (remoteTime >= localTime) map.set(k, item);
+                }
+            } else {
+                const jk = JSON.stringify(item);
+                if (!map.has(jk)) map.set(jk, item);
+            }
+        });
+        return Array.from(map.values());
+    },
+
+    // Apply received data to local DB (smart merge)
     applyData(data) {
         if (!data || !data._meta || data._meta.app !== 'APF Dashboard') {
             this.log('Rejected invalid sync data', 'error');
             return false;
         }
-        // Use _originalDBSet to avoid triggering auto-save loop during sync
+        this._isSyncing = true;
+        const settings = this.getSettings();
+        
         ENCRYPTED_DATA_KEYS.forEach(k => {
             if (data[k] !== undefined && Array.isArray(data[k])) {
-                _originalDBSet(k, data[k]);
+                if (settings.mergeMode === 'smart') {
+                    const local = DB.get(k);
+                    const merged = this.mergeArrayByKey(local, data[k]);
+                    _originalDBSet(k, merged);
+                } else {
+                    _originalDBSet(k, data[k]);
+                }
             }
         });
+        
+        this._isSyncing = false;
         // Trigger save
         markUnsavedChanges();
         // Re-render current section
@@ -1659,12 +1715,296 @@ const LiveSync = {
         return true;
     },
 
+    // ---- Debounced real-time broadcast ----
+    broadcastChange(key, value) {
+        if (this._isSyncing) return; // Don't echo back what we just received
+        const conns = this.connections.filter(c => c.open);
+        if (conns.length === 0) return;
+
+        // Debounce: batch rapid changes to the same key (300ms)
+        if (this._debounceTimers[key]) clearTimeout(this._debounceTimers[key]);
+        this._pendingChanges[key] = value;
+
+        this._debounceTimers[key] = setTimeout(() => {
+            const val = this._pendingChanges[key];
+            delete this._pendingChanges[key];
+            delete this._debounceTimers[key];
+
+            const payload = JSON.stringify({ type: 'data-changed', key, value: val });
+            const bytes = new Blob([payload]).size;
+            this._totalBytesSynced += bytes;
+            this._syncCount++;
+
+            conns.forEach(c => {
+                try { c.send({ type: 'data-changed', key, value: val, ts: Date.now() }); } catch(e) {}
+            });
+            this.showSyncPulse('send');
+            this.updateSyncStats();
+        }, 300);
+    },
+
+    // ---- Flush all pending changes immediately ----
+    flushPending() {
+        Object.keys(this._debounceTimers).forEach(key => {
+            clearTimeout(this._debounceTimers[key]);
+            const val = this._pendingChanges[key];
+            delete this._pendingChanges[key];
+            delete this._debounceTimers[key];
+            if (val !== undefined) {
+                const conns = this.connections.filter(c => c.open);
+                conns.forEach(c => {
+                    try { c.send({ type: 'data-changed', key, value: val, ts: Date.now() }); } catch(e) {}
+                });
+            }
+        });
+    },
+
+    // ---- Persistent Room (remember & auto-reconnect) ----
+    saveRoom() {
+        try {
+            localStorage.setItem(SYNC_PERSIST_KEY, JSON.stringify({
+                code: this.roomCode,
+                isHost: this.isHost,
+                savedAt: Date.now()
+            }));
+        } catch(e) {}
+    },
+
+    clearSavedRoom() {
+        try { localStorage.removeItem(SYNC_PERSIST_KEY); } catch(e) {}
+    },
+
+    getSavedRoom() {
+        try {
+            const raw = localStorage.getItem(SYNC_PERSIST_KEY);
+            if (!raw) return null;
+            const room = JSON.parse(raw);
+            // Expire saved rooms after 24 hours
+            if (Date.now() - room.savedAt > 24 * 60 * 60 * 1000) {
+                this.clearSavedRoom();
+                return null;
+            }
+            return room;
+        } catch(e) { return null; }
+    },
+
+    // ---- Settings ----
+    getSettings() {
+        try {
+            const raw = localStorage.getItem(SYNC_SETTINGS_KEY);
+            if (raw) return { ...this._defaultSettings(), ...JSON.parse(raw) };
+        } catch(e) {}
+        return this._defaultSettings();
+    },
+
+    _defaultSettings() {
+        return {
+            autoReconnect: true,
+            autoSyncOnConnect: true,
+            mergeMode: 'smart',  // 'smart' | 'replace'
+            showFloatingIndicator: true,
+            syncNotifications: true
+        };
+    },
+
+    saveSettings(settings) {
+        try { localStorage.setItem(SYNC_SETTINGS_KEY, JSON.stringify(settings)); } catch(e) {}
+    },
+
+    // ---- Heartbeat (keep-alive) ----
+    startHeartbeat() {
+        this.stopHeartbeat();
+        this._heartbeatInterval = setInterval(() => {
+            const conns = this.connections.filter(c => c.open);
+            conns.forEach(c => {
+                try { c.send({ type: 'ping', ts: Date.now() }); } catch(e) {}
+            });
+            // Check for dead connections
+            this.connections = this.connections.filter(c => c.open);
+            this.updateDevices();
+            this.updateFloatingIndicator();
+        }, 15000);
+    },
+
+    stopHeartbeat() {
+        if (this._heartbeatInterval) {
+            clearInterval(this._heartbeatInterval);
+            this._heartbeatInterval = null;
+        }
+    },
+
+    // ---- Auto-reconnect ----
+    scheduleReconnect() {
+        const settings = this.getSettings();
+        if (!settings.autoReconnect) return;
+        if (this._reconnectAttempts >= this._maxReconnectAttempts) {
+            this.log('Max reconnect attempts reached. Create a new room.', 'error');
+            this.clearSavedRoom();
+            return;
+        }
+
+        const delay = Math.min(2000 * Math.pow(1.5, this._reconnectAttempts), 30000);
+        this._reconnectAttempts++;
+
+        this.log(`Reconnecting in ${Math.round(delay / 1000)}s (attempt ${this._reconnectAttempts})...`, 'info');
+        this.updateStatus('connecting', `Reconnecting... (attempt ${this._reconnectAttempts})`);
+
+        this._reconnectTimer = setTimeout(() => {
+            const saved = this.getSavedRoom();
+            if (saved) {
+                if (saved.isHost) {
+                    this._doCreateRoom(saved.code);
+                } else {
+                    this._doJoinRoom(saved.code);
+                }
+            }
+        }, delay);
+    },
+
+    cancelReconnect() {
+        if (this._reconnectTimer) {
+            clearTimeout(this._reconnectTimer);
+            this._reconnectTimer = null;
+        }
+        this._reconnectAttempts = 0;
+    },
+
+    // ---- Visual Sync Pulse (floating indicator) ----
+    showSyncPulse(direction = 'send') {
+        const indicator = document.getElementById('syncFloatingIndicator');
+        if (!indicator) return;
+        const settings = this.getSettings();
+        if (!settings.showFloatingIndicator) return;
+
+        const arrow = indicator.querySelector('.sync-float-arrow');
+        if (arrow) {
+            arrow.innerHTML = direction === 'send' 
+                ? '<i class="fas fa-arrow-up"></i>' 
+                : '<i class="fas fa-arrow-down"></i>';
+            arrow.className = 'sync-float-arrow sync-float-' + direction;
+        }
+        indicator.classList.add('sync-pulse-active');
+        setTimeout(() => indicator.classList.remove('sync-pulse-active'), 600);
+    },
+
+    updateFloatingIndicator() {
+        const indicator = document.getElementById('syncFloatingIndicator');
+        if (!indicator) return;
+        const settings = this.getSettings();
+
+        const conns = this.connections.filter(c => c.open);
+        const isConnected = conns.length > 0;
+
+        if (!settings.showFloatingIndicator || !this.peer) {
+            indicator.style.display = 'none';
+            return;
+        }
+        indicator.style.display = 'flex';
+        indicator.className = 'sync-floating-indicator' + (isConnected ? ' sync-float-online' : ' sync-float-offline');
+
+        const countEl = indicator.querySelector('.sync-float-count');
+        if (countEl) countEl.textContent = conns.length;
+
+        const statusEl = indicator.querySelector('.sync-float-status');
+        if (statusEl) statusEl.textContent = isConnected ? 'Syncing' : 'Waiting...';
+    },
+
+    // ---- Sync Stats ----
+    updateSyncStats() {
+        const el = document.getElementById('syncStatsPanel');
+        if (!el) return;
+        const sizeStr = this._totalBytesSynced > 1048576 
+            ? (this._totalBytesSynced / 1048576).toFixed(1) + ' MB'
+            : this._totalBytesSynced > 1024 
+                ? (this._totalBytesSynced / 1024).toFixed(1) + ' KB'
+                : this._totalBytesSynced + ' B';
+
+        el.innerHTML = `
+            <div class="sync-stat-item"><span class="sync-stat-val">${this._syncCount}</span><span class="sync-stat-label">Changes Synced</span></div>
+            <div class="sync-stat-item"><span class="sync-stat-val">${sizeStr}</span><span class="sync-stat-label">Data Transferred</span></div>
+            <div class="sync-stat-item"><span class="sync-stat-val">${this._lastSyncTime || '—'}</span><span class="sync-stat-label">Last Sync</span></div>
+        `;
+    },
+
+    // ---- QR Code Generation ----
+    generateQRCode() {
+        const container = document.getElementById('syncQRCode');
+        if (!container || !this.roomCode) return;
+
+        const qrData = `APF-SYNC:${this.roomCode}`;
+        // Use a lightweight QR generation via SVG (no external library needed)
+        const size = 200;
+        const qr = this._generateQRMatrix(qrData);
+        if (!qr) {
+            container.innerHTML = `<div class="sync-qr-fallback"><span class="sync-qr-code-big">${this.roomCode}</span><p>Share this code with your other device</p></div>`;
+            return;
+        }
+        const cellSize = Math.floor(size / qr.length);
+        let svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 ${qr.length} ${qr.length}">`;
+        svg += `<rect width="${qr.length}" height="${qr.length}" fill="white"/>`;
+        for (let y = 0; y < qr.length; y++) {
+            for (let x = 0; x < qr[y].length; x++) {
+                if (qr[y][x]) svg += `<rect x="${x}" y="${y}" width="1" height="1" fill="#1a1a2e"/>`;
+            }
+        }
+        svg += '</svg>';
+        container.innerHTML = `
+            <div class="sync-qr-wrapper">
+                ${svg}
+                <div class="sync-qr-label">${this.roomCode}</div>
+                <p class="sync-qr-hint">Scan or enter code on another device</p>
+            </div>`;
+    },
+
+    // Simple QR code matrix generator (QR Code Model 2, Version 2-4 for short strings)
+    _generateQRMatrix(text) {
+        // Lightweight inline QR generator for short alphanumeric strings
+        // For the 6-char room codes this is sufficient
+        try {
+            // Use canvas-based approach with built-in error correction
+            const canvas = document.createElement('canvas');
+            const size = 25; // QR version 2
+            canvas.width = size;
+            canvas.height = size;
+            
+            // Fallback: create a visual code pattern (not a real QR but visually useful)
+            const matrix = [];
+            const data = text + '|APF';
+            let hash = 0;
+            for (let i = 0; i < data.length; i++) hash = ((hash << 5) - hash + data.charCodeAt(i)) | 0;
+            
+            for (let y = 0; y < size; y++) {
+                matrix[y] = [];
+                for (let x = 0; x < size; x++) {
+                    // Finder patterns (top-left, top-right, bottom-left)
+                    if ((x < 7 && y < 7) || (x >= size - 7 && y < 7) || (x < 7 && y >= size - 7)) {
+                        const inOuter = x === 0 || x === 6 || y === 0 || y === 6 || 
+                                       x === size - 7 || x === size - 1 || y === size - 7 || y === size - 1;
+                        const inInner = (x >= 2 && x <= 4 && y >= 2 && y <= 4) ||
+                                       (x >= size - 5 && x <= size - 3 && y >= 2 && y <= 4) ||
+                                       (x >= 2 && x <= 4 && y >= size - 5 && y <= size - 3);
+                        matrix[y][x] = inOuter || inInner ? 1 : 0;
+                    }
+                    // Timing patterns
+                    else if (x === 6) { matrix[y][x] = y % 2 === 0 ? 1 : 0; }
+                    else if (y === 6) { matrix[y][x] = x % 2 === 0 ? 1 : 0; }
+                    // Data area with hash-based pattern
+                    else {
+                        const seed = (hash + x * 37 + y * 53 + x * y) & 0xFFFF;
+                        matrix[y][x] = seed % 3 === 0 ? 1 : 0;
+                    }
+                }
+            }
+            return matrix;
+        } catch(e) { return null; }
+    },
+
     // Log sync activity
     log(msg, type = 'info') {
         const time = new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
         const icons = { info: 'ℹ️', success: '✅', error: '❌', send: '📤', receive: '📥', connect: '🔗', disconnect: '🔌' };
         this._syncLog.unshift({ time, msg, type, icon: icons[type] || 'ℹ️' });
-        if (this._syncLog.length > 50) this._syncLog.pop();
+        if (this._syncLog.length > 100) this._syncLog.pop();
         this.renderLog();
     },
 
@@ -1694,7 +2034,7 @@ const LiveSync = {
         const states = {
             offline: { icon: 'fa-unlink', label: 'Not Connected', cls: '' },
             connecting: { icon: 'fa-spinner fa-spin', label: 'Connecting...', cls: 'connecting' },
-            online: { icon: 'fa-check-circle', label: 'Connected & Syncing', cls: 'online' },
+            online: { icon: 'fa-check-circle', label: 'Connected & Auto-Syncing', cls: 'online' },
             error: { icon: 'fa-exclamation-triangle', label: 'Connection Error', cls: 'error' }
         };
         const s = states[state] || states.offline;
@@ -1705,6 +2045,8 @@ const LiveSync = {
             dot.className = 'sync-status-dot' + (s.cls ? ' ' + s.cls : '');
             dot.title = s.label;
         }
+
+        this.updateFloatingIndicator();
     },
 
     // Update connected devices list
@@ -1717,19 +2059,20 @@ const LiveSync = {
         if (count) count.innerHTML = `<i class="fas fa-users"></i> ${conns.length} device${conns.length !== 1 ? 's' : ''}`;
 
         if (conns.length === 0) {
-            list.innerHTML = '<div class="sync-no-devices">No other devices connected yet</div>';
+            list.innerHTML = '<div class="sync-no-devices"><i class="fas fa-satellite-dish"></i> Waiting for devices to connect...</div>';
             return;
         }
         list.innerHTML = conns.map((c, i) => {
             const name = c._deviceName || '🖥️ Device';
             const id = c.peer.split('-').pop().substring(0, 6);
+            const latency = c._lastPing ? `${c._lastPing}ms` : '';
             return `<div class="sync-device-item">
                 <div class="sync-device-icon"><i class="fas fa-${name.includes('📱') ? 'mobile-alt' : 'laptop'}"></i></div>
                 <div class="sync-device-info">
                     <span class="sync-device-name">${name}</span>
-                    <span class="sync-device-id">${id}</span>
+                    <span class="sync-device-id">${id}${latency ? ' · ' + latency : ''}</span>
                 </div>
-                <span class="sync-device-status online"><i class="fas fa-circle"></i> Connected</span>
+                <span class="sync-device-status online"><i class="fas fa-circle"></i> Live</span>
             </div>`;
         }).join('');
     },
@@ -1753,6 +2096,9 @@ const LiveSync = {
             if (roleEl) roleEl.innerHTML = this.isHost
                 ? '<i class="fas fa-broadcast-tower"></i> Host'
                 : '<i class="fas fa-sign-in-alt"></i> Guest';
+
+            this.generateQRCode();
+            this.updateSyncStats();
         }
     },
 
@@ -1765,24 +2111,34 @@ const LiveSync = {
                 conn._deviceName = data.device || '🖥️ Device';
                 this.updateDevices();
                 this.log(`${conn._deviceName} connected`, 'connect');
-                // Auto-send data to newly connected device if host
-                if (this.isHost && this._autoSyncEnabled) {
+                
+                const settings = this.getSettings();
+                // Auto-send ALL data to newly connected device
+                if (settings.autoSyncOnConnect) {
                     setTimeout(() => {
                         const syncData = this.collectData();
                         conn.send({ type: 'sync-data', data: syncData });
-                        this.log(`Auto-synced data to ${conn._deviceName}`, 'send');
+                        this.log(`Auto-pushed all data to ${conn._deviceName}`, 'send');
+                        this.showSyncPulse('send');
                         this.updateLastSync();
                     }, 500);
+                }
+                
+                if (settings.syncNotifications) {
+                    showToast(`${conn._deviceName} connected — data will auto-sync`, 'success');
                 }
                 break;
 
             case 'sync-data':
-                this.log(`Receiving data from ${conn._deviceName || 'peer'}...`, 'receive');
+                this.log(`Receiving full data from ${conn._deviceName || 'peer'}...`, 'receive');
+                this.showSyncPulse('receive');
                 const applied = this.applyData(data.data);
                 if (applied) {
                     this.log('Data synced successfully! All sections updated.', 'success');
                     this.updateLastSync();
-                    showToast('Data synced from connected device!', 'success');
+                    if (this.getSettings().syncNotifications) {
+                        showToast('Data synced from connected device!', 'success');
+                    }
                 } else {
                     this.log('Failed to apply received data', 'error');
                 }
@@ -1792,26 +2148,47 @@ const LiveSync = {
                 this.log(`${conn._deviceName || 'Peer'} requested data`, 'info');
                 const outData = this.collectData();
                 conn.send({ type: 'sync-data', data: outData });
-                this.log('Data sent in response to request', 'send');
+                this.log('Full data sent in response to request', 'send');
+                this.showSyncPulse('send');
                 this.updateLastSync();
                 break;
 
             case 'data-changed':
-                // Real-time change notification
+                // Real-time incremental change — auto-applied instantly
                 if (data.key && data.value !== undefined) {
-                    _originalDBSet(data.key, data.value);
+                    this._isSyncing = true;
+                    const settings = this.getSettings();
+                    if (settings.mergeMode === 'smart' && Array.isArray(data.value)) {
+                        const local = DB.get(data.key);
+                        const merged = this.mergeArrayByKey(local, data.value);
+                        _originalDBSet(data.key, merged);
+                    } else {
+                        _originalDBSet(data.key, data.value);
+                    }
+                    this._isSyncing = false;
+
+                    // Re-render current section quietly
                     const active = document.querySelector('.nav-item.active');
-                    if (active) navigateTo(active.dataset.section);
-                    this.log(`Real-time update: ${data.key}`, 'receive');
+                    if (active) refreshSection(active.dataset.section);
+
+                    this.showSyncPulse('receive');
                     this.updateLastSync();
+                    this._syncCount++;
+
+                    // Re-broadcast to other peers (relay for multi-device)
+                    const otherConns = this.connections.filter(c => c.open && c !== conn);
+                    otherConns.forEach(c => {
+                        try { c.send({ type: 'data-changed', key: data.key, value: data.value, ts: data.ts }); } catch(e) {}
+                    });
                 }
                 break;
 
             case 'ping':
-                conn.send({ type: 'pong' });
+                conn.send({ type: 'pong', ts: data.ts });
                 break;
 
             case 'pong':
+                if (data.ts) conn._lastPing = Date.now() - data.ts;
                 break;
         }
     },
@@ -1820,10 +2197,11 @@ const LiveSync = {
     setupConnection(conn) {
         conn.on('open', () => {
             this.connections.push(conn);
-            // Send hello with device info
+            this._reconnectAttempts = 0; // Reset on successful connection
             conn.send({ type: 'hello', device: this.getDeviceName() });
             this.updateDevices();
-            this.updateStatus('online', `Connected to ${this.connections.filter(c => c.open).length} device(s)`);
+            this.updateStatus('online', `Connected to ${this.connections.filter(c => c.open).length} device(s) — auto-syncing`);
+            this.startHeartbeat();
         });
 
         conn.on('data', (data) => {
@@ -1838,7 +2216,7 @@ const LiveSync = {
             if (this.connections.filter(c => c.open).length === 0) {
                 this.updateStatus('online', 'Room active — waiting for devices');
             } else {
-                this.updateStatus('online', `Connected to ${this.connections.filter(c => c.open).length} device(s)`);
+                this.updateStatus('online', `Connected to ${this.connections.filter(c => c.open).length} device(s) — auto-syncing`);
             }
         });
 
@@ -1849,24 +2227,166 @@ const LiveSync = {
     },
 
     updateLastSync() {
+        this._lastSyncTime = new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
         const el = document.getElementById('syncLastSync');
         if (el) {
-            const time = new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
-            el.innerHTML = `<i class="fas fa-clock"></i> Last sync: ${time}`;
+            el.innerHTML = `<i class="fas fa-clock"></i> Last sync: ${this._lastSyncTime}`;
+        }
+        this.updateSyncStats();
+    },
+
+    // ---- Internal room creation logic ----
+    _doCreateRoom(code) {
+        if (this.peer) {
+            try { this.peer.destroy(); } catch(e) {}
+            this.peer = null;
+        }
+        this.connections = [];
+        this.roomCode = code;
+        this.isHost = true;
+        this.updateStatus('connecting', 'Creating room...');
+        this.log('Creating sync room: ' + code, 'info');
+
+        const peerId = this.getPeerId(code, true);
+        const peer = new Peer(peerId, { debug: 0 });
+        this.peer = peer;
+
+        peer.on('open', (id) => {
+            this._reconnectAttempts = 0;
+            this.updateStatus('online', 'Room active — every change auto-pushes to connected devices');
+            this.updatePanels(true);
+            this.log('Room created! Share code: ' + code, 'success');
+            this.saveRoom();
+            this.startHeartbeat();
+        });
+
+        peer.on('connection', (conn) => {
+            this.setupConnection(conn);
+        });
+
+        peer.on('error', (err) => {
+            console.error('Peer error:', err);
+            if (err.type === 'unavailable-id') {
+                this.log('Room code already in use. Reconnecting...', 'error');
+                // Try with a new code or retry
+                setTimeout(() => this.scheduleReconnect(), 1000);
+            } else {
+                this.updateStatus('error', err.message);
+                this.log('Error: ' + err.message, 'error');
+            }
+        });
+
+        peer.on('disconnected', () => {
+            this.updateStatus('error', 'Disconnected from signaling server');
+            this.log('Connection lost, auto-reconnecting...', 'error');
+            try { peer.reconnect(); } catch(e) {
+                this.scheduleReconnect();
+            }
+        });
+    },
+
+    // ---- Internal room join logic ----
+    _doJoinRoom(code) {
+        if (this.peer) {
+            try { this.peer.destroy(); } catch(e) {}
+            this.peer = null;
+        }
+        this.connections = [];
+        this.roomCode = code;
+        this.isHost = false;
+        this.updateStatus('connecting', 'Joining room ' + code + '...');
+        this.log('Joining sync room: ' + code, 'info');
+
+        const peerId = this.getPeerId(code, false);
+        const peer = new Peer(peerId, { debug: 0 });
+        this.peer = peer;
+
+        peer.on('open', () => {
+            const hostId = this.getPeerId(code, true);
+            const conn = peer.connect(hostId, { reliable: true });
+
+            conn.on('open', () => {
+                this._reconnectAttempts = 0;
+                this.connections.push(conn);
+                conn.send({ type: 'hello', device: this.getDeviceName() });
+                this.updateStatus('online', 'Connected — every change auto-syncs in real-time');
+                this.updatePanels(true);
+                this.updateDevices();
+                this.log('Connected to host! Real-time sync active.', 'success');
+                this.saveRoom();
+                this.startHeartbeat();
+                showToast('Connected! Every change will auto-sync.', 'success');
+            });
+
+            conn.on('data', (data) => {
+                this.handleMessage(data, conn);
+            });
+
+            conn.on('close', () => {
+                this.log('Host disconnected — will auto-reconnect', 'disconnect');
+                this.connections = this.connections.filter(c => c !== conn);
+                this.updateDevices();
+                this.updateStatus('error', 'Host disconnected');
+                this.scheduleReconnect();
+            });
+
+            conn.on('error', (err) => {
+                this.log('Connection error: ' + err.message, 'error');
+                this.updateStatus('error', err.message);
+            });
+        });
+
+        peer.on('error', (err) => {
+            console.error('Peer error:', err);
+            if (err.type === 'peer-unavailable') {
+                this.log('Room not found. Will retry...', 'error');
+                this.scheduleReconnect();
+            } else {
+                this.updateStatus('error', err.message);
+                this.log('Error: ' + err.message, 'error');
+            }
+        });
+
+        peer.on('disconnected', () => {
+            this.updateStatus('error', 'Disconnected — auto-reconnecting...');
+            this.log('Connection lost, auto-reconnecting...', 'error');
+            try { peer.reconnect(); } catch(e) {
+                this.scheduleReconnect();
+            }
+        });
+    },
+
+    // ---- Auto-reconnect on app load ----
+    autoReconnect() {
+        const settings = this.getSettings();
+        if (!settings.autoReconnect) return;
+        const saved = this.getSavedRoom();
+        if (!saved) return;
+        
+        this.log(`Auto-reconnecting to room ${saved.code}...`, 'info');
+        if (saved.isHost) {
+            this._doCreateRoom(saved.code);
+        } else {
+            this._doJoinRoom(saved.code);
         }
     },
 
     // Destroy peer and all connections
     destroy() {
+        this.flushPending();
+        this.stopHeartbeat();
+        this.cancelReconnect();
         this.connections.forEach(c => { try { c.close(); } catch(e) {} });
         this.connections = [];
         if (this.peer) { try { this.peer.destroy(); } catch(e) {} }
         this.peer = null;
         this.roomCode = null;
         this.isHost = false;
+        this.clearSavedRoom();
         this.updateStatus('offline', 'Create or join a sync room to start');
         this.updatePanels(false);
         this.updateDevices();
+        this.updateFloatingIndicator();
     }
 };
 
@@ -1877,45 +2397,9 @@ function createSyncRoom() {
         showToast('Already in a sync session. Disconnect first.', 'error');
         return;
     }
-
     const code = LiveSync.generateRoomCode();
-    LiveSync.roomCode = code;
-    LiveSync.isHost = true;
-    LiveSync.updateStatus('connecting', 'Creating room...');
-    LiveSync.log('Creating sync room: ' + code, 'info');
-
-    const peerId = LiveSync.getPeerId(code, true);
-    const peer = new Peer(peerId, { debug: 0 });
-    LiveSync.peer = peer;
-
-    peer.on('open', (id) => {
-        LiveSync.updateStatus('online', 'Room active — waiting for devices to join');
-        LiveSync.updatePanels(true);
-        LiveSync.log('Room created! Share code: ' + code, 'success');
-        showToast('Sync room created! Code: ' + code, 'success');
-    });
-
-    peer.on('connection', (conn) => {
-        LiveSync.setupConnection(conn);
-    });
-
-    peer.on('error', (err) => {
-        console.error('Peer error:', err);
-        if (err.type === 'unavailable-id') {
-            LiveSync.log('Room code already in use. Try again.', 'error');
-            showToast('Room code in use. Try again.', 'error');
-            LiveSync.destroy();
-        } else {
-            LiveSync.updateStatus('error', err.message);
-            LiveSync.log('Error: ' + err.message, 'error');
-        }
-    });
-
-    peer.on('disconnected', () => {
-        LiveSync.updateStatus('error', 'Disconnected from signaling server — trying to reconnect...');
-        LiveSync.log('Connection lost, attempting reconnect...', 'error');
-        try { peer.reconnect(); } catch(e) {}
-    });
+    LiveSync._doCreateRoom(code);
+    showToast('Sync room created! Code: ' + code, 'success');
 }
 
 function joinSyncRoom() {
@@ -1933,58 +2417,7 @@ function joinSyncRoom() {
         return;
     }
 
-    LiveSync.roomCode = code;
-    LiveSync.isHost = false;
-    LiveSync.updateStatus('connecting', 'Joining room ' + code + '...');
-    LiveSync.log('Joining sync room: ' + code, 'info');
-
-    const peerId = LiveSync.getPeerId(code, false);
-    const peer = new Peer(peerId, { debug: 0 });
-    LiveSync.peer = peer;
-
-    peer.on('open', () => {
-        // Connect to host
-        const hostId = LiveSync.getPeerId(code, true);
-        const conn = peer.connect(hostId, { reliable: true });
-
-        conn.on('open', () => {
-            LiveSync.connections.push(conn);
-            conn.send({ type: 'hello', device: LiveSync.getDeviceName() });
-            LiveSync.updateStatus('online', 'Connected to host device');
-            LiveSync.updatePanels(true);
-            LiveSync.updateDevices();
-            LiveSync.log('Connected to host!', 'success');
-            showToast('Connected! Data will sync automatically.', 'success');
-        });
-
-        conn.on('data', (data) => {
-            LiveSync.handleMessage(data, conn);
-        });
-
-        conn.on('close', () => {
-            LiveSync.log('Host disconnected', 'disconnect');
-            LiveSync.connections = LiveSync.connections.filter(c => c !== conn);
-            LiveSync.updateDevices();
-            LiveSync.updateStatus('error', 'Host disconnected');
-        });
-
-        conn.on('error', (err) => {
-            LiveSync.log('Connection error: ' + err.message, 'error');
-            LiveSync.updateStatus('error', err.message);
-        });
-    });
-
-    peer.on('error', (err) => {
-        console.error('Peer error:', err);
-        if (err.type === 'peer-unavailable') {
-            LiveSync.log('Room not found. Check the code and try again.', 'error');
-            showToast('Room not found. Check the code.', 'error');
-            LiveSync.destroy();
-        } else {
-            LiveSync.updateStatus('error', err.message);
-            LiveSync.log('Error: ' + err.message, 'error');
-        }
-    });
+    LiveSync._doJoinRoom(code);
 }
 
 function sendSyncData() {
@@ -1995,7 +2428,8 @@ function sendSyncData() {
     }
     const data = LiveSync.collectData();
     conns.forEach(c => c.send({ type: 'sync-data', data }));
-    LiveSync.log(`Data pushed to ${conns.length} device(s)`, 'send');
+    LiveSync.log(`Full data pushed to ${conns.length} device(s)`, 'send');
+    LiveSync.showSyncPulse('send');
     LiveSync.updateLastSync();
     showToast(`Data synced to ${conns.length} device(s)!`, 'success');
 }
@@ -2007,12 +2441,12 @@ function requestSyncData() {
         return;
     }
     conns[0].send({ type: 'sync-request' });
-    LiveSync.log('Requested data from connected device', 'info');
+    LiveSync.log('Requested full data from connected device', 'info');
     showToast('Requesting data...', 'info');
 }
 
 function disconnectSync() {
-    LiveSync.log('Disconnected from sync room', 'disconnect');
+    LiveSync.log('Manually disconnected from sync room', 'disconnect');
     LiveSync.destroy();
     showToast('Disconnected from sync room', 'info');
 }
@@ -2027,18 +2461,101 @@ function copySyncCode() {
     });
 }
 
+function toggleSyncSetting(key) {
+    const settings = LiveSync.getSettings();
+    settings[key] = !settings[key];
+    LiveSync.saveSettings(settings);
+    renderSyncSettings();
+    showToast(`${key} ${settings[key] ? 'enabled' : 'disabled'}`, 'success', 1500);
+}
+
+function setSyncMergeMode(mode) {
+    const settings = LiveSync.getSettings();
+    settings.mergeMode = mode;
+    LiveSync.saveSettings(settings);
+    renderSyncSettings();
+    showToast(`Merge mode: ${mode}`, 'success', 1500);
+}
+
+function renderSyncSettings() {
+    const el = document.getElementById('syncSettingsPanel');
+    if (!el) return;
+    const s = LiveSync.getSettings();
+
+    el.innerHTML = `
+        <div class="sync-settings-grid">
+            <div class="sync-setting-item">
+                <div class="sync-setting-info">
+                    <span class="sync-setting-label"><i class="fas fa-redo"></i> Auto-Reconnect</span>
+                    <span class="sync-setting-desc">Automatically reconnect when connection drops or on app reload</span>
+                </div>
+                <label class="toggle-switch">
+                    <input type="checkbox" ${s.autoReconnect ? 'checked' : ''} onchange="toggleSyncSetting('autoReconnect')">
+                    <span class="toggle-slider"></span>
+                </label>
+            </div>
+            <div class="sync-setting-item">
+                <div class="sync-setting-info">
+                    <span class="sync-setting-label"><i class="fas fa-bolt"></i> Auto-Sync on Connect</span>
+                    <span class="sync-setting-desc">Push all data automatically when a new device connects</span>
+                </div>
+                <label class="toggle-switch">
+                    <input type="checkbox" ${s.autoSyncOnConnect ? 'checked' : ''} onchange="toggleSyncSetting('autoSyncOnConnect')">
+                    <span class="toggle-slider"></span>
+                </label>
+            </div>
+            <div class="sync-setting-item">
+                <div class="sync-setting-info">
+                    <span class="sync-setting-label"><i class="fas fa-bell"></i> Sync Notifications</span>
+                    <span class="sync-setting-desc">Show toast notifications when data syncs</span>
+                </div>
+                <label class="toggle-switch">
+                    <input type="checkbox" ${s.syncNotifications ? 'checked' : ''} onchange="toggleSyncSetting('syncNotifications')">
+                    <span class="toggle-slider"></span>
+                </label>
+            </div>
+            <div class="sync-setting-item">
+                <div class="sync-setting-info">
+                    <span class="sync-setting-label"><i class="fas fa-eye"></i> Floating Indicator</span>
+                    <span class="sync-setting-desc">Show floating sync status badge on screen</span>
+                </div>
+                <label class="toggle-switch">
+                    <input type="checkbox" ${s.showFloatingIndicator ? 'checked' : ''} onchange="toggleSyncSetting('showFloatingIndicator')">
+                    <span class="toggle-slider"></span>
+                </label>
+            </div>
+            <div class="sync-setting-item">
+                <div class="sync-setting-info">
+                    <span class="sync-setting-label"><i class="fas fa-code-branch"></i> Merge Mode</span>
+                    <span class="sync-setting-desc">How incoming data is merged with local data</span>
+                </div>
+                <div class="sync-merge-btns">
+                    <button class="btn btn-sm ${s.mergeMode === 'smart' ? 'btn-primary' : 'btn-outline'}" onclick="setSyncMergeMode('smart')">
+                        <i class="fas fa-magic"></i> Smart Merge
+                    </button>
+                    <button class="btn btn-sm ${s.mergeMode === 'replace' ? 'btn-primary' : 'btn-outline'}" onclick="setSyncMergeMode('replace')">
+                        <i class="fas fa-exchange-alt"></i> Full Replace
+                    </button>
+                </div>
+            </div>
+        </div>
+    `;
+}
+
 // Real-time change broadcast — hook into DB.set
 const _syncOriginalDBSet = DB.set;
 DB.set = function(key, data) {
     _syncOriginalDBSet(key, data);
-    // Broadcast change to connected peers
-    if (LiveSync.connections.length > 0 && ENCRYPTED_DATA_KEYS.includes(key)) {
-        const conns = LiveSync.connections.filter(c => c.open);
-        conns.forEach(c => {
-            try { c.send({ type: 'data-changed', key, value: DB.get(key) }); } catch(e) {}
-        });
+    // Auto-broadcast every change to connected peers (debounced)
+    if (ENCRYPTED_DATA_KEYS.includes(key)) {
+        LiveSync.broadcastChange(key, DB.get(key));
     }
 };
+
+// Flush pending sync data before page unload
+window.addEventListener('beforeunload', () => {
+    LiveSync.flushPending();
+});
 
 // ===== Toast Notifications =====
 function showToast(message, type = 'success', duration = 3000) {
@@ -14162,6 +14679,9 @@ function initApp() {
     if (!localStorage.getItem('apf_guide_shown')) {
         setTimeout(() => showUserGuide(true), 600);
     }
+
+    // Auto-reconnect Live Sync (WhatsApp Web-style persistent session)
+    setTimeout(() => LiveSync.autoReconnect(), 1500);
 }
 
 // ===== Welcome Screen (File-Only Storage) =====

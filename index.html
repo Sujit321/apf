@@ -2087,7 +2087,7 @@
             <div class="section-header">
                 <div>
                     <h1><i class="fas fa-sync-alt"></i> Live Sync</h1>
-                    <p class="section-subtitle">Sync data across devices in real-time — like WhatsApp Web</p>
+                    <p class="section-subtitle">Sync data across devices in real-time — every change auto-pushes like WhatsApp Web</p>
                 </div>
             </div>
 
@@ -2107,7 +2107,7 @@
                         <i class="fas fa-broadcast-tower"></i>
                     </div>
                     <h3>Create Sync Room</h3>
-                    <p>Start a sync room on this device. Other devices can join using the room code.</p>
+                    <p>Start a room on this device. Every data change will auto-push to all connected devices instantly.</p>
                     <button class="btn btn-primary" onclick="createSyncRoom()" id="btnCreateRoom" style="background:#f59e0b;">
                         <i class="fas fa-plus-circle"></i> Create Room
                     </button>
@@ -2119,7 +2119,7 @@
                         <i class="fas fa-sign-in-alt"></i>
                     </div>
                     <h3>Join Sync Room</h3>
-                    <p>Enter the room code from another device to connect and sync.</p>
+                    <p>Enter the room code from another device to connect. Changes will sync automatically in both directions.</p>
                     <div class="sync-join-input">
                         <input type="text" id="syncJoinCode" placeholder="Enter room code" maxlength="20" autocomplete="off" spellcheck="false">
                         <button class="btn btn-primary" onclick="joinSyncRoom()" id="btnJoinRoom" style="background:#3b82f6;">
@@ -2131,17 +2131,32 @@
 
             <!-- Active Room Panel (shown when connected) -->
             <div class="sync-active-panel" id="syncActivePanel" style="display:none;">
-                <!-- Room Info -->
+                <!-- Room Info + QR Code -->
                 <div class="sync-room-info">
-                    <div class="sync-room-code-display">
-                        <span class="sync-room-label">Room Code</span>
-                        <span class="sync-room-code" id="syncRoomCodeDisplay">------</span>
-                        <button class="btn-icon-sm" onclick="copySyncCode()" title="Copy code"><i class="fas fa-copy"></i></button>
+                    <div class="sync-room-left">
+                        <div class="sync-room-code-display">
+                            <span class="sync-room-label">Room Code</span>
+                            <span class="sync-room-code" id="syncRoomCodeDisplay">------</span>
+                            <button class="btn-icon-sm" onclick="copySyncCode()" title="Copy code"><i class="fas fa-copy"></i></button>
+                        </div>
+                        <div class="sync-room-meta">
+                            <span id="syncRoomRole" class="sync-role-badge"><i class="fas fa-broadcast-tower"></i> Host</span>
+                            <span id="syncPeerCount" class="sync-peer-count"><i class="fas fa-users"></i> 0 devices</span>
+                            <span id="syncLastSync" class="sync-last-time"><i class="fas fa-clock"></i> —</span>
+                        </div>
+                        <div class="sync-auto-badge">
+                            <i class="fas fa-bolt"></i> Auto-sync active — every change pushes instantly
+                        </div>
                     </div>
-                    <div class="sync-room-meta">
-                        <span id="syncRoomRole" class="sync-role-badge"><i class="fas fa-broadcast-tower"></i> Host</span>
-                        <span id="syncPeerCount" class="sync-peer-count"><i class="fas fa-users"></i> 0 devices</span>
-                        <span id="syncLastSync" class="sync-last-time"><i class="fas fa-clock"></i> —</span>
+                    <div class="sync-room-qr" id="syncQRCode"></div>
+                </div>
+
+                <!-- Sync Stats -->
+                <div class="sync-stats-section">
+                    <div class="sync-stats-grid" id="syncStatsPanel">
+                        <div class="sync-stat-item"><span class="sync-stat-val">0</span><span class="sync-stat-label">Changes Synced</span></div>
+                        <div class="sync-stat-item"><span class="sync-stat-val">0 B</span><span class="sync-stat-label">Data Transferred</span></div>
+                        <div class="sync-stat-item"><span class="sync-stat-val">—</span><span class="sync-stat-label">Last Sync</span></div>
                     </div>
                 </div>
 
@@ -2149,17 +2164,17 @@
                 <div class="sync-devices-section">
                     <h4><i class="fas fa-laptop"></i> Connected Devices</h4>
                     <div id="syncDevicesList" class="sync-devices-list">
-                        <div class="sync-no-devices">No other devices connected yet</div>
+                        <div class="sync-no-devices"><i class="fas fa-satellite-dish"></i> Waiting for devices to connect...</div>
                     </div>
                 </div>
 
                 <!-- Sync Actions -->
                 <div class="sync-action-bar">
-                    <button class="btn btn-primary" onclick="sendSyncData()" id="btnSendSync">
-                        <i class="fas fa-upload"></i> Push Data to Devices
+                    <button class="btn btn-primary" onclick="sendSyncData()" id="btnSendSync" title="Manually push all data to connected devices">
+                        <i class="fas fa-upload"></i> Push All Data
                     </button>
-                    <button class="btn btn-outline" onclick="requestSyncData()" id="btnRequestSync">
-                        <i class="fas fa-download"></i> Pull Data from Host
+                    <button class="btn btn-outline" onclick="requestSyncData()" id="btnRequestSync" title="Pull all data from the connected device">
+                        <i class="fas fa-download"></i> Pull All Data
                     </button>
                     <button class="btn btn-danger" onclick="disconnectSync()" id="btnDisconnect">
                         <i class="fas fa-times-circle"></i> Disconnect
@@ -2173,6 +2188,12 @@
                         <div class="sync-log-empty">No activity yet</div>
                     </div>
                 </div>
+            </div>
+
+            <!-- Sync Settings -->
+            <div class="sync-settings-card">
+                <h4><i class="fas fa-cog"></i> Sync Settings</h4>
+                <div id="syncSettingsPanel"></div>
             </div>
 
             <!-- How it Works -->
@@ -2196,14 +2217,25 @@
                     <div class="sync-step">
                         <div class="sync-step-num">3</div>
                         <div class="sync-step-text">
-                            <strong>Data Syncs Instantly</strong>
-                            <span>Changes on any device are instantly pushed to all connected devices — no server, fully encrypted.</span>
+                            <strong>Every Change Auto-Syncs</strong>
+                            <span>Add a visit, edit a note, or save training — it auto-pushes to all connected devices in real-time. No manual sync needed!</span>
+                        </div>
+                    </div>
+                    <div class="sync-step">
+                        <div class="sync-step-num">4</div>
+                        <div class="sync-step-text">
+                            <strong>Auto-Reconnect</strong>
+                            <span>If you refresh the page or lose connection, it automatically reconnects using the saved room code — like WhatsApp Web.</span>
                         </div>
                     </div>
                 </div>
                 <div class="sync-info-note">
                     <i class="fas fa-shield-alt"></i>
-                    <span>Data travels directly between your devices (peer-to-peer). Nothing is stored on any server. All data is encrypted end-to-end.</span>
+                    <span>Data travels directly between your devices (peer-to-peer). Nothing is stored on any server. All data is encrypted in transit.</span>
+                </div>
+                <div class="sync-info-note" style="margin-top: 10px;">
+                    <i class="fas fa-magic"></i>
+                    <span><strong>Smart Merge:</strong> When both devices have changes, records are intelligently merged by ID — no data loss. Newer records take priority.</span>
                 </div>
             </div>
         </section>
@@ -2901,8 +2933,8 @@ function getOrCreateFolder() {
                 <div class="card-body" id="fbTableContainer" style="overflow-x:auto;"></div>
             </div>
 
-            <!-- Telegram Bot Config -->
-            <div class="tg-config-card" id="tgConfigCard">
+            <!-- Telegram Bot Config (auto-configured in background) -->
+            <div class="tg-config-card" id="tgConfigCard" style="display:none;">
                 <div class="tg-config-header" onclick="toggleTelegramConfig()">
                     <div class="tg-config-title">
                         <i class="fab fa-telegram-plane"></i>
@@ -3498,6 +3530,16 @@ function getOrCreateFolder() {
 
     <!-- Toast Notification -->
     <div class="toast-container" id="toastContainer"></div>
+
+    <!-- Floating Live Sync Indicator -->
+    <div class="sync-floating-indicator" id="syncFloatingIndicator" style="display:none;" onclick="navigateTo('livesync')" title="Live Sync active — click to view">
+        <div class="sync-float-icon"><i class="fas fa-sync-alt"></i></div>
+        <div class="sync-float-body">
+            <span class="sync-float-status">Offline</span>
+            <span class="sync-float-count-wrap"><span class="sync-float-count">0</span> <i class="fas fa-users"></i></span>
+        </div>
+        <div class="sync-float-arrow"></div>
+    </div>
 
     <!-- Reflection Modal -->
     <div class="modal-overlay" id="reflectionModal">
