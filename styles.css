@@ -11021,6 +11021,45 @@ body.modal-open {
     margin-bottom: 10px;
 }
 
+/* Settings — SSR Class Toggle Grid */
+.ssr-class-toggle-grid {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+.ssr-class-toggle-item {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    padding: 8px 14px;
+    background: var(--bg-tertiary);
+    border: 1.5px solid var(--border);
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    transition: all 0.2s ease;
+    user-select: none;
+}
+.ssr-class-toggle-item:hover {
+    border-color: var(--accent);
+    background: rgba(var(--amber-rgb), 0.06);
+}
+.ssr-class-toggle-item.active {
+    border-color: var(--accent);
+    background: rgba(var(--amber-rgb), 0.10);
+}
+.ssr-class-toggle-item input[type="checkbox"] {
+    accent-color: var(--accent);
+    width: 16px;
+    height: 16px;
+    cursor: pointer;
+}
+.ssr-class-toggle-label {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-primary);
+    white-space: nowrap;
+}
+
 @media (max-width: 600px) {
     .ssr-cell-input {
         width: 44px;

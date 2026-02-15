@@ -9464,6 +9464,44 @@ const STUDENT_LEVELS = [
 ];
 const SSR_CLASSES = ['1', '2', '3', '4', '5', '6', '7', '8'];
 
+function getActiveSSRClasses() {
+    const s = getAppSettings();
+    const cfg = s.ssrClasses || {};
+    return SSR_CLASSES.filter(c => cfg[c] !== false);
+}
+
+function renderSSRClassToggles() {
+    const container = document.getElementById('ssrClassToggleGrid');
+    if (!container) return;
+    const s = getAppSettings();
+    const cfg = s.ssrClasses || getDefaultSettings().ssrClasses;
+    container.innerHTML = SSR_CLASSES.map(cls => {
+        const checked = cfg[cls] !== false;
+        return `<label class="ssr-class-toggle-item ${checked ? 'active' : ''}" title="Class ${cls}">
+            <input type="checkbox" ${checked ? 'checked' : ''} onchange="toggleSSRClass('${cls}', this.checked)">
+            <span class="ssr-class-toggle-label">Class ${cls}</span>
+        </label>`;
+    }).join('');
+}
+
+function toggleSSRClass(cls, enabled) {
+    const s = getAppSettings();
+    const cfg = s.ssrClasses || { ...getDefaultSettings().ssrClasses };
+    cfg[cls] = enabled;
+    // Ensure at least one class remains enabled
+    const activeCount = Object.values(cfg).filter(v => v).length;
+    if (activeCount === 0) {
+        cfg[cls] = true;
+        showToast('At least one class must be enabled', 'error');
+        renderSSRClassToggles();
+        return;
+    }
+    s.ssrClasses = cfg;
+    try { localStorage.setItem(APP_SETTINGS_KEY, JSON.stringify(s)); } catch(e) {}
+    renderSSRClassToggles();
+    showToast(`Class ${cls} ${enabled ? 'shown' : 'hidden'}`, 'success', 1200);
+}
+
 // Compute totals from class-wise data (handles both old flat & new class-wise format)
 function _ssrTotals(sr) {
     if (!sr) return { lig: 0, fln: 0, pgl: 0, gl: 0, total: 0 };
@@ -9603,7 +9641,7 @@ function openStudentRecordEditor(encodedKey) {
     if (!ssrSection) return;
 
     // Build class-wise input table
-    const rows = SSR_CLASSES.map(cls => {
+    const rows = getActiveSSRClasses().map(cls => {
         const c = classes[cls] || {};
         return `<tr>
             <td><strong>Class ${cls}</strong></td>
@@ -9659,7 +9697,7 @@ function _ssrUpdatePreview() {
     STUDENT_LEVELS.forEach(l => { colTotals[l.key] = 0; });
     let grandTotal = 0;
 
-    SSR_CLASSES.forEach(cls => {
+    getActiveSSRClasses().forEach(cls => {
         let rowTotal = 0;
         STUDENT_LEVELS.forEach(l => {
             const val = parseInt(document.getElementById(`ssrC${cls}_${l.key}`)?.value) || 0;
@@ -9708,7 +9746,7 @@ function saveSchoolStudentRecords(encodedKey) {
 
     const classes = {};
     let grandTotal = 0;
-    SSR_CLASSES.forEach(cls => {
+    getActiveSSRClasses().forEach(cls => {
         const c = {};
         let rowTotal = 0;
         STUDENT_LEVELS.forEach(l => {
@@ -13474,7 +13512,9 @@ function getDefaultSettings() {
         followupReminder: true,
         visitReminder: true,
         worklogAuto: true,
-        saveToast: true
+        saveToast: true,
+        quickCapture: true,
+        ssrClasses: { '1': true, '2': true, '3': true, '4': true, '5': true, '6': true, '7': true, '8': true }
     };
 }
 
@@ -13506,7 +13546,9 @@ function saveAppSettings() {
         followupReminder: document.getElementById('settingFollowupReminder')?.checked ?? true,
         visitReminder: document.getElementById('settingVisitReminder')?.checked ?? true,
         worklogAuto: document.getElementById('settingWorklogAuto')?.checked ?? true,
-        saveToast: document.getElementById('settingSaveToast')?.checked ?? true
+        saveToast: document.getElementById('settingSaveToast')?.checked ?? true,
+        quickCapture: document.getElementById('settingQuickCapture')?.checked ?? true,
+        ssrClasses: getAppSettings().ssrClasses || getDefaultSettings().ssrClasses
     };
 
     try { localStorage.setItem(APP_SETTINGS_KEY, JSON.stringify(settings)); } catch (e) {}
@@ -13567,7 +13609,8 @@ function renderSettings() {
         settingFollowupReminder: s.followupReminder,
         settingVisitReminder: s.visitReminder,
         settingWorklogAuto: s.worklogAuto,
-        settingSaveToast: s.saveToast
+        settingSaveToast: s.saveToast,
+        settingQuickCapture: s.quickCapture
     };
     Object.entries(toggles).forEach(([id, val]) => {
         const el = document.getElementById(id);
@@ -13577,6 +13620,9 @@ function renderSettings() {
     // Start page
     const startPage = document.getElementById('settingStartPage');
     if (startPage) startPage.value = s.startPage;
+
+    // SSR class toggles
+    renderSSRClassToggles();
 
     // Data stats
     renderSettingsDataStats();
@@ -13762,6 +13808,10 @@ function applyAppSettings() {
 
     // Apply compact mode
     document.body.classList.toggle('compact-mode', s.compactMode);
+
+    // Apply Quick Capture FAB visibility
+    const fab = document.getElementById('quickCaptureFab');
+    if (fab) fab.style.display = s.quickCapture === false ? 'none' : '';
 }
 
 function exportSettingsJSON() {

@@ -2884,6 +2884,38 @@ function getOrCreateFolder() {
                                 </label>
                             </div>
                         </div>
+                        <div class="settings-row">
+                            <div class="settings-label">
+                                <i class="fas fa-bolt"></i>
+                                <div><strong>Quick Capture Button</strong><span>Show floating ➕ button for quick observations</span></div>
+                            </div>
+                            <div class="settings-control">
+                                <label class="settings-toggle">
+                                    <input type="checkbox" id="settingQuickCapture" checked onchange="saveAppSettings(); applyAppSettings();">
+                                    <span class="settings-toggle-slider"></span>
+                                </label>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Student Records — Class Configuration -->
+                <div class="settings-card">
+                    <div class="settings-card-header">
+                        <div class="settings-card-icon" style="background:linear-gradient(135deg,#f43f5e,#e11d48);"><i class="fas fa-user-graduate"></i></div>
+                        <div>
+                            <h3>Student Records</h3>
+                            <p>Choose which classes appear in student record editor</p>
+                        </div>
+                    </div>
+                    <div class="settings-card-body">
+                        <div class="settings-row" style="flex-direction:column;align-items:stretch;gap:10px;">
+                            <div class="settings-label" style="margin-bottom:4px;">
+                                <i class="fas fa-th-list"></i>
+                                <div><strong>Visible Classes</strong><span>Toggle classes to show/hide in student level editor</span></div>
+                            </div>
+                            <div class="ssr-class-toggle-grid" id="ssrClassToggleGrid"></div>
+                        </div>
                     </div>
                 </div>
 
