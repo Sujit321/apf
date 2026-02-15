@@ -18018,6 +18018,107 @@ body.light-mode .fb-type-tab:hover {
     .fb-title-cell { max-width: 120px; }
 }
 
+/* ===== TELEGRAM CONFIG CARD ===== */
+.tg-config-card {
+    margin-top: 20px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    overflow: hidden;
+}
+.tg-config-header {
+    padding: 16px 20px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    cursor: pointer;
+    transition: background 0.15s;
+}
+.tg-config-header:hover {
+    background: rgba(99,102,241,0.04);
+}
+.tg-config-title {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-weight: 700;
+    font-size: 0.9rem;
+    color: var(--text);
+}
+.tg-config-title .fab { color: #229ED9; font-size: 1.2rem; }
+.tg-status-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #6b7280;
+    display: inline-block;
+}
+.tg-config-chevron {
+    color: var(--text-secondary);
+    transition: transform 0.2s;
+}
+.tg-config-body {
+    padding: 0 20px 20px;
+}
+.tg-config-desc {
+    font-size: 0.82rem;
+    color: var(--text-secondary);
+    line-height: 1.5;
+    margin-bottom: 8px;
+}
+.tg-config-desc i { color: #229ED9; margin-right: 4px; }
+.tg-config-steps details {
+    background: rgba(34,158,217,0.06);
+    border: 1px solid rgba(34,158,217,0.15);
+    border-radius: 10px;
+    padding: 10px 14px;
+    font-size: 0.8rem;
+    color: var(--text-secondary);
+    line-height: 1.7;
+}
+.tg-config-steps summary {
+    cursor: pointer;
+    font-weight: 600;
+    color: var(--text);
+    font-size: 0.82rem;
+}
+.tg-config-steps summary i { color: #229ED9; margin-right: 4px; }
+.tg-config-steps ol {
+    margin: 8px 0 0 16px;
+    padding: 0;
+}
+.tg-config-steps code {
+    background: rgba(0,0,0,0.2);
+    padding: 1px 5px;
+    border-radius: 4px;
+    font-size: 0.78rem;
+}
+.tg-config-actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 14px;
+    flex-wrap: wrap;
+}
+.tg-test-result {
+    margin-top: 12px;
+    padding: 10px 14px;
+    border-radius: 10px;
+    font-size: 0.82rem;
+    font-weight: 600;
+}
+.tg-test-result i { margin-right: 6px; }
+.tg-test-loading { background: rgba(99,102,241,0.08); color: var(--text-secondary); }
+.tg-test-success { background: rgba(16,185,129,0.1); color: #10b981; }
+.tg-test-error { background: rgba(239,68,68,0.1); color: #ef4444; }
+
+body.light-mode .tg-config-card { background: #fff; }
+body.light-mode .tg-config-steps code { background: rgba(0,0,0,0.06); }
+
+@media (max-width: 768px) {
+    .tg-config-body { padding: 0 14px 14px; }
+    .tg-config-actions { flex-direction: column; }
+}
+
 /* ===== USER GUIDE MODAL ===== */
 .guide-modal {
     background: var(--bg-card);

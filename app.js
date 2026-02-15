@@ -11617,11 +11617,21 @@ function saveFeedback(event) {
     renderFeedbackList();
     showToast(id ? 'Report updated!' : 'Report saved!');
 
-    // Offer to email developer
+    // Offer to email/telegram developer
     if (!id) {
         setTimeout(() => {
-            if (confirm('Report saved! Would you like to email this to the developer?')) {
-                emailFeedback(entry);
+            const hasTg = isTelegramConfigured();
+            const msg = hasTg
+                ? 'Report saved! Send to developer via:\n\n1. Gmail\n2. Telegram\n3. Skip'
+                : 'Report saved! Would you like to email this to the developer?';
+            if (hasTg) {
+                const choice = prompt(msg, '2');
+                if (choice === '1') emailFeedback(entry);
+                else if (choice === '2') sendFeedbackToTelegram(entry);
+            } else {
+                if (confirm('Report saved! Would you like to email this to the developer?')) {
+                    emailFeedback(entry);
+                }
             }
         }, 300);
     }
@@ -11629,17 +11639,185 @@ function saveFeedback(event) {
 
 function emailFeedback(entry) {
     const typeLabel = entry.type === 'bug' ? 'Bug Report' : 'Feature Request';
+    const senderName = (getProfile().name) || 'Anonymous';
     const subject = encodeURIComponent(`[APF Dashboard] ${typeLabel}: ${entry.title}`);
     const body = encodeURIComponent(
+        `From: ${senderName}\n` +
         `Type: ${typeLabel}\n` +
         `Priority: ${entry.priority.toUpperCase()}\n` +
         `Section: ${entry.section || 'N/A'}\n` +
         `Date: ${new Date(entry.createdAt).toLocaleDateString('en-IN')}\n\n` +
         `Title: ${entry.title}\n\n` +
         `Description:\n${entry.description}\n\n` +
-        `---\nSent from APF Resource Person Dashboard`
+        `---\nSent by ${senderName} from APF Resource Person Dashboard`
     );
-    window.open(`https://mail.google.com/mail/?view=cm&to=ss179815@gmail.com&su=${subject}&body=${body}`, '_blank');
+    window.open(`https://mail.google.com/mail/?view=cm&to=${_tgDecode(_TG_EM)}&su=${subject}&body=${body}`, '_blank');
+}
+
+// ===== Telegram Bot Integration =====
+const TG_CONFIG_KEY = 'apf_telegram_config';
+const _TG_K = 'ApfDashboard2026TelegramSecure';
+const _TG_ET = 'eURVfVFLW1ZXU0glc3YFAzAmHyYCBgsEZi42NCg0JQA+MFgpAioLNiciUXUGbw==';
+const _TG_EC = 'cEBQc1RFWFBbVQ==';
+const _TG_EM = 'MgNXc1hLWVcvBh8FW1wcVTsI'; // encrypted email
+
+function _tgDecode(encoded) {
+    const str = atob(encoded);
+    let result = '';
+    for (let i = 0; i < str.length; i++) {
+        result += String.fromCharCode(str.charCodeAt(i) ^ _TG_K.charCodeAt(i % _TG_K.length));
+    }
+    return result;
+}
+
+// Auto-apply default config if none exists
+if (!localStorage.getItem(TG_CONFIG_KEY)) {
+    localStorage.setItem(TG_CONFIG_KEY, JSON.stringify({ token: _tgDecode(_TG_ET), chatId: _tgDecode(_TG_EC) }));
+}
+
+function getTelegramConfig() {
+    try {
+        const raw = localStorage.getItem(TG_CONFIG_KEY);
+        return raw ? JSON.parse(raw) : null;
+    } catch { return null; }
+}
+
+function isTelegramConfigured() {
+    const cfg = getTelegramConfig();
+    return !!(cfg && cfg.token && cfg.chatId);
+}
+
+function toggleTelegramConfig() {
+    const body = document.getElementById('tgConfigBody');
+    const chevron = document.getElementById('tgChevron');
+    const isOpen = body.style.display !== 'none';
+    body.style.display = isOpen ? 'none' : 'block';
+    chevron.style.transform = isOpen ? '' : 'rotate(180deg)';
+    if (!isOpen) {
+        // Load saved config into fields
+        const cfg = getTelegramConfig();
+        if (cfg) {
+            document.getElementById('tgBotToken').value = cfg.token || '';
+            document.getElementById('tgChatId').value = cfg.chatId || '';
+        }
+    }
+}
+
+function saveTelegramConfig() {
+    const token = document.getElementById('tgBotToken').value.trim();
+    const chatId = document.getElementById('tgChatId').value.trim();
+    if (!token || !chatId) {
+        showToast('Please enter both Bot Token and Chat ID', 'error');
+        return;
+    }
+    localStorage.setItem(TG_CONFIG_KEY, JSON.stringify({ token, chatId }));
+    updateTelegramStatusDot();
+    showToast('Telegram config saved! \u2705', 'success');
+}
+
+function clearTelegramConfig() {
+    if (!confirm('Remove Telegram bot configuration?')) return;
+    localStorage.removeItem(TG_CONFIG_KEY);
+    document.getElementById('tgBotToken').value = '';
+    document.getElementById('tgChatId').value = '';
+    document.getElementById('tgTestResult').style.display = 'none';
+    updateTelegramStatusDot();
+    showToast('Telegram config removed', 'info');
+}
+
+function updateTelegramStatusDot() {
+    const dot = document.getElementById('tgStatusDot');
+    if (!dot) return;
+    if (isTelegramConfigured()) {
+        dot.style.background = '#10b981';
+        dot.title = 'Connected';
+    } else {
+        dot.style.background = '#6b7280';
+        dot.title = 'Not configured';
+    }
+}
+
+async function testTelegramBot() {
+    const token = document.getElementById('tgBotToken').value.trim();
+    const chatId = document.getElementById('tgChatId').value.trim();
+    const resultEl = document.getElementById('tgTestResult');
+
+    if (!token || !chatId) {
+        showToast('Enter both Token and Chat ID first', 'error');
+        return;
+    }
+
+    resultEl.style.display = 'block';
+    resultEl.className = 'tg-test-result tg-test-loading';
+    resultEl.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Sending test message...';
+
+    try {
+        const url = `https://api.telegram.org/bot${token}/sendMessage`;
+        const resp = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                chat_id: chatId,
+                text: '\u2705 APF Dashboard connected!\n\nTelegram bot integration is working. Bug reports and feature requests will be sent here.',
+                parse_mode: 'HTML'
+            })
+        });
+        const data = await resp.json();
+        if (data.ok) {
+            resultEl.className = 'tg-test-result tg-test-success';
+            resultEl.innerHTML = '<i class="fas fa-check-circle"></i> Test message sent! Check your Telegram.';
+        } else {
+            resultEl.className = 'tg-test-result tg-test-error';
+            resultEl.innerHTML = `<i class="fas fa-times-circle"></i> Failed: ${escapeHtml(data.description || 'Unknown error')}`;
+        }
+    } catch (err) {
+        resultEl.className = 'tg-test-result tg-test-error';
+        resultEl.innerHTML = `<i class="fas fa-times-circle"></i> Network error: ${escapeHtml(err.message)}`;
+    }
+}
+
+async function sendFeedbackToTelegram(entry) {
+    const cfg = getTelegramConfig();
+    if (!cfg) {
+        showToast('Telegram not configured. Set up in Bug & Feedback section.', 'error');
+        return;
+    }
+
+    const typeEmoji = entry.type === 'bug' ? '\ud83d\udc1b' : '\ud83d\udca1';
+    const typeLabel = entry.type === 'bug' ? 'Bug Report' : 'Feature Request';
+    const prioEmoji = { critical: '\ud83d\udd34', high: '\ud83d\udfe0', medium: '\ud83d\udfe1', low: '\u26aa' }[entry.priority] || '';
+    const senderName = (getProfile().name) || 'Anonymous';
+
+    const text =
+        `${typeEmoji} <b>${typeLabel}</b>\n\n` +
+        `\ud83d\udc64 <b>From:</b> ${senderName}\n` +
+        `<b>Title:</b> ${entry.title}\n` +
+        `<b>Section:</b> ${entry.section || 'N/A'}\n` +
+        `<b>Priority:</b> ${prioEmoji} ${entry.priority.toUpperCase()}\n` +
+        `<b>Date:</b> ${new Date(entry.createdAt).toLocaleDateString('en-IN')}\n\n` +
+        `<b>Description:</b>\n${entry.description}\n\n` +
+        `\u2014 <i>Sent by ${senderName} via APF Dashboard</i>`;
+
+    try {
+        const url = `https://api.telegram.org/bot${cfg.token}/sendMessage`;
+        const resp = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                chat_id: cfg.chatId,
+                text: text,
+                parse_mode: 'HTML'
+            })
+        });
+        const data = await resp.json();
+        if (data.ok) {
+            showToast('Sent to Telegram! \u2705', 'success');
+        } else {
+            showToast('Telegram error: ' + (data.description || 'Unknown'), 'error');
+        }
+    } catch (err) {
+        showToast('Failed to send: ' + err.message, 'error');
+    }
 }
 
 function deleteFeedback(id) {
@@ -11681,6 +11859,7 @@ function renderFeedbackList() {
     if (!container) return;
 
     if (countEl) countEl.textContent = `${reports.length} report${reports.length !== 1 ? 's' : ''}`;
+    updateTelegramStatusDot();
 
     if (reports.length === 0) {
         container.innerHTML = '<div class="empty-state"><i class="fas fa-clipboard-check"></i><h3>No reports yet</h3><p>Submit a bug report or feature request above.</p></div>';
@@ -11717,6 +11896,7 @@ function renderFeedbackList() {
             <td class="fb-date">${date}</td>
             <td class="fb-actions">
                 <button class="btn btn-ghost btn-sm" onclick="emailFeedback(${JSON.stringify(r).replace(/"/g, '&quot;')})" title="Email Developer"><i class="fas fa-envelope"></i></button>
+                <button class="btn btn-ghost btn-sm" onclick="sendFeedbackToTelegram(${JSON.stringify(r).replace(/"/g, '&quot;')})" title="Send to Telegram" ${isTelegramConfigured() ? '' : 'disabled style="opacity:0.3"'}><i class="fab fa-telegram-plane"></i></button>
                 <button class="btn btn-ghost btn-sm" onclick="editFeedback('${r.id}')" title="Edit"><i class="fas fa-edit"></i></button>
                 <button class="btn btn-ghost btn-sm" onclick="deleteFeedback('${r.id}')" title="Delete" style="color:#ef4444"><i class="fas fa-trash"></i></button>
             </td>
