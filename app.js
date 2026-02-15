@@ -463,7 +463,7 @@ const SessionPersist = {
 // Unsaved changes tracking
 let hasUnsavedChanges = false;
 let lastEncSaveTime = null;
-const ENCRYPTED_DATA_KEYS = ['visits', 'trainings', 'observations', 'resources', 'notes', 'ideas', 'reflections', 'contacts', 'plannerTasks', 'goalTargets', 'followupStatus', 'worklog', 'userProfile', 'meetings', 'growthAssessments', 'growthActionPlans', 'maraiTracking', 'schoolWork', 'visitPlanEntries', 'visitPlanDropdowns', 'feedbackReports'];
+const ENCRYPTED_DATA_KEYS = ['visits', 'trainings', 'observations', 'resources', 'notes', 'ideas', 'reflections', 'contacts', 'plannerTasks', 'goalTargets', 'followupStatus', 'worklog', 'userProfile', 'meetings', 'growthAssessments', 'growthActionPlans', 'maraiTracking', 'schoolWork', 'visitPlanEntries', 'visitPlanDropdowns', 'feedbackReports', 'teacherRecords', 'schoolStudentRecords'];
 
 // ===== Google Drive Auto-Backup (via Google Apps Script) =====
 const GoogleDriveSync = {
@@ -1509,6 +1509,7 @@ function refreshSection(section) {
         case 'visitplan': renderVisitPlan(); break;
         case 'reflections': initReflectionMonthFilter(); renderReflections(); break;
         case 'contacts': renderContacts(); break;
+        case 'teacherrecords': renderTeacherRecords(); break;
         case 'meetings': renderMeetings(); break;
         case 'worklog': renderWorkLog(); break;
         case 'livesync': renderSyncSettings(); LiveSync.updateFloatingIndicator(); break;
@@ -3205,11 +3206,828 @@ function renderTrainings() {
                 <span class="training-detail"><i class="fas fa-user-tag"></i> ${escapeHtml(t.target || 'Primary Teachers')}</span>
             </div>
             <div class="training-card-actions">
+                <button class="btn btn-sm btn-outline" onclick="event.stopPropagation(); openTrainingAttendance('${t.id}')"><i class="fas fa-clipboard-list"></i> Attendance${(t.attendanceList && t.attendanceList.length) ? ` (${t.attendanceList.length})` : ''}</button>
                 <button class="btn btn-sm btn-outline" onclick="event.stopPropagation(); openTrainingModal('${t.id}')"><i class="fas fa-edit"></i> Edit</button>
                 <button class="btn btn-sm btn-danger" onclick="event.stopPropagation(); deleteTraining('${t.id}')"><i class="fas fa-trash"></i> Delete</button>
             </div>
         </div>`;
     }).join('') + renderPaginationControls('trainings', pg, 'renderTrainings');
+}
+
+// ===== TRAINING ATTENDANCE MANAGEMENT =====
+
+function openTrainingAttendance(trainingId) {
+    const trainings = DB.get('trainings');
+    const t = trainings.find(x => x.id === trainingId);
+    if (!t) { showToast('Training not found', 'error'); return; }
+
+    document.getElementById('attTrainingId').value = trainingId;
+    document.getElementById('attModalTitle').innerHTML = `<i class="fas fa-clipboard-list"></i> Attendance — ${escapeHtml(t.title)}`;
+    document.getElementById('attTrainingInfo').innerHTML = `
+        <div style="display:flex;flex-wrap:wrap;gap:12px;padding:10px 14px;background:var(--bg-tertiary);border-radius:var(--radius);font-size:13px;color:var(--text-secondary);">
+            <span><i class="fas fa-calendar"></i> ${new Date(t.date).toLocaleDateString('en-IN')}</span>
+            <span><i class="fas fa-clock"></i> ${t.duration}h</span>
+            ${t.venue ? `<span><i class="fas fa-map-marker-alt"></i> ${escapeHtml(t.venue)}</span>` : ''}
+            <span><i class="fas fa-user-tag"></i> ${escapeHtml(t.target || 'Teachers')}</span>
+            <span class="badge badge-${t.status}">${t.status}</span>
+        </div>`;
+
+    // Clear add form
+    ['attTeacherName', 'attTeacherSchool', 'attTeacherPhone', 'attTeacherCluster', 'attTeacherBlock'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.value = '';
+    });
+    document.getElementById('attTeacherDesignation').value = '';
+
+    // Populate datalists from teacher records
+    _attPopulateDataLists();
+
+    // Populate filter dropdowns for checkbox panel
+    _attPopulateRecordFilters();
+
+    // Render checkbox list of teacher records
+    _attRenderRecordCheckboxes();
+
+    // Default to records tab
+    switchAttTab('records');
+
+    // Render attendance list
+    _attRenderList(trainingId);
+
+    openModal('trainingAttendanceModal');
+}
+
+function switchAttTab(tab) {
+    ['records', 'manual', 'import'].forEach(t => {
+        const btn = document.getElementById('attTab' + t.charAt(0).toUpperCase() + t.slice(1));
+        const panel = document.getElementById('attPanel' + t.charAt(0).toUpperCase() + t.slice(1));
+        if (btn) btn.classList.toggle('active', t === tab);
+        if (panel) panel.style.display = t === tab ? '' : 'none';
+    });
+}
+
+function _attPopulateRecordFilters() {
+    const records = DB.get('teacherRecords') || [];
+    const schools = [...new Set(records.map(r => r.school).filter(Boolean))].sort();
+    const clusters = [...new Set(records.map(r => r.cluster).filter(Boolean))].sort();
+
+    const schoolSel = document.getElementById('attRecSchoolFilter');
+    const clusterSel = document.getElementById('attRecClusterFilter');
+
+    if (schoolSel) {
+        schoolSel.innerHTML = '<option value="all">🏫 All Schools</option>' +
+            schools.map(s => `<option value="${escapeHtml(s)}">${escapeHtml(s)}</option>`).join('');
+    }
+    if (clusterSel) {
+        clusterSel.innerHTML = '<option value="all">📍 All Clusters</option>' +
+            clusters.map(c => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join('');
+    }
+}
+
+function _attRenderRecordCheckboxes() {
+    const trainingId = document.getElementById('attTrainingId').value;
+    const records = DB.get('teacherRecords') || [];
+    const trainings = DB.get('trainings');
+    const t = trainings ? trainings.find(x => x.id === trainingId) : null;
+    const attendanceList = (t && t.attendanceList) || [];
+
+    // Build existing keys for pre-checking
+    const existingKeys = new Set(attendanceList.map(a => `${(a.name || '').toLowerCase()}|${(a.school || '').toLowerCase()}`));
+
+    // Apply filters
+    const search = (document.getElementById('attRecSearch')?.value || '').toLowerCase().trim();
+    const schoolFilter = document.getElementById('attRecSchoolFilter')?.value || 'all';
+    const clusterFilter = document.getElementById('attRecClusterFilter')?.value || 'all';
+
+    let filtered = records.filter(r => {
+        if (!r.name) return false;
+        if (schoolFilter !== 'all' && r.school !== schoolFilter) return false;
+        if (clusterFilter !== 'all' && r.cluster !== clusterFilter) return false;
+        if (search) {
+            const hay = `${r.name} ${r.school || ''} ${r.designation || ''} ${r.cluster || ''} ${r.block || ''}`.toLowerCase();
+            if (!hay.includes(search)) return false;
+        }
+        return true;
+    });
+
+    const listEl = document.getElementById('attRecList');
+    const countEl = document.getElementById('attRecSelectedCount');
+    const checkAllEl = document.getElementById('attCheckAll');
+
+    if (records.length === 0) {
+        listEl.innerHTML = `<div style="text-align:center;padding:32px;color:var(--text-muted);">
+            <i class="fas fa-users" style="font-size:2rem;margin-bottom:8px;display:block;"></i>
+            No teacher records found.<br>Add teachers in the <strong>Teacher Records</strong> section first.
+        </div>`;
+        if (countEl) countEl.textContent = '';
+        return;
+    }
+
+    if (filtered.length === 0) {
+        listEl.innerHTML = `<div style="text-align:center;padding:24px;color:var(--text-muted);">No teachers match the filter.</div>`;
+        if (countEl) countEl.textContent = '';
+        return;
+    }
+
+    let html = '';
+    let checkedCount = 0;
+    filtered.forEach((r, idx) => {
+        const key = `${(r.name || '').toLowerCase()}|${(r.school || '').toLowerCase()}`;
+        const isChecked = existingKeys.has(key);
+        if (isChecked) checkedCount++;
+        html += `<label class="att-rec-item${isChecked ? ' att-rec-checked' : ''}">
+            <input type="checkbox" value="${r.id}" ${isChecked ? 'checked' : ''} onchange="_attUpdateRecCount()">
+            <div class="att-rec-info">
+                <strong>${escapeHtml(r.name)}</strong>
+                <span>${escapeHtml(r.school || '—')} &middot; ${escapeHtml(r.designation || '—')}</span>
+            </div>
+            <div class="att-rec-meta">${escapeHtml(r.cluster || '')}${r.cluster && r.block ? ' / ' : ''}${escapeHtml(r.block || '')}</div>
+        </label>`;
+    });
+
+    listEl.innerHTML = html;
+    if (checkAllEl) checkAllEl.checked = checkedCount === filtered.length && filtered.length > 0;
+    _attUpdateRecCount();
+}
+
+function _attUpdateRecCount() {
+    const checkboxes = document.querySelectorAll('#attRecList input[type="checkbox"]');
+    const checked = document.querySelectorAll('#attRecList input[type="checkbox"]:checked');
+    const countEl = document.getElementById('attRecSelectedCount');
+    const checkAllEl = document.getElementById('attCheckAll');
+    if (countEl) countEl.textContent = `${checked.length} of ${checkboxes.length} selected`;
+    if (checkAllEl) checkAllEl.checked = checked.length === checkboxes.length && checkboxes.length > 0;
+
+    // Toggle visual highlight
+    checkboxes.forEach(cb => {
+        const label = cb.closest('.att-rec-item');
+        if (label) label.classList.toggle('att-rec-checked', cb.checked);
+    });
+}
+
+function attToggleAll(checked) {
+    const checkboxes = document.querySelectorAll('#attRecList input[type="checkbox"]');
+    checkboxes.forEach(cb => { cb.checked = checked; });
+    _attUpdateRecCount();
+}
+
+function attAddCheckedTeachers() {
+    const trainingId = document.getElementById('attTrainingId').value;
+    const records = DB.get('teacherRecords') || [];
+    const trainings = DB.get('trainings');
+    const t = trainings.find(x => x.id === trainingId);
+    if (!t) return;
+    if (!t.attendanceList) t.attendanceList = [];
+
+    const existingKeys = new Set(t.attendanceList.map(a => `${(a.name || '').toLowerCase()}|${(a.school || '').toLowerCase()}`));
+
+    const checkedIds = new Set();
+    document.querySelectorAll('#attRecList input[type="checkbox"]:checked').forEach(cb => checkedIds.add(cb.value));
+
+    const uncheckedIds = new Set();
+    document.querySelectorAll('#attRecList input[type="checkbox"]:not(:checked)').forEach(cb => uncheckedIds.add(cb.value));
+
+    let added = 0;
+    let removed = 0;
+
+    // Add checked teachers that aren't in attendance yet
+    checkedIds.forEach(id => {
+        const r = records.find(rec => rec.id === id);
+        if (!r) return;
+        const key = `${(r.name || '').toLowerCase()}|${(r.school || '').toLowerCase()}`;
+        if (existingKeys.has(key)) return;
+        t.attendanceList.push({
+            name: r.name,
+            school: r.school || '',
+            phone: r.phone || '',
+            designation: r.designation || '',
+            cluster: r.cluster || '',
+            block: r.block || '',
+            addedAt: new Date().toISOString()
+        });
+        existingKeys.add(key);
+        added++;
+    });
+
+    // Remove unchecked teachers that ARE in attendance (from teacher records only)
+    uncheckedIds.forEach(id => {
+        const r = records.find(rec => rec.id === id);
+        if (!r) return;
+        const key = `${(r.name || '').toLowerCase()}|${(r.school || '').toLowerCase()}`;
+        if (!existingKeys.has(key)) return;
+        const idx = t.attendanceList.findIndex(a => `${(a.name || '').toLowerCase()}|${(a.school || '').toLowerCase()}` === key);
+        if (idx !== -1) {
+            t.attendanceList.splice(idx, 1);
+            existingKeys.delete(key);
+            removed++;
+        }
+    });
+
+    t.attendees = t.attendanceList.length;
+    DB.set('trainings', trainings);
+    _attRenderList(trainingId);
+
+    let msg = [];
+    if (added > 0) msg.push(`${added} added`);
+    if (removed > 0) msg.push(`${removed} removed`);
+    if (msg.length === 0) msg.push('No changes');
+    showToast(`✅ Attendance updated: ${msg.join(', ')}`, 'success');
+}
+
+function _attPopulateDataLists() {
+    const records = DB.get('teacherRecords') || [];
+    const observations = DB.get('observations') || [];
+
+    // Merge teacher names/schools from records + observations
+    const names = [...new Set([
+        ...records.map(r => r.name).filter(Boolean),
+        ...observations.map(o => o.teacher).filter(Boolean)
+    ])].sort();
+    const schools = [...new Set([
+        ...records.map(r => r.school).filter(Boolean),
+        ...observations.map(o => o.school).filter(Boolean)
+    ])].sort();
+    const clusters = [...new Set([
+        ...records.map(r => r.cluster).filter(Boolean),
+        ...observations.map(o => o.cluster).filter(Boolean)
+    ])].sort();
+    const blocks = [...new Set([
+        ...records.map(r => r.block).filter(Boolean),
+        ...observations.map(o => o.block).filter(Boolean)
+    ])].sort();
+
+    const fill = (id, items) => {
+        const el = document.getElementById(id);
+        if (el) el.innerHTML = items.map(v => `<option value="${escapeHtml(v)}">`).join('');
+    };
+    fill('attTeacherSuggest', names);
+    fill('attSchoolSuggest', schools);
+    fill('attClusterSuggest', clusters);
+    fill('attBlockSuggest', blocks);
+
+    // Auto-fill fields when teacher name is selected from datalist
+    const nameInput = document.getElementById('attTeacherName');
+    if (nameInput && !nameInput._attListenerAdded) {
+        nameInput.addEventListener('change', function() {
+            const name = this.value.trim();
+            if (!name) return;
+            // Try to find matching teacher in records
+            const match = records.find(r => r.name === name);
+            if (match) {
+                document.getElementById('attTeacherSchool').value = match.school || '';
+                document.getElementById('attTeacherPhone').value = match.phone || '';
+                document.getElementById('attTeacherDesignation').value = match.designation || '';
+                document.getElementById('attTeacherCluster').value = match.cluster || '';
+                document.getElementById('attTeacherBlock').value = match.block || '';
+            }
+        });
+        nameInput._attListenerAdded = true;
+    }
+}
+
+function _attRenderList(trainingId) {
+    const trainings = DB.get('trainings');
+    const t = trainings.find(x => x.id === trainingId);
+    const list = (t && t.attendanceList) || [];
+
+    const tbody = document.getElementById('attTableBody');
+    const countEl = document.getElementById('attCount');
+    const summaryEl = document.getElementById('attSummary');
+
+    if (countEl) countEl.textContent = `${list.length} teacher(s) marked present`;
+
+    // Summary stats
+    if (summaryEl) {
+        if (list.length === 0) {
+            summaryEl.innerHTML = '';
+        } else {
+            const schoolCount = new Set(list.map(a => (a.school || '').toLowerCase().trim()).filter(Boolean)).size;
+            const clusterCount = new Set(list.map(a => (a.cluster || '').toLowerCase().trim()).filter(Boolean)).size;
+            summaryEl.innerHTML = `
+                <div class="att-stat"><strong>${list.length}</strong> Teachers</div>
+                <div class="att-stat"><strong>${schoolCount}</strong> Schools</div>
+                <div class="att-stat"><strong>${clusterCount}</strong> Clusters</div>
+            `;
+        }
+    }
+
+    if (!tbody) return;
+
+    if (list.length === 0) {
+        tbody.innerHTML = `<tr><td colspan="7" style="text-align:center;color:var(--text-muted);padding:24px;">No attendees added yet. Use the form above to add teachers.</td></tr>`;
+        return;
+    }
+
+    tbody.innerHTML = list.map((a, i) => `<tr>
+        <td>${i + 1}</td>
+        <td><strong>${escapeHtml(a.name || '—')}</strong></td>
+        <td>${escapeHtml(a.school || '—')}</td>
+        <td>${escapeHtml(a.designation || '—')}</td>
+        <td>${a.phone ? `<a href="tel:${a.phone}" onclick="event.stopPropagation()">${escapeHtml(a.phone)}</a>` : '—'}</td>
+        <td>${[a.cluster, a.block].filter(Boolean).map(x => escapeHtml(x)).join(' / ') || '—'}</td>
+        <td><button class="btn btn-sm btn-danger" onclick="removeTrainingAttendee('${trainingId}', ${i})" title="Remove"><i class="fas fa-times"></i></button></td>
+    </tr>`).join('');
+}
+
+function addTrainingAttendee() {
+    const trainingId = document.getElementById('attTrainingId').value;
+    const name = document.getElementById('attTeacherName').value.trim();
+    if (!name) { showToast('Teacher name is required', 'error'); return; }
+
+    const attendee = {
+        name: name,
+        school: document.getElementById('attTeacherSchool').value.trim(),
+        phone: document.getElementById('attTeacherPhone').value.trim(),
+        designation: document.getElementById('attTeacherDesignation').value,
+        cluster: document.getElementById('attTeacherCluster').value.trim(),
+        block: document.getElementById('attTeacherBlock').value.trim(),
+        addedAt: new Date().toISOString()
+    };
+
+    const trainings = DB.get('trainings');
+    const t = trainings.find(x => x.id === trainingId);
+    if (!t) return;
+
+    if (!t.attendanceList) t.attendanceList = [];
+
+    // Check duplicate (name + school)
+    const dupKey = `${name.toLowerCase()}|${attendee.school.toLowerCase()}`;
+    const hasDup = t.attendanceList.some(a => `${(a.name || '').toLowerCase()}|${(a.school || '').toLowerCase()}` === dupKey);
+    if (hasDup) {
+        showToast(`${name} from ${attendee.school || 'same school'} already in attendance`, 'info');
+        return;
+    }
+
+    t.attendanceList.push(attendee);
+    t.attendees = t.attendanceList.length;
+    DB.set('trainings', trainings);
+
+    // Clear input fields
+    ['attTeacherName', 'attTeacherSchool', 'attTeacherPhone', 'attTeacherCluster', 'attTeacherBlock'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.value = '';
+    });
+    document.getElementById('attTeacherDesignation').value = '';
+    document.getElementById('attTeacherName').focus();
+
+    _attRenderList(trainingId);
+    showToast(`✅ ${name} added to attendance`);
+}
+
+function removeTrainingAttendee(trainingId, index) {
+    const trainings = DB.get('trainings');
+    const t = trainings.find(x => x.id === trainingId);
+    if (!t || !t.attendanceList) return;
+
+    const removed = t.attendanceList.splice(index, 1);
+    t.attendees = t.attendanceList.length;
+    DB.set('trainings', trainings);
+    _attRenderList(trainingId);
+    showToast(`Removed ${removed[0]?.name || 'attendee'}`, 'info');
+}
+
+function importAttendanceExcel() {
+    document.getElementById('attExcelInput').click();
+}
+
+function processAttendanceExcel(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+    if (typeof XLSX === 'undefined') { showToast('Excel library not loaded', 'error'); return; }
+
+    const trainingId = document.getElementById('attTrainingId').value;
+    const reader = new FileReader();
+    reader.onload = function(e) {
+        try {
+            const data = new Uint8Array(e.target.result);
+            const wb = XLSX.read(data, { type: 'array' });
+            const ws = wb.Sheets[wb.SheetNames[0]];
+            const rows = XLSX.utils.sheet_to_json(ws, { defval: '' });
+            if (rows.length === 0) { showToast('No rows in Excel', 'error'); return; }
+
+            // Auto-detect columns
+            const findCol = (row, ...candidates) => {
+                for (const c of candidates) {
+                    const key = Object.keys(row).find(k => k.toLowerCase().replace(/[^a-z]/g, '').includes(c.toLowerCase().replace(/[^a-z]/g, '')));
+                    if (key) return key;
+                }
+                return null;
+            };
+
+            const sample = rows[0];
+            const nameCol = findCol(sample, 'name', 'teachername', 'teacher', 'शिक्षक');
+            const schoolCol = findCol(sample, 'school', 'schoolname', 'विद्यालय');
+            const phoneCol = findCol(sample, 'phone', 'mobile', 'contact', 'फोन');
+            const desigCol = findCol(sample, 'designation', 'post', 'stage', 'पद');
+            const clusterCol = findCol(sample, 'cluster', 'संकुल');
+            const blockCol = findCol(sample, 'block', 'ब्लॉक');
+
+            if (!nameCol) { showToast('Could not find "Name" column in Excel. Check header row.', 'error'); return; }
+
+            const trainings = DB.get('trainings');
+            const t = trainings.find(x => x.id === trainingId);
+            if (!t) return;
+            if (!t.attendanceList) t.attendanceList = [];
+
+            const existingKeys = new Set(t.attendanceList.map(a => `${(a.name || '').toLowerCase()}|${(a.school || '').toLowerCase()}`));
+            let added = 0;
+
+            rows.forEach(row => {
+                const name = (row[nameCol] || '').toString().trim();
+                if (!name) return;
+                const school = schoolCol ? (row[schoolCol] || '').toString().trim() : '';
+                const key = `${name.toLowerCase()}|${school.toLowerCase()}`;
+                if (existingKeys.has(key)) return;
+
+                t.attendanceList.push({
+                    name: name,
+                    school: school,
+                    phone: phoneCol ? (row[phoneCol] || '').toString().trim() : '',
+                    designation: desigCol ? (row[desigCol] || '').toString().trim() : '',
+                    cluster: clusterCol ? (row[clusterCol] || '').toString().trim() : '',
+                    block: blockCol ? (row[blockCol] || '').toString().trim() : '',
+                    addedAt: new Date().toISOString()
+                });
+                existingKeys.add(key);
+                added++;
+            });
+
+            t.attendees = t.attendanceList.length;
+            DB.set('trainings', trainings);
+            _attRenderList(trainingId);
+            showToast(`Imported ${added} attendees from Excel (${rows.length - added} duplicates skipped)`, 'success');
+        } catch (err) {
+            console.error('Attendance import error:', err);
+            showToast('Failed to import: ' + err.message, 'error');
+        }
+    };
+    reader.readAsArrayBuffer(file);
+    event.target.value = '';
+}
+
+function exportAttendanceExcel() {
+    const trainingId = document.getElementById('attTrainingId').value;
+    const trainings = DB.get('trainings');
+    const t = trainings.find(x => x.id === trainingId);
+    if (!t || !t.attendanceList || t.attendanceList.length === 0) {
+        showToast('No attendance data to export', 'info');
+        return;
+    }
+
+    const exportData = t.attendanceList.map((a, i) => ({
+        'S.No': i + 1,
+        'Name': a.name,
+        'School': a.school,
+        'Designation': a.designation,
+        'Phone': a.phone,
+        'Cluster': a.cluster,
+        'Block': a.block
+    }));
+
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.json_to_sheet(exportData);
+    ws['!cols'] = [{ wch: 5 }, { wch: 25 }, { wch: 30 }, { wch: 18 }, { wch: 14 }, { wch: 18 }, { wch: 18 }];
+    XLSX.utils.book_append_sheet(wb, ws, 'Attendance');
+
+    // Info sheet
+    const infoData = [
+        { Field: 'Training', Value: t.title },
+        { Field: 'Date', Value: t.date },
+        { Field: 'Venue', Value: t.venue || '' },
+        { Field: 'Duration', Value: `${t.duration} hours` },
+        { Field: 'Total Attendees', Value: t.attendanceList.length },
+        { Field: 'Target Group', Value: t.target || '' }
+    ];
+    const infoWs = XLSX.utils.json_to_sheet(infoData);
+    XLSX.utils.book_append_sheet(wb, infoWs, 'Training Info');
+
+    const safeName = (t.title || 'Training').replace(/[^a-zA-Z0-9]/g, '_').substring(0, 30);
+    XLSX.writeFile(wb, `Attendance_${safeName}_${t.date || 'undated'}.xlsx`);
+    showToast('Attendance exported to Excel');
+}
+
+// ===== TRAINING ATTENDANCE REPORT & ANALYSIS =====
+
+function showTrainingAttendanceReport() {
+    const reportEl = document.getElementById('trainingAttendanceReport');
+    if (!reportEl) return;
+
+    // Toggle visibility
+    if (reportEl.style.display !== 'none') {
+        reportEl.style.display = 'none';
+        return;
+    }
+    reportEl.style.display = 'block';
+
+    const trainings = DB.get('trainings') || [];
+    const withAttendance = trainings.filter(t => t.attendanceList && t.attendanceList.length > 0);
+
+    if (withAttendance.length === 0) {
+        reportEl.innerHTML = `<div class="att-report-empty">
+            <i class="fas fa-clipboard-list" style="font-size:2.5rem;color:var(--text-muted);margin-bottom:12px;"></i>
+            <h3>No Attendance Data</h3>
+            <p>Open any training and add teachers to the attendance list to see reports here.</p>
+        </div>`;
+        return;
+    }
+
+    // Build teacher attendance map across all trainings
+    const teacherMap = new Map(); // key: name|school → { name, school, phone, designation, cluster, block, trainings: [{id, title, date}], count }
+    withAttendance.forEach(t => {
+        t.attendanceList.forEach(a => {
+            const key = `${(a.name || '').toLowerCase().trim()}|${(a.school || '').toLowerCase().trim()}`;
+            if (!teacherMap.has(key)) {
+                teacherMap.set(key, {
+                    name: a.name || '',
+                    school: a.school || '',
+                    phone: a.phone || '',
+                    designation: a.designation || '',
+                    cluster: a.cluster || '',
+                    block: a.block || '',
+                    trainings: [],
+                    count: 0
+                });
+            }
+            const entry = teacherMap.get(key);
+            entry.trainings.push({ id: t.id, title: t.title, date: t.date });
+            entry.count++;
+            // Update with latest details
+            if (a.phone && !entry.phone) entry.phone = a.phone;
+            if (a.designation && !entry.designation) entry.designation = a.designation;
+            if (a.cluster && !entry.cluster) entry.cluster = a.cluster;
+            if (a.block && !entry.block) entry.block = a.block;
+        });
+    });
+
+    const teacherList = [...teacherMap.values()].sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
+    const totalTrainings = withAttendance.length;
+    const totalTeachers = teacherList.length;
+    const totalAttendances = teacherList.reduce((s, t) => s + t.count, 0);
+    const avgAttendance = totalTrainings > 0 ? (totalAttendances / totalTrainings).toFixed(1) : 0;
+
+    // Attendance frequency analysis
+    const frequencyBuckets = { '1': 0, '2-3': 0, '4-5': 0, '6+': 0 };
+    teacherList.forEach(t => {
+        if (t.count === 1) frequencyBuckets['1']++;
+        else if (t.count <= 3) frequencyBuckets['2-3']++;
+        else if (t.count <= 5) frequencyBuckets['4-5']++;
+        else frequencyBuckets['6+']++;
+    });
+
+    // School-wise analysis
+    const schoolMap = new Map();
+    teacherList.forEach(t => {
+        const s = t.school || 'Unknown';
+        if (!schoolMap.has(s)) schoolMap.set(s, { count: 0, teachers: 0, totalAtt: 0 });
+        const entry = schoolMap.get(s);
+        entry.teachers++;
+        entry.totalAtt += t.count;
+    });
+    const schoolList = [...schoolMap.entries()].sort((a, b) => b[1].totalAtt - a[1].totalAtt);
+
+    // Cluster-wise analysis
+    const clusterMap = new Map();
+    teacherList.forEach(t => {
+        const c = t.cluster || 'Unknown';
+        if (!clusterMap.has(c)) clusterMap.set(c, { teachers: 0, totalAtt: 0 });
+        const entry = clusterMap.get(c);
+        entry.teachers++;
+        entry.totalAtt += t.count;
+    });
+    const clusterList = [...clusterMap.entries()].sort((a, b) => b[1].totalAtt - a[1].totalAtt);
+
+    // Per-training summary
+    const trainingSummaries = withAttendance
+        .sort((a, b) => new Date(b.date) - new Date(a.date))
+        .map(t => ({
+            title: t.title,
+            date: t.date,
+            venue: t.venue || '',
+            count: t.attendanceList.length,
+            schools: new Set(t.attendanceList.map(a => (a.school || '').toLowerCase().trim()).filter(Boolean)).size,
+            clusters: new Set(t.attendanceList.map(a => (a.cluster || '').toLowerCase().trim()).filter(Boolean)).size
+        }));
+
+    // Regular attendees (attended 50%+ of trainings)
+    const threshold = Math.max(1, Math.ceil(totalTrainings * 0.5));
+    const regularTeachers = teacherList.filter(t => t.count >= threshold);
+    const irregularTeachers = teacherList.filter(t => t.count === 1 && totalTrainings > 1);
+
+    reportEl.innerHTML = `
+    <div class="att-report">
+        <div class="att-report-header">
+            <h2><i class="fas fa-chart-bar"></i> Training Attendance Report & Analysis</h2>
+            <div style="display:flex;gap:8px;">
+                <button class="btn btn-outline btn-sm" onclick="exportAttendanceReport()"><i class="fas fa-download"></i> Export Report</button>
+                <button class="btn btn-ghost btn-sm" onclick="document.getElementById('trainingAttendanceReport').style.display='none'"><i class="fas fa-times"></i> Close</button>
+            </div>
+        </div>
+
+        <!-- Overview Stats -->
+        <div class="att-report-stats">
+            <div class="att-rstat"><div class="att-rstat-val">${totalTrainings}</div><div class="att-rstat-label">Trainings with Attendance</div></div>
+            <div class="att-rstat"><div class="att-rstat-val">${totalTeachers}</div><div class="att-rstat-label">Unique Teachers</div></div>
+            <div class="att-rstat"><div class="att-rstat-val">${totalAttendances}</div><div class="att-rstat-label">Total Attendances</div></div>
+            <div class="att-rstat"><div class="att-rstat-val">${avgAttendance}</div><div class="att-rstat-label">Avg per Training</div></div>
+            <div class="att-rstat"><div class="att-rstat-val">${regularTeachers.length}</div><div class="att-rstat-label">Regular (≥${threshold} trainings)</div></div>
+            <div class="att-rstat"><div class="att-rstat-val">${schoolList.length}</div><div class="att-rstat-label">Schools Represented</div></div>
+        </div>
+
+        <!-- Attendance Frequency -->
+        <div class="att-report-section">
+            <h3><i class="fas fa-chart-pie"></i> Attendance Frequency</h3>
+            <div class="att-freq-grid">
+                ${Object.entries(frequencyBuckets).map(([label, count]) => {
+                    const pct = totalTeachers > 0 ? Math.round((count / totalTeachers) * 100) : 0;
+                    return `<div class="att-freq-card">
+                        <div class="att-freq-bar" style="--pct:${pct}%"></div>
+                        <div class="att-freq-val">${count}</div>
+                        <div class="att-freq-label">${label} training${label !== '1' ? 's' : ''}</div>
+                        <div class="att-freq-pct">${pct}%</div>
+                    </div>`;
+                }).join('')}
+            </div>
+        </div>
+
+        <!-- Per Training Summary -->
+        <div class="att-report-section">
+            <h3><i class="fas fa-list-ol"></i> Per-Training Summary</h3>
+            <div class="att-table-wrapper">
+                <table class="att-table att-report-table">
+                    <thead><tr><th>Training</th><th>Date</th><th>Venue</th><th>Attendees</th><th>Schools</th><th>Clusters</th></tr></thead>
+                    <tbody>
+                        ${trainingSummaries.map(s => `<tr>
+                            <td><strong>${escapeHtml(s.title)}</strong></td>
+                            <td>${s.date ? new Date(s.date).toLocaleDateString('en-IN') : '—'}</td>
+                            <td>${escapeHtml(s.venue) || '—'}</td>
+                            <td><strong>${s.count}</strong></td>
+                            <td>${s.schools}</td>
+                            <td>${s.clusters}</td>
+                        </tr>`).join('')}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- Teacher-wise Attendance Table -->
+        <div class="att-report-section">
+            <h3><i class="fas fa-users"></i> Teacher-wise Attendance (${totalTeachers})</h3>
+            <div class="att-table-wrapper" style="max-height:450px;overflow-y:auto;">
+                <table class="att-table att-report-table">
+                    <thead><tr><th>#</th><th>Teacher</th><th>School</th><th>Designation</th><th>Phone</th><th>Cluster</th><th>Block</th><th>Attended</th><th>Rate</th></tr></thead>
+                    <tbody>
+                        ${teacherList.map((t, i) => {
+                            const rate = totalTrainings > 0 ? Math.round((t.count / totalTrainings) * 100) : 0;
+                            const rateColor = rate >= 75 ? '#10b981' : rate >= 50 ? '#f59e0b' : rate >= 25 ? '#f97316' : '#ef4444';
+                            return `<tr>
+                                <td>${i + 1}</td>
+                                <td><strong>${escapeHtml(t.name)}</strong></td>
+                                <td>${escapeHtml(t.school) || '—'}</td>
+                                <td>${escapeHtml(t.designation) || '—'}</td>
+                                <td>${t.phone || '—'}</td>
+                                <td>${escapeHtml(t.cluster) || '—'}</td>
+                                <td>${escapeHtml(t.block) || '—'}</td>
+                                <td><strong>${t.count}/${totalTrainings}</strong></td>
+                                <td><span style="color:${rateColor};font-weight:600;">${rate}%</span></td>
+                            </tr>`;
+                        }).join('')}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- School-wise Breakdown -->
+        <div class="att-report-section">
+            <h3><i class="fas fa-school"></i> School-wise Breakdown (${schoolList.length})</h3>
+            <div class="att-table-wrapper">
+                <table class="att-table att-report-table">
+                    <thead><tr><th>School</th><th>Teachers</th><th>Total Attendances</th><th>Avg per Teacher</th></tr></thead>
+                    <tbody>
+                        ${schoolList.slice(0, 30).map(([school, data]) => `<tr>
+                            <td><strong>${escapeHtml(school)}</strong></td>
+                            <td>${data.teachers}</td>
+                            <td>${data.totalAtt}</td>
+                            <td>${(data.totalAtt / data.teachers).toFixed(1)}</td>
+                        </tr>`).join('')}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- Cluster-wise Breakdown -->
+        ${clusterList.length > 0 && !(clusterList.length === 1 && clusterList[0][0] === 'Unknown') ? `
+        <div class="att-report-section">
+            <h3><i class="fas fa-map-marker-alt"></i> Cluster-wise Breakdown (${clusterList.length})</h3>
+            <div class="att-table-wrapper">
+                <table class="att-table att-report-table">
+                    <thead><tr><th>Cluster</th><th>Teachers</th><th>Total Attendances</th><th>Avg per Teacher</th></tr></thead>
+                    <tbody>
+                        ${clusterList.map(([cluster, data]) => `<tr>
+                            <td><strong>${escapeHtml(cluster)}</strong></td>
+                            <td>${data.teachers}</td>
+                            <td>${data.totalAtt}</td>
+                            <td>${(data.totalAtt / data.teachers).toFixed(1)}</td>
+                        </tr>`).join('')}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        ` : ''}
+
+        <!-- Insights -->
+        <div class="att-report-section">
+            <h3><i class="fas fa-lightbulb"></i> Key Insights</h3>
+            <div class="att-insights">
+                ${regularTeachers.length > 0 ? `<div class="att-insight att-insight-good">
+                    <i class="fas fa-check-circle"></i>
+                    <div><strong>Regular Attendees:</strong> ${regularTeachers.slice(0, 5).map(t => escapeHtml(t.name)).join(', ')}${regularTeachers.length > 5 ? ` +${regularTeachers.length - 5} more` : ''} — attended ≥${threshold} of ${totalTrainings} trainings.</div>
+                </div>` : ''}
+                ${irregularTeachers.length > 0 && totalTrainings > 1 ? `<div class="att-insight att-insight-warn">
+                    <i class="fas fa-exclamation-triangle"></i>
+                    <div><strong>Single Attendance:</strong> ${irregularTeachers.length} teacher(s) attended only 1 training. Consider follow-up: ${irregularTeachers.slice(0, 4).map(t => escapeHtml(t.name)).join(', ')}${irregularTeachers.length > 4 ? '...' : ''}</div>
+                </div>` : ''}
+                ${schoolList.length > 0 ? `<div class="att-insight att-insight-info">
+                    <i class="fas fa-info-circle"></i>
+                    <div><strong>Top Schools:</strong> ${schoolList.slice(0, 3).map(([s, d]) => `${escapeHtml(s)} (${d.teachers} teachers)`).join(', ')}</div>
+                </div>` : ''}
+                <div class="att-insight att-insight-info">
+                    <i class="fas fa-chart-line"></i>
+                    <div><strong>Reach:</strong> ${totalTeachers} unique teachers reached across ${totalTrainings} trainings with ${totalAttendances} total attendances.</div>
+                </div>
+            </div>
+        </div>
+    </div>`;
+}
+
+function exportAttendanceReport() {
+    const trainings = DB.get('trainings') || [];
+    const withAtt = trainings.filter(t => t.attendanceList && t.attendanceList.length > 0);
+    if (withAtt.length === 0) { showToast('No attendance data', 'info'); return; }
+
+    const wb = XLSX.utils.book_new();
+
+    // Sheet 1: Teacher-wise attendance
+    const teacherMap = new Map();
+    withAtt.forEach(t => {
+        t.attendanceList.forEach(a => {
+            const key = `${(a.name || '').toLowerCase().trim()}|${(a.school || '').toLowerCase().trim()}`;
+            if (!teacherMap.has(key)) {
+                teacherMap.set(key, { name: a.name, school: a.school, phone: a.phone || '', designation: a.designation || '', cluster: a.cluster || '', block: a.block || '', count: 0, trainings: [] });
+            }
+            const e = teacherMap.get(key);
+            e.count++;
+            e.trainings.push(t.title + ' (' + (t.date || '') + ')');
+        });
+    });
+
+    const teacherRows = [...teacherMap.values()].sort((a, b) => b.count - a.count).map((t, i) => ({
+        'S.No': i + 1,
+        'Teacher Name': t.name,
+        'School': t.school,
+        'Designation': t.designation,
+        'Phone': t.phone,
+        'Cluster': t.cluster,
+        'Block': t.block,
+        'Trainings Attended': t.count,
+        'Attendance Rate': `${Math.round((t.count / withAtt.length) * 100)}%`,
+        'Training Details': t.trainings.join('; ')
+    }));
+    const ws1 = XLSX.utils.json_to_sheet(teacherRows);
+    ws1['!cols'] = [{ wch: 5 }, { wch: 25 }, { wch: 30 }, { wch: 18 }, { wch: 14 }, { wch: 18 }, { wch: 18 }, { wch: 12 }, { wch: 10 }, { wch: 50 }];
+    XLSX.utils.book_append_sheet(wb, ws1, 'Teacher Attendance');
+
+    // Sheet 2: Training-wise summary
+    const trainingSummary = withAtt.sort((a, b) => new Date(b.date) - new Date(a.date)).map(t => ({
+        'Training': t.title,
+        'Date': t.date,
+        'Venue': t.venue || '',
+        'Duration (hrs)': t.duration,
+        'Target Group': t.target || '',
+        'Total Attendees': t.attendanceList.length,
+        'Schools': new Set(t.attendanceList.map(a => (a.school || '').toLowerCase().trim()).filter(Boolean)).size,
+        'Clusters': new Set(t.attendanceList.map(a => (a.cluster || '').toLowerCase().trim()).filter(Boolean)).size
+    }));
+    const ws2 = XLSX.utils.json_to_sheet(trainingSummary);
+    XLSX.utils.book_append_sheet(wb, ws2, 'Training Summary');
+
+    // Sheet 3: Per-training attendance lists
+    withAtt.forEach(t => {
+        const sheetName = (t.title || 'Training').replace(/[^a-zA-Z0-9 ]/g, '').substring(0, 28);
+        const rows = t.attendanceList.map((a, i) => ({
+            'S.No': i + 1,
+            'Name': a.name,
+            'School': a.school,
+            'Designation': a.designation,
+            'Phone': a.phone,
+            'Cluster': a.cluster,
+            'Block': a.block
+        }));
+        const ws = XLSX.utils.json_to_sheet(rows);
+        XLSX.utils.book_append_sheet(wb, ws, sheetName);
+    });
+
+    XLSX.writeFile(wb, `Training_Attendance_Report_${new Date().toISOString().split('T')[0]}.xlsx`);
+    showToast('Attendance report exported to Excel', 'success');
 }
 
 // ===== OBSERVATIONS =====
@@ -4181,11 +4999,123 @@ async function importDMTExcel(event) {
         showToast(`Imported ${imported.toLocaleString()} observations from DMT Excel! (${rows.length - imported} duplicates skipped)`, 'success', 6000);
         // Auto-switch to analytics tab after import
         setTimeout(() => switchObsTab('analytics'), 500);
+
+        // --- Auto-extract Teacher Records from DMT import ---
+        _autoExtractTeachersFromDMT(rows);
+
     } catch (err) {
         console.error('DMT Import error:', err);
         showToast('Failed to import: ' + err.message, 'error');
     }
     event.target.value = '';
+}
+
+/**
+ * Auto-extract unique teachers from DMT Excel rows and add to Teacher Records.
+ * Called after a successful DMT observation import.
+ */
+function _autoExtractTeachersFromDMT(rows) {
+    if (!rows || rows.length === 0) return;
+
+    // Build unique teacher map from DMT rows (key: NID or name+school)
+    const teacherMap = new Map();
+    rows.forEach(row => {
+        const name = (row['Teacher: Teacher Name'] || '').toString().trim();
+        const nid = (row['NID'] || '').toString().trim();
+        const school = (row['School Name'] || '').toString().trim();
+        if (!name) return;
+
+        // Use NID as primary key, fallback to name+school
+        const key = nid ? `nid:${nid}` : `${name.toLowerCase()}|${school.toLowerCase()}`;
+        if (!teacherMap.has(key)) {
+            teacherMap.set(key, {
+                name: name,
+                nid: nid,
+                school: school,
+                phone: (row['Teacher Phone No.'] || '').toString().trim(),
+                designation: (row['Teacher Stage'] || '').toString().trim(),
+                cluster: (row['Cluster'] || '').toString().trim(),
+                block: (row['Block Name'] || '').toString().trim(),
+                subject: (row['Subject'] || '').toString().trim(),
+                district: (row['District Name'] || '').toString().trim()
+            });
+        }
+    });
+
+    if (teacherMap.size === 0) return;
+
+    // Check existing teacher records to avoid duplicates
+    const existingRecords = DB.get('teacherRecords');
+    const existingKeys = new Set();
+    existingRecords.forEach(tr => {
+        const n = (tr.name || '').toLowerCase().trim();
+        const s = (tr.school || '').toLowerCase().trim();
+        const nid = (tr.nid || '').trim();
+        if (nid) existingKeys.add(`nid:${nid}`);
+        existingKeys.add(`${n}|${s}`);
+    });
+
+    // Filter out already-existing teachers
+    const newTeachers = [];
+    teacherMap.forEach((t, key) => {
+        const nameSchoolKey = `${t.name.toLowerCase()}|${t.school.toLowerCase()}`;
+        const nidKey = t.nid ? `nid:${t.nid}` : null;
+        if (!existingKeys.has(nameSchoolKey) && (!nidKey || !existingKeys.has(nidKey))) {
+            newTeachers.push(t);
+        }
+    });
+
+    if (newTeachers.length === 0) {
+        showToast(`All ${teacherMap.size} teachers already exist in Teacher Records`, 'info', 3000);
+        return;
+    }
+
+    // Confirm with user
+    const skipped = teacherMap.size - newTeachers.length;
+    let msg = `📋 Auto-Load Teacher Records\n\n`;
+    msg += `Found ${newTeachers.length} new teacher(s) from this DMT import.\n`;
+    if (skipped > 0) msg += `${skipped} already in Teacher Records (skipped).\n`;
+    msg += `\nAdd ${newTeachers.length} teacher(s) to Teacher Records?`;
+
+    if (!confirm(msg)) return;
+
+    // Add new teachers to teacherRecords
+    const records = DB.get('teacherRecords');
+    const now = new Date().toISOString();
+    let added = 0;
+
+    newTeachers.forEach(t => {
+        records.push({
+            id: DB.generateId(),
+            name: t.name,
+            gender: '',
+            school: t.school,
+            designation: t.designation,
+            subject: t.subject,
+            classesTaught: '',
+            phone: t.phone,
+            email: '',
+            block: t.block,
+            cluster: t.cluster,
+            qualification: '',
+            experience: '',
+            joinDate: '',
+            nid: t.nid,
+            notes: t.district ? `District: ${t.district}` : '',
+            createdAt: now,
+            updatedAt: now,
+            source: 'DMT Import'
+        });
+        added++;
+    });
+
+    DB.set('teacherRecords', records);
+    showToast(`Added ${added} teacher(s) to Teacher Records from DMT import!`, 'success', 5000);
+
+    // If teacher records section is visible, refresh it
+    if (document.querySelector('#section-teacherrecords.active')) {
+        renderTeacherRecords();
+    }
 }
 
 // ===== SMART PLANNER — Intelligent Suggestion Engine =====
@@ -8324,11 +9254,17 @@ function renderSchoolProfiles() {
     const totalObs = allSchools.reduce((s, sc) => s + sc.observations.length, 0);
     const totalTeachers = new Set(allSchools.flatMap(sc => sc.teachers)).size;
 
+    // Student totals
+    const allStudents = DB.get('schoolStudentRecords') || {};
+    let totalStudents = 0;
+    Object.values(allStudents).forEach(sr => { totalStudents += _ssrTotals(sr).total; });
+
     document.getElementById('schoolSummaryStats').innerHTML = `
         <div class="school-summary-stat"><div class="stat-icon">🏫</div><div class="stat-value">${totalSchools}</div><div class="stat-label">Schools</div></div>
         <div class="school-summary-stat"><div class="stat-icon">📍</div><div class="stat-value">${totalVisitDays}</div><div class="stat-label">Total Visits</div></div>
         <div class="school-summary-stat"><div class="stat-icon">📋</div><div class="stat-value">${totalObs}</div><div class="stat-label">Observations</div></div>
         <div class="school-summary-stat"><div class="stat-icon">👩‍🏫</div><div class="stat-value">${totalTeachers}</div><div class="stat-label">Teachers</div></div>
+        <div class="school-summary-stat"><div class="stat-icon">🎓</div><div class="stat-value">${totalStudents}</div><div class="stat-label">Students</div></div>
     `;
 
     // Show school list (hide detail view)
@@ -8342,6 +9278,7 @@ function renderSchoolProfiles() {
     }
 
     const pg = getPaginatedItems(schools, 'schools', 18);
+    const allStudentRecords = DB.get('schoolStudentRecords') || {};
 
     container.innerHTML = `<div class="school-cards-grid">${pg.items.map(school => {
         // Last activity date from visits + observations combined
@@ -8356,6 +9293,12 @@ function renderSchoolProfiles() {
         const schoolKey = school.name.trim().toLowerCase();
         const safeKey = encodeURIComponent(schoolKey).replace(/'/g, '%27');
 
+        // Student records summary
+        const sr = allStudentRecords[schoolKey];
+        const totalStudents = _ssrTotals(sr).total;
+        const studentBadge = totalStudents > 0 ? `<div class="school-metric"><div class="metric-value">${totalStudents}</div><div class="metric-label">Students</div></div>` : '';
+        const studentBar = totalStudents > 0 ? _buildLevelMiniBar(sr, totalStudents) : '';
+
         return `
             <div class="school-profile-card" onclick="showSchoolDetail('${safeKey}')">
                 <div class="school-card-delete" onclick="event.stopPropagation(); deleteSchoolProfile('${safeKey}')" title="Delete this school"><i class="fas fa-times"></i></div>
@@ -8365,7 +9308,9 @@ function renderSchoolProfiles() {
                     <div class="school-metric"><div class="metric-value">${school.totalVisitDays}</div><div class="metric-label">Visits</div></div>
                     <div class="school-metric"><div class="metric-value">${school.observations.length}</div><div class="metric-label">Obs.</div></div>
                     <div class="school-metric"><div class="metric-value">${school.teacherCount}</div><div class="metric-label">Teachers</div></div>
+                    ${studentBadge}
                 </div>
+                ${studentBar}
                 <div class="school-card-footer">
                     <div class="school-last-visit"><i class="fas fa-clock"></i> ${lastDate ? new Date(lastDate).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : 'No activity'}</div>
                     ${avgRating ? `<div class="school-rating"><i class="fas fa-star"></i> ${avgRating}/5</div>` : ''}
@@ -8392,6 +9337,11 @@ function showSchoolDetail(encodedKey) {
     const avgRating = school.observations.length > 0
         ? (school.observations.reduce((s, o) => s + (((o.engagementRating || o.engagement) || 0) + (o.methodology || 0) + (o.tlm || 0)) / 3, 0) / school.observations.length).toFixed(1)
         : 'N/A';
+
+    // Student records for this school
+    const allStudentRecs = DB.get('schoolStudentRecords') || {};
+    const thisSchoolStudents = allStudentRecs[schoolKey];
+    const totalStudents = _ssrTotals(thisSchoolStudents).total;
 
     // All activities timeline — build rich objects
     const activities = [
@@ -8454,10 +9404,15 @@ function showSchoolDetail(encodedKey) {
                 <div class="school-detail-stat"><div class="stat-value">${plannedVisits}</div><div class="stat-label">Planned</div></div>
                 <div class="school-detail-stat"><div class="stat-value">${school.observations.length}</div><div class="stat-label">Observations</div></div>
                 <div class="school-detail-stat"><div class="stat-value">${teachers.length}</div><div class="stat-label">Teachers</div></div>
+                <div class="school-detail-stat"><div class="stat-value">${totalStudents}</div><div class="stat-label">Students</div></div>
                 <div class="school-detail-stat"><div class="stat-value">${avgRating}</div><div class="stat-label">Avg Rating</div></div>
             </div>
             ${teachers.length > 0 ? `<div style="margin-bottom:20px;"><strong style="color:var(--text-secondary);font-size:13px;">Teachers observed:</strong> <span style="color:var(--text-muted);font-size:13px;">${escapeHtml(teachers.join(', '))}</span></div>` : ''}
             ${subjects.length > 0 ? `<div style="margin-bottom:20px;"><strong style="color:var(--text-secondary);font-size:13px;">Subjects covered:</strong> <span style="color:var(--text-muted);font-size:13px;">${escapeHtml(subjects.join(', '))}</span></div>` : ''}
+
+            <!-- Student Records Section -->
+            ${_buildSchoolStudentSection(schoolKey)}
+
             <div class="school-detail-timeline">
                 <h3><i class="fas fa-history" style="color:var(--amber);margin-right:8px;"></i>Activity Timeline (${activities.length})</h3>
                 ${activities.length > 0 ? activities.map((a, idx) => {
@@ -8498,6 +9453,294 @@ function showSchoolDetail(encodedKey) {
             </div>
         </div>
     `;
+}
+
+// ===== SCHOOL STUDENT RECORDS (Learning Levels × Class) =====
+const STUDENT_LEVELS = [
+    { key: 'lig', label: 'LIG', fullLabel: 'Lagging', color: '#ef4444', icon: '🔴' },
+    { key: 'fln', label: 'FLN', fullLabel: 'Foundational Literacy & Numeracy', color: '#f59e0b', icon: '🟡' },
+    { key: 'pgl', label: 'PGL', fullLabel: 'Partially at Grade Level', color: '#3b82f6', icon: '🔵' },
+    { key: 'gl',  label: 'GL',  fullLabel: 'Grade Level', color: '#10b981', icon: '🟢' }
+];
+const SSR_CLASSES = ['1', '2', '3', '4', '5', '6', '7', '8'];
+
+// Compute totals from class-wise data (handles both old flat & new class-wise format)
+function _ssrTotals(sr) {
+    if (!sr) return { lig: 0, fln: 0, pgl: 0, gl: 0, total: 0 };
+    // New format: sr.classes = { '1': {lig,fln,pgl,gl}, ... }
+    if (sr.classes) {
+        const t = { lig: 0, fln: 0, pgl: 0, gl: 0 };
+        Object.values(sr.classes).forEach(c => {
+            STUDENT_LEVELS.forEach(l => { t[l.key] += (c[l.key] || 0); });
+        });
+        t.total = t.lig + t.fln + t.pgl + t.gl;
+        return t;
+    }
+    // Old flat format fallback
+    const t = { lig: sr.lig || 0, fln: sr.fln || 0, pgl: sr.pgl || 0, gl: sr.gl || 0 };
+    t.total = t.lig + t.fln + t.pgl + t.gl;
+    return t;
+}
+
+function _buildLevelMiniBar(sr, total) {
+    if (!sr || total === 0) return '';
+    const t = _ssrTotals(sr);
+    const levels = STUDENT_LEVELS.map(l => ({
+        ...l,
+        count: t[l.key],
+        pct: total > 0 ? (t[l.key] / total * 100) : 0
+    })).filter(l => l.count > 0);
+
+    return `<div class="ssr-mini-bar" title="${levels.map(l => l.label + ': ' + l.count).join(' | ')}">
+        ${levels.map(l => `<div class="ssr-mini-seg" style="width:${l.pct}%;background:${l.color};" title="${l.label}: ${l.count} (${l.pct.toFixed(0)}%)"></div>`).join('')}
+    </div>`;
+}
+
+function _buildSchoolStudentSection(schoolKey) {
+    const allRecords = DB.get('schoolStudentRecords') || {};
+    const sr = allRecords[schoolKey];
+    const t = _ssrTotals(sr);
+    const total = t.total;
+    const safeKey = encodeURIComponent(schoolKey).replace(/'/g, '%27');
+
+    let barHtml = '';
+    let classTable = '';
+    if (total > 0) {
+        // Overall bar
+        const levels = STUDENT_LEVELS.map(l => ({ ...l, count: t[l.key], pct: t[l.key] / total * 100 }));
+        barHtml = `<div class="ssr-bar">${levels.map(l =>
+            l.count > 0 ? `<div class="ssr-bar-seg" style="width:${l.pct}%;background:${l.color};">
+                <span class="ssr-bar-label">${l.label} ${l.count}</span>
+            </div>` : ''
+        ).join('')}</div>`;
+
+        // Class-wise table
+        const classes = (sr && sr.classes) || {};
+        const activeClasses = SSR_CLASSES.filter(cls => {
+            const c = classes[cls];
+            return c && (c.lig || c.fln || c.pgl || c.gl);
+        });
+
+        if (activeClasses.length > 0) {
+            classTable = `<div class="ssr-class-table-wrap">
+                <table class="ssr-class-table">
+                    <thead>
+                        <tr>
+                            <th>Class</th>
+                            ${STUDENT_LEVELS.map(l => `<th style="color:${l.color};">${l.icon} ${l.label}</th>`).join('')}
+                            <th>Total</th>
+                            <th>Bar</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${activeClasses.map(cls => {
+                            const c = classes[cls] || {};
+                            const cTotal = (c.lig || 0) + (c.fln || 0) + (c.pgl || 0) + (c.gl || 0);
+                            const miniLevels = STUDENT_LEVELS.map(l => ({ ...l, count: c[l.key] || 0, pct: cTotal > 0 ? ((c[l.key] || 0) / cTotal * 100) : 0 })).filter(l => l.count > 0);
+                            return `<tr>
+                                <td><strong>Class ${cls}</strong></td>
+                                ${STUDENT_LEVELS.map(l => `<td>${c[l.key] || 0}</td>`).join('')}
+                                <td><strong>${cTotal}</strong></td>
+                                <td style="min-width:100px;">
+                                    <div class="ssr-mini-bar" style="margin:0;">${miniLevels.map(l => `<div class="ssr-mini-seg" style="width:${l.pct}%;background:${l.color};"></div>`).join('')}</div>
+                                </td>
+                            </tr>`;
+                        }).join('')}
+                        <tr class="ssr-total-row">
+                            <td><strong>Total</strong></td>
+                            ${STUDENT_LEVELS.map(l => `<td><strong style="color:${l.color};">${t[l.key]}</strong></td>`).join('')}
+                            <td><strong>${total}</strong></td>
+                            <td></td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>`;
+        } else {
+            // Old flat format - show level cards
+            classTable = `<div class="ssr-level-grid">${levels.map(l => `
+                <div class="ssr-level-card" style="border-left:3px solid ${l.color};">
+                    <div class="ssr-level-hdr">
+                        <span class="ssr-level-icon">${l.icon}</span>
+                        <span class="ssr-level-name">${l.label}</span>
+                        <span class="ssr-level-full">${l.fullLabel}</span>
+                    </div>
+                    <div class="ssr-level-count">${l.count}</div>
+                    <div class="ssr-level-pct">${l.pct.toFixed(1)}%</div>
+                </div>
+            `).join('')}</div>`;
+        }
+    }
+
+    return `
+        <div class="ssr-section" id="ssrSection">
+            <div class="ssr-header">
+                <h3><i class="fas fa-user-graduate" style="color:var(--accent);margin-right:8px;"></i>Student Records</h3>
+                <button class="btn btn-sm btn-primary" onclick="openStudentRecordEditor('${safeKey}')"><i class="fas fa-edit"></i> ${total > 0 ? 'Edit' : 'Add Students'}</button>
+            </div>
+            ${total > 0 ? `
+                <div class="ssr-total"><strong>${total}</strong> Students across ${((sr && sr.classes) ? Object.keys(sr.classes).filter(k => { const c = sr.classes[k]; return c && (c.lig||c.fln||c.pgl||c.gl); }).length : 0) || '—'} classes</div>
+                ${barHtml}
+                ${classTable}
+                ${(sr && sr.notes) ? `<div class="ssr-notes"><i class="fas fa-sticky-note" style="color:var(--accent);margin-right:6px;"></i>${escapeHtml(sr.notes)}</div>` : ''}
+                ${(sr && sr.updatedAt) ? `<div class="ssr-updated"><i class="fas fa-clock"></i> Updated ${new Date(sr.updatedAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}</div>` : ''}
+            ` : `
+                <div class="ssr-empty">
+                    <i class="fas fa-users" style="font-size:1.5rem;color:var(--text-muted);margin-bottom:8px;"></i>
+                    <p>No student records added yet. Click "Add Students" to record class-wise learning levels.</p>
+                </div>
+            `}
+        </div>
+    `;
+}
+
+function openStudentRecordEditor(encodedKey) {
+    const schoolKey = decodeURIComponent(encodedKey);
+    const allRecords = DB.get('schoolStudentRecords') || {};
+    const sr = allRecords[schoolKey] || {};
+    const classes = sr.classes || {};
+
+    const ssrSection = document.getElementById('ssrSection');
+    if (!ssrSection) return;
+
+    // Build class-wise input table
+    const rows = SSR_CLASSES.map(cls => {
+        const c = classes[cls] || {};
+        return `<tr>
+            <td><strong>Class ${cls}</strong></td>
+            ${STUDENT_LEVELS.map(l => `<td><input type="number" class="ssr-cell-input" id="ssrC${cls}_${l.key}" value="${c[l.key] || ''}" min="0" placeholder="0" oninput="_ssrUpdatePreview()"></td>`).join('')}
+            <td class="ssr-row-total" id="ssrRowTotal_${cls}">0</td>
+        </tr>`;
+    }).join('');
+
+    ssrSection.innerHTML = `
+        <div class="ssr-header">
+            <h3><i class="fas fa-user-graduate" style="color:var(--accent);margin-right:8px;"></i>Student Records — Edit by Class</h3>
+        </div>
+        <div class="ssr-editor">
+            <div class="ssr-class-table-wrap">
+                <table class="ssr-class-table ssr-edit-table">
+                    <thead>
+                        <tr>
+                            <th>Class</th>
+                            ${STUDENT_LEVELS.map(l => `<th style="color:${l.color};">${l.icon} ${l.label}<br><small style="font-weight:400;font-size:10px;">${l.fullLabel}</small></th>`).join('')}
+                            <th>Total</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${rows}
+                        <tr class="ssr-total-row">
+                            <td><strong>Grand Total</strong></td>
+                            ${STUDENT_LEVELS.map(l => `<td id="ssrColTotal_${l.key}" style="color:${l.color};font-weight:700;">0</td>`).join('')}
+                            <td id="ssrGrandTotal" style="font-weight:800;font-size:16px;">0</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+            <div class="ssr-edit-preview" id="ssrPreview"></div>
+            <div class="ssr-edit-notes">
+                <label for="ssrNotes" style="font-size:13px;color:var(--text-secondary);font-weight:600;">Notes (optional)</label>
+                <textarea id="ssrNotes" class="ssr-edit-textarea" rows="2" placeholder="e.g., Assessment date, source of data...">${escapeHtml(sr.notes || '')}</textarea>
+            </div>
+            <div class="ssr-edit-actions">
+                <button class="btn btn-primary" onclick="saveSchoolStudentRecords('${encodeURIComponent(schoolKey).replace(/'/g, '%27')}')"><i class="fas fa-save"></i> Save</button>
+                <button class="btn btn-ghost" onclick="showSchoolDetail('${encodeURIComponent(schoolKey).replace(/'/g, '%27')}')"><i class="fas fa-times"></i> Cancel</button>
+                ${Object.keys(classes).length > 0 ? `<button class="btn btn-danger btn-sm" onclick="clearSchoolStudentRecords('${encodeURIComponent(schoolKey).replace(/'/g, '%27')}')"><i class="fas fa-trash"></i> Clear</button>` : ''}
+            </div>
+        </div>
+    `;
+    _ssrUpdatePreview();
+}
+
+function _ssrUpdatePreview() {
+    const previewEl = document.getElementById('ssrPreview');
+
+    // Compute row & column totals
+    const colTotals = {};
+    STUDENT_LEVELS.forEach(l => { colTotals[l.key] = 0; });
+    let grandTotal = 0;
+
+    SSR_CLASSES.forEach(cls => {
+        let rowTotal = 0;
+        STUDENT_LEVELS.forEach(l => {
+            const val = parseInt(document.getElementById(`ssrC${cls}_${l.key}`)?.value) || 0;
+            colTotals[l.key] += val;
+            rowTotal += val;
+        });
+        const rtEl = document.getElementById(`ssrRowTotal_${cls}`);
+        if (rtEl) rtEl.textContent = rowTotal || '';
+        grandTotal += rowTotal;
+    });
+
+    STUDENT_LEVELS.forEach(l => {
+        const el = document.getElementById(`ssrColTotal_${l.key}`);
+        if (el) el.textContent = colTotals[l.key];
+    });
+    const gtEl = document.getElementById('ssrGrandTotal');
+    if (gtEl) gtEl.textContent = grandTotal;
+
+    if (!previewEl) return;
+
+    if (grandTotal === 0) {
+        previewEl.innerHTML = '<div style="color:var(--text-muted);font-size:13px;text-align:center;padding:8px;">Enter student counts above to see preview</div>';
+        return;
+    }
+
+    const levels = STUDENT_LEVELS.map(l => ({
+        ...l,
+        count: colTotals[l.key],
+        pct: colTotals[l.key] / grandTotal * 100
+    })).filter(l => l.count > 0);
+
+    previewEl.innerHTML = `
+        <div style="font-size:13px;color:var(--text-secondary);margin-bottom:6px;font-weight:600;">Preview — ${grandTotal} Students</div>
+        <div class="ssr-bar">${levels.map(l =>
+            `<div class="ssr-bar-seg" style="width:${l.pct}%;background:${l.color};"><span class="ssr-bar-label">${l.label} ${l.count}</span></div>`
+        ).join('')}</div>
+        <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:6px;">
+            ${levels.map(l => `<span style="font-size:12px;color:${l.color};font-weight:600;">${l.icon} ${l.label}: ${l.count} (${l.pct.toFixed(1)}%)</span>`).join('')}
+        </div>
+    `;
+}
+
+function saveSchoolStudentRecords(encodedKey) {
+    const schoolKey = decodeURIComponent(encodedKey);
+    const notes = (document.getElementById('ssrNotes')?.value || '').trim();
+
+    const classes = {};
+    let grandTotal = 0;
+    SSR_CLASSES.forEach(cls => {
+        const c = {};
+        let rowTotal = 0;
+        STUDENT_LEVELS.forEach(l => {
+            c[l.key] = parseInt(document.getElementById(`ssrC${cls}_${l.key}`)?.value) || 0;
+            rowTotal += c[l.key];
+        });
+        if (rowTotal > 0) {
+            classes[cls] = c;
+            grandTotal += rowTotal;
+        }
+    });
+
+    if (grandTotal === 0) {
+        showToast('Enter at least one student count', 'error');
+        return;
+    }
+
+    const allRecords = DB.get('schoolStudentRecords') || {};
+    allRecords[schoolKey] = { classes, notes, updatedAt: new Date().toISOString() };
+    DB.set('schoolStudentRecords', allRecords);
+    showToast(`✅ Student records saved (${grandTotal} students)`);
+    showSchoolDetail(encodeURIComponent(schoolKey));
+}
+
+function clearSchoolStudentRecords(encodedKey) {
+    const schoolKey = decodeURIComponent(encodedKey);
+    if (!confirm('Clear all student records for this school?')) return;
+    const allRecords = DB.get('schoolStudentRecords') || {};
+    delete allRecords[schoolKey];
+    DB.set('schoolStudentRecords', allRecords);
+    showToast('Student records cleared', 'info');
+    showSchoolDetail(encodeURIComponent(schoolKey));
 }
 
 // ===== MEETING TRACKER =====
@@ -9431,6 +10674,490 @@ function renderContacts() {
             </div>
         `;
     }).join('')}</div>` + renderPaginationControls('contacts', pg, 'renderContacts');
+}
+
+// ===== TEACHERS RECORD =====
+// Full teacher database with Excel import/export, CRUD, search, filter
+
+function _trPopulateFilterDropdowns() {
+    const records = DB.get('teacherRecords') || [];
+
+    // Schools
+    const schools = [...new Set(records.map(r => r.school).filter(Boolean))].sort();
+    const schoolFilter = document.getElementById('trSchoolFilter');
+    if (schoolFilter) {
+        const current = schoolFilter.value;
+        schoolFilter.innerHTML = '<option value="all">🏫 All Schools</option>' +
+            schools.map(s => `<option value="${escapeHtml(s)}">${escapeHtml(s)}</option>`).join('');
+        schoolFilter.value = current;
+    }
+    // School datalist for modal
+    const schoolDL = document.getElementById('trSchoolList');
+    if (schoolDL) schoolDL.innerHTML = schools.map(s => `<option value="${escapeHtml(s)}">`).join('');
+
+    // Designations
+    const designations = [...new Set(records.map(r => r.designation).filter(Boolean))].sort();
+    const desigFilter = document.getElementById('trDesignationFilter');
+    if (desigFilter) {
+        const current = desigFilter.value;
+        desigFilter.innerHTML = '<option value="all">👤 All Designations</option>' +
+            designations.map(d => `<option value="${escapeHtml(d)}">${escapeHtml(d)}</option>`).join('');
+        desigFilter.value = current;
+    }
+
+    // Subjects
+    const subjects = [...new Set(records.map(r => r.subject).filter(Boolean))].sort();
+    const subFilter = document.getElementById('trSubjectFilter');
+    if (subFilter) {
+        const current = subFilter.value;
+        subFilter.innerHTML = '<option value="all">📖 All Subjects</option>' +
+            subjects.map(s => `<option value="${escapeHtml(s)}">${escapeHtml(s)}</option>`).join('');
+        subFilter.value = current;
+    }
+
+    // Clusters — filter dropdown + datalist for modal
+    const clusters = [...new Set(records.map(r => r.cluster).filter(Boolean))].sort();
+    const clusterFilter = document.getElementById('trClusterFilter');
+    if (clusterFilter) {
+        const current = clusterFilter.value;
+        clusterFilter.innerHTML = '<option value="all">📍 All Clusters</option>' +
+            clusters.map(c => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join('');
+        clusterFilter.value = current;
+    }
+    const clusterDL = document.getElementById('trClusterList');
+    if (clusterDL) clusterDL.innerHTML = clusters.map(c => `<option value="${escapeHtml(c)}">`).join('');
+
+    // Blocks — filter dropdown + datalist for modal
+    const blocks = [...new Set(records.map(r => r.block).filter(Boolean))].sort();
+    const blockFilter = document.getElementById('trBlockFilter');
+    if (blockFilter) {
+        const current = blockFilter.value;
+        blockFilter.innerHTML = '<option value="all">🏘️ All Blocks</option>' +
+            blocks.map(b => `<option value="${escapeHtml(b)}">${escapeHtml(b)}</option>`).join('');
+        blockFilter.value = current;
+    }
+    const blockDL = document.getElementById('trBlockList');
+    if (blockDL) blockDL.innerHTML = blocks.map(b => `<option value="${escapeHtml(b)}">`).join('');
+}
+
+function renderTeacherRecords() {
+    let records = DB.get('teacherRecords') || [];
+    const schoolF = document.getElementById('trSchoolFilter')?.value || 'all';
+    const desigF = document.getElementById('trDesignationFilter')?.value || 'all';
+    const subjectF = document.getElementById('trSubjectFilter')?.value || 'all';
+    const clusterF = document.getElementById('trClusterFilter')?.value || 'all';
+    const blockF = document.getElementById('trBlockFilter')?.value || 'all';
+    const search = (document.getElementById('trSearchInput')?.value || '').toLowerCase().trim();
+
+    _trPopulateFilterDropdowns();
+
+    // Apply filters
+    if (schoolF !== 'all') records = records.filter(r => r.school === schoolF);
+    if (desigF !== 'all') records = records.filter(r => r.designation === desigF);
+    if (subjectF !== 'all') records = records.filter(r => r.subject === subjectF);
+    if (clusterF !== 'all') records = records.filter(r => r.cluster === clusterF);
+    if (blockF !== 'all') records = records.filter(r => r.block === blockF);
+    if (search) {
+        records = records.filter(r =>
+            (r.name || '').toLowerCase().includes(search) ||
+            (r.school || '').toLowerCase().includes(search) ||
+            (r.phone || '').includes(search) ||
+            (r.nid || '').toLowerCase().includes(search) ||
+            (r.block || '').toLowerCase().includes(search) ||
+            (r.cluster || '').toLowerCase().includes(search) ||
+            (r.subject || '').toLowerCase().includes(search) ||
+            (r.designation || '').toLowerCase().includes(search) ||
+            (r.qualification || '').toLowerCase().includes(search)
+        );
+    }
+
+    // Sort by name
+    records.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+
+    // Stats bar
+    const all = DB.get('teacherRecords') || [];
+    const statsEl = document.getElementById('trStatsBar');
+    if (statsEl) {
+        const schoolCount = new Set(all.map(r => (r.school || '').toLowerCase().trim()).filter(Boolean)).size;
+        const desigCounts = {};
+        all.forEach(r => { if (r.designation) desigCounts[r.designation] = (desigCounts[r.designation] || 0) + 1; });
+        const genderCounts = {};
+        all.forEach(r => { if (r.gender) genderCounts[r.gender] = (genderCounts[r.gender] || 0) + 1; });
+
+        statsEl.innerHTML = `
+            <div class="tr-stat-card"><div class="tr-stat-value">${all.length}</div><div class="tr-stat-label">Total Teachers</div></div>
+            <div class="tr-stat-card"><div class="tr-stat-value">${schoolCount}</div><div class="tr-stat-label">Schools</div></div>
+            ${Object.entries(desigCounts).sort((a, b) => b[1] - a[1]).slice(0, 4).map(([d, c]) =>
+                `<div class="tr-stat-card"><div class="tr-stat-value">${c}</div><div class="tr-stat-label">${escapeHtml(d)}</div></div>`
+            ).join('')}
+            ${Object.entries(genderCounts).map(([g, c]) =>
+                `<div class="tr-stat-card"><div class="tr-stat-value">${c}</div><div class="tr-stat-label">${g}</div></div>`
+            ).join('')}
+        `;
+    }
+
+    const container = document.getElementById('teacherRecordsContainer');
+    if (!container) return;
+
+    if (records.length === 0) {
+        container.innerHTML = `<div class="tr-empty">
+            <i class="fas fa-id-card-alt" style="font-size:3rem;color:var(--text-muted);margin-bottom:1rem;"></i>
+            <h3>No teacher records yet</h3>
+            <p>Add teachers manually or import from an Excel file.</p>
+        </div>`;
+        return;
+    }
+
+    const pg = getPaginatedItems(records, 'teacherrecords', 20);
+    const avatarColors = ['#f59e0b', '#10b981', '#3b82f6', '#8b5cf6', '#ef4444', '#ec4899', '#06b6d4', '#f97316'];
+
+    const desigColors = {
+        'Assistant Teacher': { bg: 'rgba(16,185,129,0.15)', color: '#10b981' },
+        'Senior Teacher': { bg: 'rgba(59,130,246,0.15)', color: '#3b82f6' },
+        'Head Master': { bg: 'rgba(245,158,11,0.15)', color: '#f59e0b' },
+        'Guest Teacher': { bg: 'rgba(139,92,246,0.15)', color: '#8b5cf6' },
+        'Contract Teacher': { bg: 'rgba(249,115,22,0.15)', color: '#f97316' },
+        'PET': { bg: 'rgba(6,182,212,0.15)', color: '#06b6d4' },
+    };
+
+    container.innerHTML = `
+    <div class="tr-table-wrapper">
+        <table class="tr-table">
+            <thead>
+                <tr>
+                    <th>#</th>
+                    <th>Name</th>
+                    <th>School</th>
+                    <th>Designation</th>
+                    <th>Subject</th>
+                    <th>Classes</th>
+                    <th>Phone</th>
+                    <th>Block / Cluster</th>
+                    <th>Qualification</th>
+                    <th>Exp</th>
+                    <th>NID</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                ${pg.items.map((r, i) => {
+                    const initials = r.name ? r.name.split(' ').map(w => w[0]).join('').substring(0, 2).toUpperCase() : '?';
+                    const avColor = avatarColors[(pg.start - 1 + i) % avatarColors.length];
+                    const dc = desigColors[r.designation] || { bg: 'rgba(107,114,128,0.15)', color: '#6b7280' };
+                    return `<tr>
+                        <td>${pg.start + i - 1 + 1}</td>
+                        <td>
+                            <div class="tr-name-cell">
+                                <div class="tr-avatar" style="background:${avColor}">${initials}</div>
+                                <div>
+                                    <strong>${escapeHtml(r.name || '')}</strong>
+                                    ${r.gender ? `<span class="tr-gender-badge">${r.gender === 'Male' ? '♂' : r.gender === 'Female' ? '♀' : '⚧'}</span>` : ''}
+                                    ${r.email ? `<div class="tr-sub-info">${escapeHtml(r.email)}</div>` : ''}
+                                </div>
+                            </div>
+                        </td>
+                        <td>${escapeHtml(r.school || '—')}</td>
+                        <td><span class="tr-desig-badge" style="background:${dc.bg};color:${dc.color}">${escapeHtml(r.designation || '—')}</span></td>
+                        <td>${escapeHtml(r.subject || '—')}</td>
+                        <td>${escapeHtml(r.classesTaught || '—')}</td>
+                        <td>${r.phone ? `<a href="tel:${r.phone}">${escapeHtml(r.phone)}</a>` : '—'}</td>
+                        <td>${escapeHtml([r.block, r.cluster].filter(Boolean).join(' / ') || '—')}</td>
+                        <td>${escapeHtml(r.qualification || '—')}</td>
+                        <td>${r.experience ? r.experience + 'y' : '—'}</td>
+                        <td>${escapeHtml(r.nid || '—')}</td>
+                        <td class="tr-actions-cell">
+                            ${r.phone ? `<button class="tr-action-btn" onclick="window.open('tel:${r.phone.replace(/[^\d+\-\s()]/g, '')}')" title="Call"><i class="fas fa-phone"></i></button>` : ''}
+                            <button class="tr-action-btn" onclick="openTeacherRecordModal('${r.id}')" title="Edit"><i class="fas fa-pen"></i></button>
+                            <button class="tr-action-btn tr-del" onclick="deleteTeacherRecord('${r.id}')" title="Delete"><i class="fas fa-trash"></i></button>
+                        </td>
+                    </tr>`;
+                }).join('')}
+            </tbody>
+        </table>
+    </div>` + renderPaginationControls('teacherrecords', pg, 'renderTeacherRecords');
+}
+
+function openTeacherRecordModal(id) {
+    const form = document.getElementById('trForm');
+    form.reset();
+    document.getElementById('trId').value = '';
+    document.getElementById('trModalTitle').innerHTML = '<i class="fas fa-id-card-alt"></i> Add Teacher';
+    _trPopulateFilterDropdowns();
+
+    if (id) {
+        const records = DB.get('teacherRecords') || [];
+        const r = records.find(x => x.id === id);
+        if (r) {
+            document.getElementById('trModalTitle').innerHTML = '<i class="fas fa-id-card-alt"></i> Edit Teacher';
+            document.getElementById('trId').value = r.id;
+            document.getElementById('trName').value = r.name || '';
+            document.getElementById('trGender').value = r.gender || '';
+            document.getElementById('trSchool').value = r.school || '';
+            document.getElementById('trDesignation').value = r.designation || '';
+            document.getElementById('trSubject').value = r.subject || '';
+            document.getElementById('trClassesTaught').value = r.classesTaught || '';
+            document.getElementById('trPhone').value = r.phone || '';
+            document.getElementById('trEmail').value = r.email || '';
+            document.getElementById('trBlock').value = r.block || '';
+            document.getElementById('trCluster').value = r.cluster || '';
+            document.getElementById('trQualification').value = r.qualification || '';
+            document.getElementById('trExperience').value = r.experience || '';
+            document.getElementById('trJoinDate').value = r.joinDate || '';
+            document.getElementById('trNID').value = r.nid || '';
+            document.getElementById('trNotes').value = r.notes || '';
+        }
+    }
+
+    openModal('teacherRecordModal');
+}
+
+function saveTeacherRecord(e) {
+    e.preventDefault();
+    const records = DB.get('teacherRecords') || [];
+    const id = document.getElementById('trId').value;
+
+    const record = {
+        id: id || DB.generateId(),
+        name: document.getElementById('trName').value.trim(),
+        gender: document.getElementById('trGender').value,
+        school: document.getElementById('trSchool').value.trim(),
+        designation: document.getElementById('trDesignation').value,
+        subject: document.getElementById('trSubject').value.trim(),
+        classesTaught: document.getElementById('trClassesTaught').value.trim(),
+        phone: document.getElementById('trPhone').value.trim(),
+        email: document.getElementById('trEmail').value.trim(),
+        block: document.getElementById('trBlock').value.trim(),
+        cluster: document.getElementById('trCluster').value.trim(),
+        qualification: document.getElementById('trQualification').value.trim(),
+        experience: document.getElementById('trExperience').value,
+        joinDate: document.getElementById('trJoinDate').value,
+        nid: document.getElementById('trNID').value.trim(),
+        notes: document.getElementById('trNotes').value.trim(),
+        createdAt: id ? (records.find(r => r.id === id) || {}).createdAt || new Date().toISOString() : new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+    };
+
+    if (id) {
+        const idx = records.findIndex(r => r.id === id);
+        if (idx !== -1) records[idx] = record;
+    } else {
+        records.push(record);
+    }
+
+    DB.set('teacherRecords', records);
+    closeModal('teacherRecordModal');
+    renderTeacherRecords();
+    showToast(id ? '✏️ Teacher updated' : '✅ Teacher added!');
+}
+
+function deleteTeacherRecord(id) {
+    if (!confirm('Delete this teacher record?')) return;
+    let records = DB.get('teacherRecords') || [];
+    records = records.filter(r => r.id !== id);
+    DB.set('teacherRecords', records);
+    renderTeacherRecords();
+    showToast('🗑️ Teacher record deleted');
+}
+
+function bulkDeleteTeacherRecords() {
+    const records = DB.get('teacherRecords') || [];
+    const schoolF = document.getElementById('trSchoolFilter')?.value || 'all';
+    const desigF = document.getElementById('trDesignationFilter')?.value || 'all';
+    const subjectF = document.getElementById('trSubjectFilter')?.value || 'all';
+    const clusterF = document.getElementById('trClusterFilter')?.value || 'all';
+    const blockF = document.getElementById('trBlockFilter')?.value || 'all';
+    const search = (document.getElementById('trSearchInput')?.value || '').toLowerCase().trim();
+    const isFiltered = schoolF !== 'all' || desigF !== 'all' || subjectF !== 'all' || clusterF !== 'all' || blockF !== 'all' || search;
+
+    let toDelete = [...records];
+    if (schoolF !== 'all') toDelete = toDelete.filter(r => r.school === schoolF);
+    if (desigF !== 'all') toDelete = toDelete.filter(r => r.designation === desigF);
+    if (subjectF !== 'all') toDelete = toDelete.filter(r => r.subject === subjectF);
+    if (clusterF !== 'all') toDelete = toDelete.filter(r => r.cluster === clusterF);
+    if (blockF !== 'all') toDelete = toDelete.filter(r => r.block === blockF);
+    if (search) {
+        toDelete = toDelete.filter(r =>
+            (r.name || '').toLowerCase().includes(search) ||
+            (r.school || '').toLowerCase().includes(search) ||
+            (r.nid || '').toLowerCase().includes(search)
+        );
+    }
+
+    if (toDelete.length === 0) { showToast('No matching records to delete', 'info'); return; }
+
+    // Build a descriptive label showing active filters
+    const filterParts = [];
+    if (schoolF !== 'all') filterParts.push(`School: ${schoolF}`);
+    if (desigF !== 'all') filterParts.push(`Designation: ${desigF}`);
+    if (subjectF !== 'all') filterParts.push(`Subject: ${subjectF}`);
+    if (clusterF !== 'all') filterParts.push(`Cluster: ${clusterF}`);
+    if (blockF !== 'all') filterParts.push(`Block: ${blockF}`);
+    if (search) filterParts.push(`Search: "${search}"`);
+
+    let label;
+    if (isFiltered) {
+        label = `Delete ${toDelete.length} teacher records matching:\n\n  ${filterParts.join('\n  ')}\n\n(${records.length - toDelete.length} records will be kept)`;
+    } else {
+        label = `Delete ALL ${toDelete.length} teacher records?`;
+    }
+    if (!confirm(label + '\n\nThis cannot be undone.')) return;
+
+    const deleteIds = new Set(toDelete.map(r => r.id));
+    const remaining = records.filter(r => !deleteIds.has(r.id));
+    DB.set('teacherRecords', remaining);
+    _pageState.teacherrecords = 1;
+    renderTeacherRecords();
+    showToast(`🗑️ ${toDelete.length} teacher records deleted`);
+}
+
+function importTeacherRecordsExcel(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+
+    if (typeof XLSX === 'undefined') {
+        showToast('Excel library not loaded. Please refresh and try again.', 'error');
+        return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = function(e) {
+        try {
+            const data = new Uint8Array(e.target.result);
+            const wb = XLSX.read(data, { type: 'array', cellDates: true });
+            const ws = wb.Sheets[wb.SheetNames[0]];
+            if (!ws) { showToast('No data found in Excel file', 'error'); return; }
+
+            const rows = XLSX.utils.sheet_to_json(ws, { defval: '' });
+            if (rows.length === 0) { showToast('No rows found in Excel file', 'error'); return; }
+
+            // Auto-map columns — try common header names
+            const colMap = {
+                name: null, gender: null, school: null, designation: null,
+                subject: null, classesTaught: null, phone: null, email: null,
+                block: null, cluster: null, qualification: null, experience: null,
+                joinDate: null, nid: null, notes: null
+            };
+
+            const headers = Object.keys(rows[0]);
+            const matchPatterns = {
+                name: /^(teacher\s*)?name|शिक्षक\s*का\s*नाम|full\s*name/i,
+                gender: /^gender|लिंग|sex/i,
+                school: /^school|विद्यालय|स्कूल|institution/i,
+                designation: /^designation|पदनाम|post|position/i,
+                subject: /^subject|विषय|teaching\s*subject/i,
+                classesTaught: /^class|कक्षा|classes?\s*taught|grade/i,
+                phone: /^phone|mobile|मोबाइल|contact\s*no|tel/i,
+                email: /^email|ई-?मेल|e\s*-?\s*mail/i,
+                block: /^block|ब्लॉक|district/i,
+                cluster: /^cluster|संकुल|zone/i,
+                qualification: /^quali|योग्यता|education|degree/i,
+                experience: /^exp|अनुभव|years?\s*(of\s*)?exp/i,
+                joinDate: /^(date\s*(of\s*)?)?join|नियुक्ति|doj|joining/i,
+                nid: /^(n\.?)?id|employee\s*id|emp\s*id|कर्मचारी\s*आई/i,
+                notes: /^note|remarks|टिप्पणी/i
+            };
+
+            headers.forEach(h => {
+                for (const [field, pattern] of Object.entries(matchPatterns)) {
+                    if (!colMap[field] && pattern.test(h)) {
+                        colMap[field] = h;
+                        break;
+                    }
+                }
+            });
+
+            // If name not found, try first text column
+            if (!colMap.name && headers.length > 0) {
+                colMap.name = headers[0];
+            }
+
+            const records = DB.get('teacherRecords') || [];
+            let added = 0, skipped = 0;
+
+            rows.forEach(row => {
+                const name = String(row[colMap.name] || '').trim();
+                if (!name || name.length < 2) { skipped++; return; }
+
+                // Check for duplicates by name + school
+                const school = colMap.school ? String(row[colMap.school] || '').trim() : '';
+                const isDup = records.some(r =>
+                    r.name.toLowerCase() === name.toLowerCase() &&
+                    (r.school || '').toLowerCase() === school.toLowerCase()
+                );
+                if (isDup) { skipped++; return; }
+
+                const getVal = (field) => colMap[field] ? String(row[colMap[field]] || '').trim() : '';
+
+                let joinDate = '';
+                if (colMap.joinDate) {
+                    const raw = row[colMap.joinDate];
+                    if (raw instanceof Date) {
+                        joinDate = raw.toISOString().split('T')[0];
+                    } else if (typeof raw === 'string' && raw.trim()) {
+                        const d = new Date(raw.trim());
+                        if (!isNaN(d.getTime())) joinDate = d.toISOString().split('T')[0];
+                    }
+                }
+
+                records.push({
+                    id: DB.generateId(),
+                    name: name,
+                    gender: getVal('gender'),
+                    school: school,
+                    designation: getVal('designation'),
+                    subject: getVal('subject'),
+                    classesTaught: getVal('classesTaught'),
+                    phone: getVal('phone'),
+                    email: getVal('email'),
+                    block: getVal('block'),
+                    cluster: getVal('cluster'),
+                    qualification: getVal('qualification'),
+                    experience: getVal('experience'),
+                    joinDate: joinDate,
+                    nid: getVal('nid'),
+                    notes: getVal('notes'),
+                    createdAt: new Date().toISOString(),
+                    updatedAt: new Date().toISOString(),
+                    source: 'excel'
+                });
+                added++;
+            });
+
+            DB.set('teacherRecords', records);
+            renderTeacherRecords();
+            showToast(`📥 Imported ${added} teachers${skipped ? ` (${skipped} skipped)` : ''}`, 'success', 5000);
+        } catch (err) {
+            console.error('Teacher Excel import error:', err);
+            showToast('Error importing Excel file: ' + err.message, 'error');
+        }
+    };
+    reader.readAsArrayBuffer(file);
+    event.target.value = '';
+}
+
+function exportTeacherRecordsExcel() {
+    const records = DB.get('teacherRecords') || [];
+    if (records.length === 0) { showToast('No teacher records to export', 'info'); return; }
+    if (typeof XLSX === 'undefined') { showToast('Excel library not loaded', 'error'); return; }
+
+    const header = ['Name', 'Gender', 'School', 'Designation', 'Subject', 'Classes Taught', 'Phone', 'Email', 'Block', 'Cluster', 'Qualification', 'Experience (Years)', 'Date of Joining', 'NID / Employee ID', 'Notes'];
+    const dataRows = [header];
+    records.sort((a, b) => (a.school || '').localeCompare(b.school || '') || (a.name || '').localeCompare(b.name || ''));
+    records.forEach(r => {
+        dataRows.push([
+            r.name || '', r.gender || '', r.school || '', r.designation || '',
+            r.subject || '', r.classesTaught || '', r.phone || '', r.email || '',
+            r.block || '', r.cluster || '', r.qualification || '', r.experience || '',
+            r.joinDate || '', r.nid || '', r.notes || ''
+        ]);
+    });
+
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.aoa_to_sheet(dataRows);
+    ws['!cols'] = header.map(() => ({ wch: 18 }));
+    XLSX.utils.book_append_sheet(wb, ws, 'Teacher Records');
+    XLSX.writeFile(wb, `Teacher_Records_${new Date().toISOString().split('T')[0]}.xlsx`);
+    showToast('📥 Exported teacher records to Excel');
 }
 
 // ===== MARAI TEACHER TRACKING =====
@@ -11684,6 +13411,17 @@ function exportAllDataToExcel() {
         XLSX.utils.book_append_sheet(wb, ws, 'Contacts');
     }
 
+    const teacherRecords = DB.get('teacherRecords') || [];
+    if (teacherRecords.length > 0) {
+        const ws = XLSX.utils.json_to_sheet(teacherRecords.map(r => ({
+            Name: r.name, Gender: r.gender || '', School: r.school || '', Designation: r.designation || '',
+            Subject: r.subject || '', Classes: r.classesTaught || '', Phone: r.phone || '', Email: r.email || '',
+            Block: r.block || '', Cluster: r.cluster || '', Qualification: r.qualification || '',
+            Experience: r.experience || '', 'Date of Joining': r.joinDate || '', NID: r.nid || '', Notes: r.notes || ''
+        })));
+        XLSX.utils.book_append_sheet(wb, ws, 'Teacher Records');
+    }
+
     // Summary sheet
     const summaryData = [
         { Metric: 'Total Visits', Value: visits.length },
@@ -11859,7 +13597,9 @@ function renderSettingsDataStats() {
         { key: 'contacts', label: 'Contacts', icon: 'fa-address-book', color: '#6366f1' },
         { key: 'plannerTasks', label: 'Planner Tasks', icon: 'fa-calendar-alt', color: '#14b8a6' },
         { key: 'meetings', label: 'Meetings', icon: 'fa-handshake', color: '#a855f7' },
-        { key: 'growthAssessments', label: 'Assessments', icon: 'fa-seedling', color: '#16a34a' }
+        { key: 'growthAssessments', label: 'Assessments', icon: 'fa-seedling', color: '#16a34a' },
+        { key: 'teacherRecords', label: 'Teacher Records', icon: 'fa-id-card-alt', color: '#0ea5e9' },
+        { key: 'schoolStudentRecords', label: 'Student Records', icon: 'fa-user-graduate', color: '#f43f5e' }
     ];
 
     let totalRecords = 0;

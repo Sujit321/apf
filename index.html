@@ -220,6 +220,9 @@
             <a href="#" class="nav-item" data-section="growth" id="nav-growth" data-tooltip="Growth Framework">
                 <i class="fas fa-seedling"></i><span>Growth Framework</span>
             </a>
+            <a href="#" class="nav-item" data-section="teacherrecords" id="nav-teacherrecords" data-tooltip="Teachers Record">
+                <i class="fas fa-id-card-alt"></i><span>Teachers Record</span>
+            </a>
             <a href="#" class="nav-item" data-section="contacts" id="nav-contacts" data-tooltip="Contacts">
                 <i class="fas fa-address-book"></i><span>Contacts</span>
             </a>
@@ -444,6 +447,9 @@
                     <p class="section-subtitle">Manage workshops, sessions, and training programs</p>
                 </div>
                 <div class="header-actions">
+                    <button class="btn btn-outline" onclick="showTrainingAttendanceReport()">
+                        <i class="fas fa-chart-bar"></i> Attendance Report
+                    </button>
                     <button class="btn btn-primary" onclick="openTrainingModal()">
                         <i class="fas fa-plus"></i> New Training
                     </button>
@@ -462,6 +468,9 @@
                         oninput="_pageState.trainings=1;renderTrainings()">
                 </div>
             </div>
+
+            <!-- Attendance Report (hidden by default, toggled by button) -->
+            <div id="trainingAttendanceReport" style="display:none;"></div>
 
             <div id="trainingsContainer" class="trainings-grid">
                 <div class="empty-state">
@@ -2082,6 +2091,54 @@
             <div id="contactsContainer"></div>
         </section>
 
+        <!-- ==================== TEACHERS RECORD SECTION ==================== -->
+        <section class="content-section" id="section-teacherrecords">
+            <div class="section-header">
+                <div>
+                    <h1><i class="fas fa-id-card-alt"></i> Teachers Record</h1>
+                    <p class="section-subtitle">Maintain a complete database of teachers — add, edit, import from Excel</p>
+                </div>
+                <div class="header-actions">
+                    <label class="btn btn-outline" title="Import teachers from Excel file">
+                        <i class="fas fa-file-excel"></i> Import Excel
+                        <input type="file" accept=".xlsx,.xls,.csv" onchange="importTeacherRecordsExcel(event)" style="display:none">
+                    </label>
+                    <button class="btn btn-outline" onclick="exportTeacherRecordsExcel()" title="Export all teachers to Excel">
+                        <i class="fas fa-download"></i> Export
+                    </button>
+                    <button class="btn btn-primary" onclick="openTeacherRecordModal()">
+                        <i class="fas fa-plus"></i> Add Teacher
+                    </button>
+                </div>
+            </div>
+            <!-- Filter & Search Bar -->
+            <div class="tr-filter-bar">
+                <div class="tr-filter-row">
+                    <select id="trSchoolFilter" class="filter-select" onchange="_pageState.teacherrecords=1;renderTeacherRecords()">
+                        <option value="all">🏫 All Schools</option>
+                    </select>
+                    <select id="trDesignationFilter" class="filter-select" onchange="_pageState.teacherrecords=1;renderTeacherRecords()">
+                        <option value="all">👤 All Designations</option>
+                    </select>
+                    <select id="trSubjectFilter" class="filter-select" onchange="_pageState.teacherrecords=1;renderTeacherRecords()">
+                        <option value="all">📖 All Subjects</option>
+                    </select>
+                    <select id="trClusterFilter" class="filter-select" onchange="_pageState.teacherrecords=1;renderTeacherRecords()">
+                        <option value="all">📍 All Clusters</option>
+                    </select>
+                    <select id="trBlockFilter" class="filter-select" onchange="_pageState.teacherrecords=1;renderTeacherRecords()">
+                        <option value="all">🏘️ All Blocks</option>
+                    </select>
+                    <input type="text" id="trSearchInput" class="filter-input" placeholder="🔍 Search teachers..." oninput="_pageState.teacherrecords=1;renderTeacherRecords()" style="flex:1;min-width:180px;">
+                    <button class="btn btn-danger-outline btn-sm" onclick="bulkDeleteTeacherRecords()" title="Delete filtered teachers">
+                        <i class="fas fa-trash-alt"></i> Bulk Delete
+                    </button>
+                </div>
+            </div>
+            <div class="tr-stats-bar" id="trStatsBar"></div>
+            <div id="teacherRecordsContainer"></div>
+        </section>
+
         <!-- ==================== LIVE SYNC SECTION ==================== -->
         <section class="content-section" id="section-livesync">
             <div class="section-header">
@@ -3177,6 +3234,117 @@ function getOrCreateFolder() {
                     <button type="submit" class="btn btn-primary">Save Training</button>
                 </div>
             </form>
+        </div>
+    </div>
+
+    <!-- Training Attendance Modal -->
+    <div class="modal-overlay" id="trainingAttendanceModal">
+        <div class="modal" style="max-width:780px;">
+            <div class="modal-header">
+                <h2 id="attModalTitle"><i class="fas fa-clipboard-list"></i> Attendance</h2>
+                <button class="modal-close" onclick="closeModal('trainingAttendanceModal')"><i class="fas fa-times"></i></button>
+            </div>
+            <div class="modal-body">
+                <input type="hidden" id="attTrainingId">
+                <div id="attTrainingInfo" style="margin-bottom:16px;"></div>
+
+                <!-- Tabs: Teacher Records / Manual Add -->
+                <div class="att-tabs">
+                    <button class="att-tab active" id="attTabRecords" onclick="switchAttTab('records')"><i class="fas fa-users"></i> Teacher Records</button>
+                    <button class="att-tab" id="attTabManual" onclick="switchAttTab('manual')"><i class="fas fa-user-plus"></i> Manual Add</button>
+                    <button class="att-tab" id="attTabImport" onclick="switchAttTab('import')"><i class="fas fa-file-excel"></i> Import Excel</button>
+                </div>
+
+                <!-- Tab 1: Teacher Records with checkboxes -->
+                <div class="att-tab-content" id="attPanelRecords">
+                    <div class="att-rec-toolbar">
+                        <input type="text" id="attRecSearch" class="att-input" placeholder="🔍 Search teachers..." oninput="_attRenderRecordCheckboxes()" style="flex:1;">
+                        <select id="attRecSchoolFilter" class="att-input" onchange="_attRenderRecordCheckboxes()" style="flex:1;">
+                            <option value="all">🏫 All Schools</option>
+                        </select>
+                        <select id="attRecClusterFilter" class="att-input" onchange="_attRenderRecordCheckboxes()" style="flex:1;">
+                            <option value="all">📍 All Clusters</option>
+                        </select>
+                        <button class="btn btn-sm btn-primary" onclick="attAddCheckedTeachers()" style="white-space:nowrap;"><i class="fas fa-check-double"></i> Add Selected</button>
+                    </div>
+                    <div class="att-rec-actions">
+                        <label class="att-check-all-label"><input type="checkbox" id="attCheckAll" onchange="attToggleAll(this.checked)"> <strong>Select All</strong></label>
+                        <span id="attRecSelectedCount" class="att-rec-count"></span>
+                    </div>
+                    <div class="att-rec-list" id="attRecList">
+                        <!-- Filled by JS -->
+                    </div>
+                </div>
+
+                <!-- Tab 2: Manual Add -->
+                <div class="att-tab-content" id="attPanelManual" style="display:none;">
+                    <div class="att-add-bar">
+                        <div class="att-add-row">
+                            <input type="text" id="attTeacherName" list="attTeacherSuggest" placeholder="Teacher Name *" class="att-input" style="flex:2;">
+                            <datalist id="attTeacherSuggest"></datalist>
+                            <input type="text" id="attTeacherSchool" list="attSchoolSuggest" placeholder="School" class="att-input" style="flex:2;">
+                            <datalist id="attSchoolSuggest"></datalist>
+                            <input type="text" id="attTeacherPhone" placeholder="Phone" class="att-input" style="flex:1;">
+                        </div>
+                        <div class="att-add-row" style="margin-top:8px;">
+                            <select id="attTeacherDesignation" class="att-input" style="flex:1;">
+                                <option value="">Designation</option>
+                                <option value="Assistant Teacher">Assistant Teacher</option>
+                                <option value="Senior Teacher">Senior Teacher</option>
+                                <option value="Head Master">Head Master</option>
+                                <option value="Guest Teacher">Guest Teacher</option>
+                                <option value="Contract Teacher">Contract Teacher</option>
+                                <option value="PET">PET</option>
+                            </select>
+                            <input type="text" id="attTeacherCluster" list="attClusterSuggest" placeholder="Cluster" class="att-input" style="flex:1;">
+                            <datalist id="attClusterSuggest"></datalist>
+                            <input type="text" id="attTeacherBlock" list="attBlockSuggest" placeholder="Block" class="att-input" style="flex:1;">
+                            <datalist id="attBlockSuggest"></datalist>
+                            <button class="btn btn-primary btn-sm" onclick="addTrainingAttendee()" style="white-space:nowrap;">
+                                <i class="fas fa-plus"></i> Add
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Tab 3: Import Excel -->
+                <div class="att-tab-content" id="attPanelImport" style="display:none;">
+                    <div class="att-add-bar" style="text-align:center;padding:24px;">
+                        <i class="fas fa-file-excel" style="font-size:2rem;color:var(--accent);margin-bottom:12px;"></i>
+                        <p style="margin-bottom:12px;color:var(--text-secondary);">Import attendance from an Excel file. The file should have a <strong>Name</strong> column (required) and optionally School, Phone, Designation, Cluster, Block columns.</p>
+                        <button class="btn btn-outline" onclick="importAttendanceExcel()"><i class="fas fa-upload"></i> Choose Excel File</button>
+                        <input type="file" id="attExcelInput" accept=".xlsx,.xls,.csv" style="display:none;" onchange="processAttendanceExcel(event)">
+                    </div>
+                </div>
+
+                <!-- Attendance list (always visible below tabs) -->
+                <div class="att-summary" id="attSummary"></div>
+                <div class="att-list-wrapper">
+                    <table class="att-table" id="attTable">
+                        <thead>
+                            <tr>
+                                <th>#</th>
+                                <th>Name</th>
+                                <th>School</th>
+                                <th>Designation</th>
+                                <th>Phone</th>
+                                <th>Cluster / Block</th>
+                                <th>Action</th>
+                            </tr>
+                        </thead>
+                        <tbody id="attTableBody"></tbody>
+                    </table>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <span id="attCount" style="color:var(--text-secondary);font-size:13px;"></span>
+                <div style="display:flex;gap:8px;">
+                    <button class="btn btn-outline" onclick="exportAttendanceExcel()" title="Export attendance to Excel">
+                        <i class="fas fa-download"></i> Export
+                    </button>
+                    <button class="btn btn-ghost" onclick="closeModal('trainingAttendanceModal')">Close</button>
+                </div>
+            </div>
         </div>
     </div>
 
@@ -4404,6 +4572,121 @@ function getOrCreateFolder() {
                 <button class="btn btn-ghost" onclick="closeModal('quickCaptureModal')">Cancel</button>
                 <button class="btn btn-primary" onclick="saveQuickCapture()"><i class="fas fa-check"></i> Save Observation</button>
             </div>
+        </div>
+    </div>
+
+    <!-- Teacher Record Modal -->
+    <div class="modal-overlay" id="teacherRecordModal">
+        <div class="modal" style="max-width:680px;">
+            <div class="modal-header">
+                <h2 id="trModalTitle"><i class="fas fa-id-card-alt"></i> Add Teacher</h2>
+                <button class="modal-close" onclick="closeModal('teacherRecordModal')"><i class="fas fa-times"></i></button>
+            </div>
+            <form id="trForm" onsubmit="saveTeacherRecord(event)">
+                <div class="modal-body">
+                    <input type="hidden" id="trId">
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="trName">Teacher Name *</label>
+                            <input type="text" id="trName" required placeholder="e.g. Smt. Lakshmi">
+                        </div>
+                        <div class="form-group">
+                            <label for="trGender">Gender</label>
+                            <select id="trGender">
+                                <option value="">Select</option>
+                                <option value="Male">Male</option>
+                                <option value="Female">Female</option>
+                                <option value="Other">Other</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="trSchool">School *</label>
+                            <input type="text" id="trSchool" required placeholder="e.g. GPS Anekal" list="trSchoolList">
+                            <datalist id="trSchoolList"></datalist>
+                        </div>
+                        <div class="form-group">
+                            <label for="trDesignation">Designation</label>
+                            <select id="trDesignation">
+                                <option value="">Select</option>
+                                <option value="Assistant Teacher">Assistant Teacher</option>
+                                <option value="Senior Teacher">Senior Teacher</option>
+                                <option value="Head Master">Head Master</option>
+                                <option value="Guest Teacher">Guest Teacher</option>
+                                <option value="Contract Teacher">Contract Teacher</option>
+                                <option value="PET">PET</option>
+                                <option value="Other">Other</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="trSubject">Subject</label>
+                            <input type="text" id="trSubject" placeholder="e.g. Mathematics" list="trSubjectList">
+                            <datalist id="trSubjectList">
+                                <option value="Language"><option value="Hindi"><option value="English">
+                                <option value="Mathematics"><option value="EVS"><option value="Science">
+                                <option value="Social Science"><option value="Kannada"><option value="All Subjects">
+                            </datalist>
+                        </div>
+                        <div class="form-group">
+                            <label for="trClassesTaught">Classes Taught</label>
+                            <input type="text" id="trClassesTaught" placeholder="e.g. 3, 4, 5">
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="trPhone">Phone</label>
+                            <input type="tel" id="trPhone" placeholder="e.g. 9876543210">
+                        </div>
+                        <div class="form-group">
+                            <label for="trEmail">Email</label>
+                            <input type="email" id="trEmail" placeholder="e.g. name@email.com">
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="trBlock">Block</label>
+                            <input type="text" id="trBlock" placeholder="e.g. Anekal" list="trBlockList">
+                            <datalist id="trBlockList"></datalist>
+                        </div>
+                        <div class="form-group">
+                            <label for="trCluster">Cluster</label>
+                            <input type="text" id="trCluster" placeholder="e.g. Anekal Cluster" list="trClusterList">
+                            <datalist id="trClusterList"></datalist>
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="trQualification">Qualification</label>
+                            <input type="text" id="trQualification" placeholder="e.g. B.Ed, D.Ed">
+                        </div>
+                        <div class="form-group">
+                            <label for="trExperience">Experience (years)</label>
+                            <input type="number" id="trExperience" min="0" max="50" placeholder="e.g. 12">
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="trJoinDate">Date of Joining</label>
+                            <input type="date" id="trJoinDate">
+                        </div>
+                        <div class="form-group">
+                            <label for="trNID">NID / Employee ID</label>
+                            <input type="text" id="trNID" placeholder="e.g. 113727">
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label for="trNotes">Notes</label>
+                        <textarea id="trNotes" rows="2" placeholder="Any additional details about this teacher..."></textarea>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-ghost" onclick="closeModal('teacherRecordModal')">Cancel</button>
+                    <button type="submit" class="btn btn-primary"><i class="fas fa-save"></i> Save Teacher</button>
+                </div>
+            </form>
         </div>
     </div>
 
