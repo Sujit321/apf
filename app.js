@@ -14,6 +14,47 @@ window.addEventListener('unhandledrejection', function(e) {
     console.error('[APF] Unhandled promise rejection:', e.reason);
 });
 
+// ===== License Key Protection =====
+const LICENSE_KEY_HASH = '8933892060b43134261822deab4afbcdce7148fca4f55f149cf0dfb6af034ab7'; // SHA-256 encrypted
+const LICENSE_STORAGE_KEY = 'apf_license_activated';
+
+async function hashLicenseKey(key) {
+    const encoder = new TextEncoder();
+    const data = encoder.encode(key);
+    const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+    const hashArray = Array.from(new Uint8Array(hashBuffer));
+    return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+function isLicenseActivated() {
+    return localStorage.getItem(LICENSE_STORAGE_KEY) === LICENSE_KEY_HASH;
+}
+
+async function handleLicenseSubmit(e) {
+    e.preventDefault();
+    const input = document.getElementById('licenseKeyInput');
+    const errorEl = document.getElementById('licenseError');
+    const key = input.value.trim();
+    if (!key) { errorEl.textContent = 'Please enter a license key'; return; }
+    const hash = await hashLicenseKey(key);
+    if (hash === LICENSE_KEY_HASH) {
+        localStorage.setItem(LICENSE_STORAGE_KEY, LICENSE_KEY_HASH);
+        document.getElementById('licenseScreen').style.display = 'none';
+        showToast('License activated successfully! \u2705', 'success');
+        // Proceed with normal app boot
+        proceedAfterLicense();
+    } else {
+        errorEl.textContent = 'Invalid license key';
+        input.value = '';
+        input.focus();
+        // Shake animation
+        const container = document.querySelector('.license-container');
+        container.classList.remove('lock-shake');
+        void container.offsetWidth;
+        container.classList.add('lock-shake');
+    }
+}
+
 // ===== Data Layer (In-Memory Only — No Browser Storage) =====
 const DB = {
     _store: {},
@@ -422,7 +463,7 @@ const SessionPersist = {
 // Unsaved changes tracking
 let hasUnsavedChanges = false;
 let lastEncSaveTime = null;
-const ENCRYPTED_DATA_KEYS = ['visits', 'trainings', 'observations', 'resources', 'notes', 'ideas', 'reflections', 'contacts', 'plannerTasks', 'goalTargets', 'followupStatus', 'worklog', 'userProfile', 'meetings', 'growthAssessments', 'growthActionPlans'];
+const ENCRYPTED_DATA_KEYS = ['visits', 'trainings', 'observations', 'resources', 'notes', 'ideas', 'reflections', 'contacts', 'plannerTasks', 'goalTargets', 'followupStatus', 'worklog', 'userProfile', 'meetings', 'growthAssessments', 'growthActionPlans', 'maraiTracking', 'schoolWork', 'visitPlanEntries', 'visitPlanDropdowns', 'feedbackReports'];
 
 // ===== Google Drive Auto-Backup (via Google Apps Script) =====
 const GoogleDriveSync = {
@@ -1178,8 +1219,22 @@ async function handlePasswordSubmit(e) {
         _sessionPassword = password;
         SessionPersist.save(password);
         hideLockScreen();
-        showToast('Password set! Your dashboard is now protected 🔒');
-        showWelcomeScreen();
+
+        if (appInitialized) {
+            // Password change — app already running, re-save data with new password
+            showToast('Password changed successfully! 🔒', 'success');
+            markUnsavedChanges();
+            // Re-encrypt cached data + linked file with the new password
+            try { await EncryptedCache.save(password); } catch(e) { console.error('Re-encrypt cache failed:', e); }
+            if (FileLink.isLinked()) {
+                try { await FileLink.writeToFile(password); } catch(e) { console.error('Re-encrypt file failed:', e); }
+            }
+            clearUnsavedChanges();
+        } else {
+            // First-time setup — show welcome screen
+            showToast('Password set! Your dashboard is now protected 🔒');
+            showWelcomeScreen();
+        }
     } else {
         const hash = await PasswordManager.hashPassword(password);
         if (hash === PasswordManager.getStoredHash()) {
@@ -1336,26 +1391,15 @@ async function openPasswordSetup() {
 }
 
 async function openPasswordChange() {
-    const currentPwd = prompt('Enter your current password:');
-    if (!currentPwd) return;
-    const hash = await PasswordManager.hashPassword(currentPwd);
-    if (hash !== PasswordManager.getStoredHash()) {
-        showToast('Current password is incorrect', 'error');
-        return;
-    }
+    // User is already authenticated via _sessionPassword, go directly to setup
     showLockScreen('setup');
 }
 
 async function removePassword() {
-    const currentPwd = prompt('Enter your current password to remove protection:');
-    if (!currentPwd) return;
-    const hash = await PasswordManager.hashPassword(currentPwd);
-    if (hash !== PasswordManager.getStoredHash()) {
-        showToast('Incorrect password', 'error');
-        return;
-    }
+    if (!confirm('Remove password protection? Your data will no longer be encrypted.')) return;
     PasswordManager.removeHash();
     SessionPersist.clear();
+    _sessionPassword = null;
     if (autoLockTimer) clearTimeout(autoLockTimer);
     updatePasswordUI();
     updateSidebarLockBtn();
@@ -1460,6 +1504,9 @@ function refreshSection(section) {
         case 'ideas': renderIdeas(); break;
         case 'schools': renderSchoolProfiles(); break;
         case 'teachers': renderTeacherGrowth(); break;
+        case 'marai': renderMaraiTracking(); break;
+        case 'schoolwork': renderSchoolWork(); break;
+        case 'visitplan': renderVisitPlan(); break;
         case 'reflections': initReflectionMonthFilter(); renderReflections(); break;
         case 'contacts': renderContacts(); break;
         case 'meetings': renderMeetings(); break;
@@ -1467,6 +1514,7 @@ function refreshSection(section) {
         case 'livesync': break;
         case 'backup': renderBackupInfo(); break;
         case 'settings': renderSettings(); break;
+        case 'feedback': renderFeedbackList(); break;
         case 'growth': renderGrowthFramework(); break;
     }
 }
@@ -1531,6 +1579,10 @@ function toggleTheme() {
     const btn = document.getElementById('themeToggle');
     if (btn) btn.title = isLight ? 'Switch to dark mode' : 'Switch to light mode';
     try { localStorage.setItem('apf_theme', isLight ? 'light' : 'dark'); } catch(e) {}
+    // Re-apply accent color for the new theme mode
+    const s = getAppSettings();
+    const accent = ACCENT_COLORS.find(c => c.value === s.accentColor);
+    if (accent) applyAccentColorToCSS(accent.value, accent.css);
 }
 
 function restoreTheme() {
@@ -2005,10 +2057,15 @@ function showToast(message, type = 'success', duration = 3000) {
 // ===== Modal Functions =====
 function openModal(id) {
     document.getElementById(id).classList.add('active');
+    document.body.classList.add('modal-open');
 }
 
 function closeModal(id) {
     document.getElementById(id).classList.remove('active');
+    // Only unlock body scroll if no other modals are open
+    if (!document.querySelector('.modal-overlay.active')) {
+        document.body.classList.remove('modal-open');
+    }
 }
 
 // ===== Quick Add =====
@@ -2138,7 +2195,7 @@ function renderDashboardCharts(visits, trainings, observations) {
                 plugins: { legend: { labels: { color: '#9ca3b8', font: { size: 11 } } } },
                 scales: {
                     x: { ticks: { color: '#6b7280' }, grid: { color: 'rgba(255,255,255,0.04)' } },
-                    y: { beginAtZero: true, ticks: { color: '#6b7280', stepSize: 1 }, grid: { color: 'rgba(255,255,255,0.04)' } }
+                    y: { beginAtZero: true, ticks: { color: '#6b7280', precision: 0 }, grid: { color: 'rgba(255,255,255,0.04)' } }
                 }
             }
         });
@@ -2174,6 +2231,50 @@ function renderDashboardCharts(visits, trainings, observations) {
             }
         }
     }
+}
+
+// ===== PAGINATION UTILITY =====
+const _pageState = {};
+
+function getPaginatedItems(items, key, pageSize) {
+    if (!_pageState[key]) _pageState[key] = 1;
+    const page = _pageState[key];
+    const totalPages = Math.max(1, Math.ceil(items.length / pageSize));
+    if (page > totalPages) _pageState[key] = totalPages;
+    const start = (_pageState[key] - 1) * pageSize;
+    return {
+        items: items.slice(start, start + pageSize),
+        page: _pageState[key],
+        totalPages,
+        total: items.length,
+        start: start + 1,
+        end: Math.min(start + pageSize, items.length)
+    };
+}
+
+function renderPaginationControls(key, p, renderFn) {
+    if (p.totalPages <= 1) return `<div class="pagination-info">${p.total} item${p.total !== 1 ? 's' : ''}</div>`;
+    const maxButtons = 5;
+    let startPage = Math.max(1, p.page - Math.floor(maxButtons / 2));
+    let endPage = Math.min(p.totalPages, startPage + maxButtons - 1);
+    if (endPage - startPage < maxButtons - 1) startPage = Math.max(1, endPage - maxButtons + 1);
+
+    let buttons = '';
+    buttons += `<button class="pg-btn" ${p.page <= 1 ? 'disabled' : ''} onclick="_pageState['${key}']=${p.page - 1};${renderFn}()"><i class="fas fa-chevron-left"></i></button>`;
+    if (startPage > 1) {
+        buttons += `<button class="pg-btn" onclick="_pageState['${key}']=1;${renderFn}()">1</button>`;
+        if (startPage > 2) buttons += `<span class="pg-dots">…</span>`;
+    }
+    for (let i = startPage; i <= endPage; i++) {
+        buttons += `<button class="pg-btn ${i === p.page ? 'active' : ''}" onclick="_pageState['${key}']=${i};${renderFn}()">${i}</button>`;
+    }
+    if (endPage < p.totalPages) {
+        if (endPage < p.totalPages - 1) buttons += `<span class="pg-dots">…</span>`;
+        buttons += `<button class="pg-btn" onclick="_pageState['${key}']=${p.totalPages};${renderFn}()">${p.totalPages}</button>`;
+    }
+    buttons += `<button class="pg-btn" ${p.page >= p.totalPages ? 'disabled' : ''} onclick="_pageState['${key}']=${p.page + 1};${renderFn}()"><i class="fas fa-chevron-right"></i></button>`;
+
+    return `<div class="pagination-bar"><span class="pg-info">Showing ${p.start}–${p.end} of ${p.total}</span><div class="pg-buttons">${buttons}</div></div>`;
 }
 
 // ===== SCHOOL VISITS =====
@@ -2315,7 +2416,9 @@ function renderVisits() {
         return;
     }
 
-    container.innerHTML = filtered.map(v => {
+    const pg = getPaginatedItems(filtered, 'visits', 20);
+
+    container.innerHTML = pg.items.map(v => {
         const d = new Date(v.date);
         const day = d.getDate();
         const month = d.toLocaleString('en', { month: 'short' });
@@ -2336,7 +2439,7 @@ function renderVisits() {
             </div>
             <div class="visit-info">
                 <h4><i class="fas ${purposeIcon}" style="color:var(--accent);margin-right:6px;font-size:13px"></i>${escapeHtml(v.school)}</h4>
-                <p>${escapeHtml(v.purpose || '')}${v.duration ? ` • ${v.duration}` : ''}${ratingStars ? ` • ${ratingStars}` : ''}</p>
+                <p>${escapeHtml(v.purpose || '')}${v.duration ? ` • <i class="fas fa-clock" style="font-size:11px"></i> ${v.duration}` : ''}${ratingStars ? ` • ${ratingStars}` : ''}</p>
                 <div class="visit-meta">
                     ${v.block ? `<span><i class="fas fa-map-marker-alt"></i> ${escapeHtml(v.block)}</span>` : ''}
                     ${v.cluster ? `<span><i class="fas fa-layer-group"></i> ${escapeHtml(v.cluster)}</span>` : ''}
@@ -2351,7 +2454,7 @@ function renderVisits() {
                 <button class="btn btn-sm btn-danger" onclick="event.stopPropagation(); deleteVisit('${v.id}')"><i class="fas fa-trash"></i></button>
             </div>
         </div>`;
-    }).join('');
+    }).join('') + renderPaginationControls('visits', pg, 'renderVisits');
 }
 
 function populateVisitBlockFilter(visits) {
@@ -2564,7 +2667,9 @@ function renderTrainings() {
         return;
     }
 
-    container.innerHTML = filtered.map(t => {
+    const pg = getPaginatedItems(filtered, 'trainings', 15);
+
+    container.innerHTML = pg.items.map(t => {
         const d = new Date(t.date);
         const badgeClass = `badge-${t.status}`;
         return `<div class="training-card" onclick="openTrainingModal('${t.id}')">
@@ -2587,7 +2692,7 @@ function renderTrainings() {
                 <button class="btn btn-sm btn-danger" onclick="event.stopPropagation(); deleteTraining('${t.id}')"><i class="fas fa-trash"></i> Delete</button>
             </div>
         </div>`;
-    }).join('');
+    }).join('') + renderPaginationControls('trainings', pg, 'renderTrainings');
 }
 
 // ===== OBSERVATIONS =====
@@ -5369,7 +5474,9 @@ function renderResources() {
         'Other': { icon: 'fa-file', cls: 'other' },
     };
 
-    container.innerHTML = filtered.map(r => {
+    const pg = getPaginatedItems(filtered, 'resources', 18);
+
+    container.innerHTML = pg.items.map(r => {
         const ti = typeIcons[r.type] || typeIcons['Other'];
         return `<div class="resource-card" onclick="openResourceModal('${r.id}')">
             <div class="resource-card-icon ${ti.cls}"><i class="fas ${ti.icon}"></i></div>
@@ -5389,7 +5496,7 @@ function renderResources() {
                 </div>
             </div>
         </div>`;
-    }).join('');
+    }).join('') + renderPaginationControls('resources', pg, 'renderResources');
 }
 
 // ===== REPORTS =====
@@ -5685,7 +5792,9 @@ function renderNotes() {
         return;
     }
 
-    container.innerHTML = notes.map(n => {
+    const pg = getPaginatedItems(notes, 'notes', 18);
+
+    container.innerHTML = pg.items.map(n => {
         if (n.editing) {
             return `<div class="note-card color-${n.color || 'amber'}">
                 <input type="text" class="note-input" id="noteTitle-${n.id}" placeholder="Note title..." value="${escapeHtml(n.title || '')}">
@@ -5715,7 +5824,7 @@ function renderNotes() {
                 <button class="btn btn-sm btn-danger" onclick="deleteNote('${n.id}')"><i class="fas fa-trash"></i></button>
             </div>
         </div>`;
-    }).join('');
+    }).join('') + renderPaginationControls('notes', pg, 'renderNotes');
 }
 
 // ===== WEEKLY PLANNER =====
@@ -6112,7 +6221,7 @@ function renderGoalTrendChart() {
                 },
                 y: {
                     beginAtZero: true,
-                    ticks: { color: '#6b7280', stepSize: 1 },
+                    ticks: { color: '#6b7280', precision: 0 },
                     grid: { color: 'rgba(255,255,255,0.04)' },
                 },
             },
@@ -6178,6 +6287,93 @@ function renderAnalytics() {
 
     // === Activity Timeline ===
     renderActivityTimeline(visits, trainings, observations);
+
+    // Refresh visit frequency if visible
+    const freqPanel = document.getElementById('visitFreqPanel');
+    if (freqPanel && freqPanel.style.display !== 'none') {
+        renderVisitFrequency(visits);
+    }
+}
+
+function toggleVisitFrequency() {
+    const panel = document.getElementById('visitFreqPanel');
+    if (!panel) return;
+    const isHidden = panel.style.display === 'none';
+    panel.style.display = isHidden ? '' : 'none';
+    if (isHidden) {
+        const range = getAnalyticsDateRange();
+        const visits = filterByDateRange(DB.get('visits'), 'date', range);
+        renderVisitFrequency(visits);
+    }
+}
+
+function renderVisitFrequency(visits) {
+    const body = document.getElementById('visitFreqBody');
+    if (!body) return;
+
+    // Count visits per school
+    const freq = {};
+    visits.forEach(v => {
+        const school = (v.school || '').trim();
+        if (!school) return;
+        if (!freq[school]) freq[school] = { total: 0, completed: 0, planned: 0, cancelled: 0, lastDate: '', cluster: v.cluster || '', block: v.block || '' };
+        freq[school].total++;
+        if (v.status === 'completed') freq[school].completed++;
+        else if (v.status === 'planned') freq[school].planned++;
+        else if (v.status === 'cancelled') freq[school].cancelled++;
+        if (v.date && v.date > freq[school].lastDate) {
+            freq[school].lastDate = v.date;
+            if (v.cluster) freq[school].cluster = v.cluster;
+            if (v.block) freq[school].block = v.block;
+        }
+    });
+
+    const sorted = Object.entries(freq).sort((a, b) => b[1].total - a[1].total);
+    if (sorted.length === 0) {
+        body.innerHTML = '<div class="empty-state"><i class="fas fa-school"></i><h3>No school visits found</h3><p>Add school visits to see frequency analysis.</p></div>';
+        return;
+    }
+
+    const maxVisits = sorted[0][1].total;
+
+    let html = `<div class="vf-summary">
+        <span class="vf-sum-item"><strong>${sorted.length}</strong> schools</span>
+        <span class="vf-sum-item"><strong>${visits.length}</strong> total visits</span>
+        <span class="vf-sum-item">Avg <strong>${(visits.length / sorted.length).toFixed(1)}</strong> visits/school</span>
+    </div>
+    <table class="vf-table">
+        <thead><tr>
+            <th>#</th>
+            <th>School Name</th>
+            <th>Cluster / Block</th>
+            <th>Visits</th>
+            <th>Completed</th>
+            <th>Planned</th>
+            <th>Last Visit</th>
+            <th>Frequency</th>
+        </tr></thead>
+        <tbody>`;
+
+    sorted.forEach(([school, data], i) => {
+        const pct = Math.round((data.total / maxVisits) * 100);
+        const barColor = data.total >= 5 ? '#10b981' : data.total >= 3 ? '#f59e0b' : data.total >= 2 ? '#3b82f6' : '#6b7280';
+        const lastVisit = data.lastDate ? new Date(data.lastDate).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '—';
+        const location = [data.cluster, data.block].filter(Boolean).join(', ');
+
+        html += `<tr>
+            <td class="vf-rank">${i + 1}</td>
+            <td class="vf-school"><i class="fas fa-school" style="color:${barColor};margin-right:6px;font-size:11px"></i>${escapeHtml(school)}</td>
+            <td class="vf-loc">${escapeHtml(location) || '—'}</td>
+            <td class="vf-count"><strong>${data.total}</strong></td>
+            <td class="vf-comp">${data.completed}</td>
+            <td class="vf-plan">${data.planned}</td>
+            <td class="vf-date">${lastVisit}</td>
+            <td class="vf-bar-cell"><div class="vf-bar" style="width:${pct}%;background:${barColor}"><span class="vf-bar-num">${data.total}</span></div></td>
+        </tr>`;
+    });
+
+    html += '</tbody></table>';
+    body.innerHTML = html;
 }
 
 function renderAnalyticsInsights(visits, trainings, observations, allVisits, allObs) {
@@ -6382,7 +6578,7 @@ function renderSchoolCoverageChart(visits, observations) {
             responsive: true, maintainAspectRatio: false, indexAxis: 'y',
             plugins: { legend: { display: false } },
             scales: {
-                x: { beginAtZero: true, ticks: { color: '#6b7280', stepSize: 1 }, grid: { color: 'rgba(255,255,255,0.04)' } },
+                x: { beginAtZero: true, ticks: { color: '#6b7280', precision: 0 }, grid: { color: 'rgba(255,255,255,0.04)' } },
                 y: { ticks: { color: '#9ca3b8', font: { size: 11 } }, grid: { display: false } }
             }
         }
@@ -6543,7 +6739,7 @@ function renderWeeklyHeatmapChart(visits, trainings, observations) {
             plugins: { legend: { display: false } },
             scales: {
                 x: { ticks: { color: '#9ca3b8', font: { weight: '600' } }, grid: { display: false } },
-                y: { beginAtZero: true, ticks: { color: '#6b7280', stepSize: 1 }, grid: { color: 'rgba(255,255,255,0.04)' } }
+                y: { beginAtZero: true, ticks: { color: '#6b7280', precision: 0 }, grid: { color: 'rgba(255,255,255,0.04)' } }
             }
         }
     });
@@ -6691,7 +6887,9 @@ function renderFollowups() {
         return;
     }
 
-    container.innerHTML = followups.map(f => {
+    const pg = getPaginatedItems(followups, 'followups', 20);
+
+    container.innerHTML = pg.items.map(f => {
         const d = new Date(f.date);
         const dateStr = d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
         const daysSince = Math.floor((new Date() - d) / 86400000);
@@ -6714,7 +6912,7 @@ function renderFollowups() {
                 </div>
             </div>
         </div>`;
-    }).join('');
+    }).join('') + renderPaginationControls('followups', pg, 'renderFollowups');
 }
 
 function toggleFollowup(id) {
@@ -6735,6 +6933,7 @@ let currentIdeaView = 'board';
 
 function setIdeaView(view) {
     currentIdeaView = view;
+    _pageState.ideas = 1;
     document.querySelectorAll('.idea-view-toggle .view-btn').forEach(btn => {
         btn.classList.toggle('active', btn.dataset.view === view);
     });
@@ -6999,20 +7198,22 @@ function renderIdeaBoard(ideas, container) {
 
 function renderIdeaGrid(ideas, container) {
     const sorted = [...ideas].sort((a, b) => new Date(b.updatedAt || b.createdAt) - new Date(a.updatedAt || a.createdAt));
-    container.innerHTML = `<div class="idea-grid">${sorted.map(idea => {
+    const pg = getPaginatedItems(sorted, 'ideas', 18);
+    container.innerHTML = `<div class="idea-grid">${pg.items.map(idea => {
         const statusLabels = { spark: '✨ Spark', exploring: '🔍 Exploring', 'in-progress': '🚀 In Progress', done: '✅ Done', archived: '📦 Archived' };
         // Wrap card with status badge overlay
         return `<div style="position:relative">
             <span class="idea-status-badge ${idea.status}" style="position:absolute;top:12px;right:12px;z-index:1;">${statusLabels[idea.status] || idea.status}</span>
             ${buildIdeaCard(idea)}
         </div>`;
-    }).join('')}</div>`;
+    }).join('')}</div>` + renderPaginationControls('ideas', pg, 'renderIdeas');
 }
 
 function renderIdeaList(ideas, container) {
     const sorted = [...ideas].sort((a, b) => new Date(b.updatedAt || b.createdAt) - new Date(a.updatedAt || a.createdAt));
+    const pg = getPaginatedItems(sorted, 'ideas', 20);
     const statusLabels = { spark: '✨ Spark', exploring: '🔍 Exploring', 'in-progress': '🚀 In Progress', done: '✅ Done', archived: '📦 Archived' };
-    container.innerHTML = `<div class="idea-list">${sorted.map(idea => `
+    container.innerHTML = `<div class="idea-list">${pg.items.map(idea => `
         <div class="idea-card" style="--card-accent: ${idea.color || '#f59e0b'}" onclick="openIdeaModal('${idea.id}')">
             <div style="flex:1;min-width:0;">
                 <div class="idea-card-header">
@@ -7032,7 +7233,7 @@ function renderIdeaList(ideas, container) {
                 <button class="delete-btn" onclick="deleteIdea('${idea.id}')" title="Delete"><i class="fas fa-trash"></i></button>
             </div>
         </div>
-    `).join('')}</div>`;
+    `).join('')}</div>` + renderPaginationControls('ideas', pg, 'renderIdeas');
 }
 
 // ===== SCHOOL PROFILE IMPORT FROM EXCEL =====
@@ -7550,17 +7751,35 @@ function getSchoolData() {
     const observations = DB.get('observations');
     const schoolMap = {};
 
+    const ensureSchool = (key, name, block) => {
+        if (!schoolMap[key]) schoolMap[key] = { name, block: block || '', visits: [], observations: [], _dates: new Set(), _teachers: new Set() };
+    };
+
     visits.forEach(v => {
         const key = (v.school || '').trim().toLowerCase();
-        if (!schoolMap[key]) schoolMap[key] = { name: (v.school || '').trim(), block: v.block || '', visits: [], observations: [] };
+        ensureSchool(key, (v.school || '').trim(), v.block);
         if (v.block && !schoolMap[key].block) schoolMap[key].block = v.block;
         schoolMap[key].visits.push(v);
+        if (v.date) schoolMap[key]._dates.add(v.date);
     });
 
     observations.forEach(o => {
         const key = (o.school || '').trim().toLowerCase();
-        if (!schoolMap[key]) schoolMap[key] = { name: (o.school || '').trim(), block: '', visits: [], observations: [] };
+        ensureSchool(key, (o.school || '').trim(), o.block);
+        if (o.block && !schoolMap[key].block) schoolMap[key].block = o.block;
         schoolMap[key].observations.push(o);
+        if (o.date) schoolMap[key]._dates.add(o.date);
+        const teacher = (o.teacher || '').trim();
+        if (teacher) schoolMap[key]._teachers.add(teacher);
+    });
+
+    // Convert sets to counts for easy access
+    Object.values(schoolMap).forEach(s => {
+        s.totalVisitDays = s._dates.size;
+        s.teacherCount = s._teachers.size;
+        s.teachers = [...s._teachers];
+        delete s._dates;
+        delete s._teachers;
     });
 
     return schoolMap;
@@ -7579,19 +7798,20 @@ function renderSchoolProfiles() {
     }
 
     // Sort by total activity (most active first)
-    schools.sort((a, b) => (b.visits.length + b.observations.length) - (a.visits.length + a.observations.length));
+    schools.sort((a, b) => (b.totalVisitDays + b.observations.length) - (a.totalVisitDays + a.observations.length));
 
     // Summary stats
-    const totalSchools = Object.keys(schoolMap).length;
-    const totalVisits = Object.values(schoolMap).reduce((s, sc) => s + sc.visits.length, 0);
-    const totalObs = Object.values(schoolMap).reduce((s, sc) => s + sc.observations.length, 0);
-    const avgPerSchool = totalSchools > 0 ? ((totalVisits + totalObs) / totalSchools).toFixed(1) : 0;
+    const allSchools = Object.values(schoolMap);
+    const totalSchools = allSchools.length;
+    const totalVisitDays = allSchools.reduce((s, sc) => s + sc.totalVisitDays, 0);
+    const totalObs = allSchools.reduce((s, sc) => s + sc.observations.length, 0);
+    const totalTeachers = new Set(allSchools.flatMap(sc => sc.teachers)).size;
 
     document.getElementById('schoolSummaryStats').innerHTML = `
         <div class="school-summary-stat"><div class="stat-icon">🏫</div><div class="stat-value">${totalSchools}</div><div class="stat-label">Schools</div></div>
-        <div class="school-summary-stat"><div class="stat-icon">📍</div><div class="stat-value">${totalVisits}</div><div class="stat-label">Total Visits</div></div>
+        <div class="school-summary-stat"><div class="stat-icon">📍</div><div class="stat-value">${totalVisitDays}</div><div class="stat-label">Total Visits</div></div>
         <div class="school-summary-stat"><div class="stat-icon">📋</div><div class="stat-value">${totalObs}</div><div class="stat-label">Observations</div></div>
-        <div class="school-summary-stat"><div class="stat-icon">📊</div><div class="stat-value">${avgPerSchool}</div><div class="stat-label">Avg per School</div></div>
+        <div class="school-summary-stat"><div class="stat-icon">👩‍🏫</div><div class="stat-value">${totalTeachers}</div><div class="stat-label">Teachers</div></div>
     `;
 
     // Show school list (hide detail view)
@@ -7604,8 +7824,15 @@ function renderSchoolProfiles() {
         return;
     }
 
-    container.innerHTML = `<div class="school-cards-grid">${schools.map(school => {
-        const lastVisit = school.visits.filter(v => v.date).sort((a, b) => b.date.localeCompare(a.date))[0];
+    const pg = getPaginatedItems(schools, 'schools', 18);
+
+    container.innerHTML = `<div class="school-cards-grid">${pg.items.map(school => {
+        // Last activity date from visits + observations combined
+        const allDates = [
+            ...school.visits.filter(v => v.date).map(v => v.date),
+            ...school.observations.filter(o => o.date).map(o => o.date)
+        ].sort();
+        const lastDate = allDates.length > 0 ? allDates[allDates.length - 1] : null;
         const avgRating = school.observations.length > 0
             ? (school.observations.reduce((s, o) => s + (((o.engagementRating || o.engagement) || 0) + (o.methodology || 0) + (o.tlm || 0)) / 3, 0) / school.observations.length).toFixed(1)
             : null;
@@ -7618,17 +7845,17 @@ function renderSchoolProfiles() {
                 <div class="school-card-name"><i class="fas fa-school"></i> ${escapeHtml(school.name)}</div>
                 <div class="school-card-block">${escapeHtml(school.block || 'Block not specified')}</div>
                 <div class="school-card-metrics">
-                    <div class="school-metric"><div class="metric-value">${school.visits.length}</div><div class="metric-label">Visits</div></div>
+                    <div class="school-metric"><div class="metric-value">${school.totalVisitDays}</div><div class="metric-label">Visits</div></div>
                     <div class="school-metric"><div class="metric-value">${school.observations.length}</div><div class="metric-label">Obs.</div></div>
-                    <div class="school-metric"><div class="metric-value">${school.visits.filter(v => v.status === 'completed').length}</div><div class="metric-label">Done</div></div>
+                    <div class="school-metric"><div class="metric-value">${school.teacherCount}</div><div class="metric-label">Teachers</div></div>
                 </div>
                 <div class="school-card-footer">
-                    <div class="school-last-visit"><i class="fas fa-clock"></i> ${lastVisit ? new Date(lastVisit.date).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : 'No visits'}</div>
+                    <div class="school-last-visit"><i class="fas fa-clock"></i> ${lastDate ? new Date(lastDate).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : 'No activity'}</div>
                     ${avgRating ? `<div class="school-rating"><i class="fas fa-star"></i> ${avgRating}/5</div>` : ''}
                 </div>
             </div>
         `;
-    }).join('')}</div>`;
+    }).join('')}</div>` + renderPaginationControls('schools', pg, 'renderSchoolProfiles');
 }
 
 function showSchoolDetail(encodedKey) {
@@ -7643,17 +7870,57 @@ function showSchoolDetail(encodedKey) {
 
     const completedVisits = school.visits.filter(v => v.status === 'completed').length;
     const plannedVisits = school.visits.filter(v => v.status === 'planned').length;
-    const teachers = [...new Set(school.observations.map(o => o.teacher).filter(Boolean))];
+    const teachers = school.teachers || [];
     const subjects = [...new Set(school.observations.map(o => o.subject).filter(Boolean))];
     const avgRating = school.observations.length > 0
         ? (school.observations.reduce((s, o) => s + (((o.engagementRating || o.engagement) || 0) + (o.methodology || 0) + (o.tlm || 0)) / 3, 0) / school.observations.length).toFixed(1)
         : 'N/A';
 
-    // All activities timeline
+    // All activities timeline — build rich objects
     const activities = [
-        ...school.visits.map(v => ({ type: 'visit', date: v.date, title: `${v.purpose || 'Visit'}`, detail: v.notes || '', status: v.status })),
-        ...school.observations.map(o => ({ type: 'observation', date: o.date, title: `Observation — ${o.subject || ''}`, detail: `Teacher: ${o.teacher || 'N/A'} | ${o.topic || ''}`, status: '' }))
-    ].sort((a, b) => b.date.localeCompare(a.date));
+        ...school.visits.map(v => ({
+            type: 'visit', date: v.date, id: v.id,
+            title: v.purpose || 'Visit',
+            status: v.status || '',
+            fields: [
+                v.notes ? { icon: 'fa-sticky-note', label: 'Notes', value: v.notes } : null,
+                v.followUp ? { icon: 'fa-clipboard-check', label: 'Follow-up', value: v.followUp } : null,
+                v.block ? { icon: 'fa-map-marker-alt', label: 'Block', value: v.block } : null,
+                v.cluster ? { icon: 'fa-layer-group', label: 'Cluster', value: v.cluster } : null
+            ].filter(Boolean)
+        })),
+        ...school.observations.map(o => {
+            const engVal = o.engagementRating || o.engagement || 0;
+            const methVal = o.methodology || 0;
+            const tlmVal = o.tlm || 0;
+            const hasRatings = engVal > 0 || methVal > 0 || tlmVal > 0;
+            return {
+                type: 'observation', date: o.date, id: o.id,
+                title: `Observation — ${o.subject || 'General'}`,
+                status: '',
+                fields: [
+                    o.teacher ? { icon: 'fa-chalkboard-teacher', label: 'Teacher', value: o.teacher } : null,
+                    o.subject ? { icon: 'fa-book', label: 'Subject', value: o.subject } : null,
+                    o.topic ? { icon: 'fa-bookmark', label: 'Topic', value: o.topic } : null,
+                    o.class ? { icon: 'fa-users', label: 'Class', value: o.class } : null,
+                    o.practice ? { icon: 'fa-lightbulb', label: 'Practice', value: o.practice } : null,
+                    o.practiceType ? { icon: 'fa-tag', label: 'Practice Type', value: o.practiceType } : null,
+                    o.group ? { icon: 'fa-layer-group', label: 'Group', value: o.group } : null,
+                    o.engagementLevel ? { icon: 'fa-signal', label: 'Engagement Level', value: o.engagementLevel } : null,
+                    hasRatings ? { icon: 'fa-star', label: 'Ratings', value: `Engagement: ${engVal}/5 · Methodology: ${methVal}/5 · TLM: ${tlmVal}/5`, isRating: true, eng: engVal, meth: methVal, tlm: tlmVal } : null,
+                    o.strengths ? { icon: 'fa-check-circle', label: 'Strengths', value: o.strengths } : null,
+                    o.areas ? { icon: 'fa-exclamation-circle', label: 'Areas for Improvement', value: o.areas } : null,
+                    o.suggestions ? { icon: 'fa-comment-dots', label: 'Suggestions', value: o.suggestions } : null,
+                    o.notes ? { icon: 'fa-sticky-note', label: 'Notes', value: o.notes } : null,
+                    o.observer ? { icon: 'fa-user', label: 'Observer', value: o.observer } : null,
+                    o.teacherStage ? { icon: 'fa-graduation-cap', label: 'Teacher Stage', value: o.teacherStage } : null,
+                    o.cluster ? { icon: 'fa-map-pin', label: 'Cluster', value: o.cluster } : null,
+                    o.block ? { icon: 'fa-map-marker-alt', label: 'Block', value: o.block } : null,
+                    o.observedWhileTeaching ? { icon: 'fa-eye', label: 'Observed While Teaching', value: o.observedWhileTeaching } : null
+                ].filter(Boolean)
+            };
+        })
+    ].sort((a, b) => (b.date || '').localeCompare(a.date || ''));
 
     detailView.innerHTML = `
         <div class="school-detail">
@@ -7665,7 +7932,7 @@ function showSchoolDetail(encodedKey) {
             </div>
             ${school.block ? `<p style="color:var(--text-muted);margin-bottom:20px;"><i class="fas fa-map-marker-alt" style="color:var(--amber);margin-right:6px;"></i>${escapeHtml(school.block)}</p>` : ''}
             <div class="school-detail-stats">
-                <div class="school-detail-stat"><div class="stat-value">${school.visits.length}</div><div class="stat-label">Total Visits</div></div>
+                <div class="school-detail-stat"><div class="stat-value">${school.totalVisitDays}</div><div class="stat-label">Total Visits</div></div>
                 <div class="school-detail-stat"><div class="stat-value">${completedVisits}</div><div class="stat-label">Completed</div></div>
                 <div class="school-detail-stat"><div class="stat-value">${plannedVisits}</div><div class="stat-label">Planned</div></div>
                 <div class="school-detail-stat"><div class="stat-value">${school.observations.length}</div><div class="stat-label">Observations</div></div>
@@ -7676,16 +7943,41 @@ function showSchoolDetail(encodedKey) {
             ${subjects.length > 0 ? `<div style="margin-bottom:20px;"><strong style="color:var(--text-secondary);font-size:13px;">Subjects covered:</strong> <span style="color:var(--text-muted);font-size:13px;">${escapeHtml(subjects.join(', '))}</span></div>` : ''}
             <div class="school-detail-timeline">
                 <h3><i class="fas fa-history" style="color:var(--amber);margin-right:8px;"></i>Activity Timeline (${activities.length})</h3>
-                ${activities.length > 0 ? activities.map(a => `
-                    <div class="school-timeline-item">
+                ${activities.length > 0 ? activities.map((a, idx) => {
+                    const summary = a.type === 'observation'
+                        ? (a.fields.find(f => f.label === 'Teacher')?.value || '') + (a.fields.find(f => f.label === 'Topic')?.value ? ' | ' + a.fields.find(f => f.label === 'Topic').value : '')
+                        : a.fields.find(f => f.label === 'Notes')?.value || '';
+                    const detailRows = a.fields.map(f => {
+                        if (f.isRating) {
+                            const stars = (v) => { let s = ''; for (let i = 1; i <= 5; i++) s += `<i class="fas fa-star" style="color:${i <= v ? '#f59e0b' : 'var(--border)'};font-size:11px;"></i>`; return s; };
+                            return `<div class="tl-detail-row tl-ratings-row">
+                                <span class="tl-detail-label"><i class="fas ${f.icon}"></i> ${f.label}</span>
+                                <div class="tl-rating-group">
+                                    <span class="tl-rating-item">Engagement ${stars(f.eng)}</span>
+                                    <span class="tl-rating-item">Methodology ${stars(f.meth)}</span>
+                                    <span class="tl-rating-item">TLM ${stars(f.tlm)}</span>
+                                </div>
+                            </div>`;
+                        }
+                        return `<div class="tl-detail-row">
+                            <span class="tl-detail-label"><i class="fas ${f.icon}"></i> ${f.label}</span>
+                            <span class="tl-detail-value">${escapeHtml(f.value)}</span>
+                        </div>`;
+                    }).join('');
+                    return `
+                    <div class="school-timeline-item clickable" onclick="this.classList.toggle('expanded')">
                         <div class="school-timeline-icon ${a.type}"><i class="fas ${a.type === 'visit' ? 'fa-school' : 'fa-clipboard-check'}"></i></div>
                         <div class="school-timeline-content">
                             <div class="timeline-title">${escapeHtml(a.title)}${a.status ? ` <span style="font-size:11px;opacity:0.7;">(${escapeHtml(a.status)})</span>` : ''}</div>
-                            ${a.detail ? `<div class="timeline-details">${escapeHtml(a.detail)}</div>` : ''}
+                            ${summary ? `<div class="timeline-details">${escapeHtml(summary)}</div>` : ''}
+                            ${a.fields.length > 0 ? `<div class="tl-expanded-details">${detailRows}</div>` : ''}
                         </div>
-                        <div class="school-timeline-date">${new Date(a.date).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}</div>
-                    </div>
-                `).join('') : '<p style="color:var(--text-muted);text-align:center;padding:30px;">No activities recorded yet</p>'}
+                        <div class="school-timeline-right">
+                            <div class="school-timeline-date">${new Date(a.date).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}</div>
+                            <i class="fas fa-chevron-down tl-expand-icon"></i>
+                        </div>
+                    </div>`;
+                }).join('') : '<p style="color:var(--text-muted);text-align:center;padding:30px;">No activities recorded yet</p>'}
             </div>
         </div>
     `;
@@ -7733,7 +8025,9 @@ function renderMeetings() {
 
     const typeColors = { 'BRC Meeting': '#6366f1', 'Cluster Meeting': '#10b981', 'District Meeting': '#f59e0b', 'SDMC Meeting': '#ec4899', 'Parent-Teacher Meeting': '#8b5cf6', 'Convergence Meeting': '#3b82f6', 'Review Meeting': '#ef4444', 'Other': '#64748b' };
 
-    container.innerHTML = filtered.map(m => {
+    const pg = getPaginatedItems(filtered, 'meetings', 10);
+
+    container.innerHTML = pg.items.map(m => {
         const color = typeColors[m.type] || '#64748b';
         const pendingActions = (m.actionItems || []).filter(a => !a.done).length;
         const totalActions = (m.actionItems || []).length;
@@ -7768,7 +8062,7 @@ function renderMeetings() {
                 ${m.nextMeetingDate ? `<div class="meeting-card-meta" style="margin-top:8px;color:#6366f1;"><i class="fas fa-forward"></i> Next meeting: ${new Date(m.nextMeetingDate).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}</div>` : ''}
             </div>
         `;
-    }).join('');
+    }).join('') + renderPaginationControls('meetings', pg, 'renderMeetings');
 }
 
 function openMeetingModal(id) {
@@ -8148,7 +8442,9 @@ function renderReflections() {
 
     const moodEmojis = { great: '😊', good: '🙂', okay: '😐', challenging: '😟', difficult: '😔' };
 
-    container.innerHTML = `<div class="reflections-grid">${reflections.map(r => {
+    const pg = getPaginatedItems(reflections, 'reflections', 12);
+
+    container.innerHTML = `<div class="reflections-grid">${pg.items.map(r => {
         const monthLabel = r.month ? new Date(r.month + '-01').toLocaleDateString('en-IN', { month: 'long', year: 'numeric' }) : 'Unknown';
         const sections = [];
         if (r.wentWell) sections.push({ label: 'What went well', cls: 'went-well', icon: 'fa-check-circle', text: r.wentWell });
@@ -8177,7 +8473,7 @@ function renderReflections() {
                 </div>
             </div>
         `;
-    }).join('')}</div>`;
+    }).join('')}</div>` + renderPaginationControls('reflections', pg, 'renderReflections');
 }
 
 // ===== CONTACT DIRECTORY =====
@@ -8586,10 +8882,12 @@ function renderContacts() {
 
     const avatarColors = ['#f59e0b', '#10b981', '#3b82f6', '#8b5cf6', '#ef4444', '#ec4899', '#06b6d4', '#f97316'];
 
-    container.innerHTML = `<div class="contacts-grid">${contacts.map((c, i) => {
+    const pg = getPaginatedItems(contacts, 'contacts', 18);
+
+    container.innerHTML = `<div class="contacts-grid">${pg.items.map((c, i) => {
         const initials = c.name ? c.name.split(' ').map(w => w[0]).join('').substring(0, 2).toUpperCase() : '?';
         const rc = roleColors[c.role] || roleColors['Other'];
-        const avatarColor = avatarColors[i % avatarColors.length];
+        const avatarColor = avatarColors[(pg.start - 1 + i) % avatarColors.length];
 
         return `
             <div class="contact-card">
@@ -8615,7 +8913,2031 @@ function renderContacts() {
                 </div>
             </div>
         `;
-    }).join('')}</div>`;
+    }).join('')}</div>` + renderPaginationControls('contacts', pg, 'renderContacts');
+}
+
+// ===== MARAI TEACHER TRACKING =====
+// MARAI Framework: Motivation → Awareness → Readiness → Action → Internalization
+const MARAI_STAGES = [
+    { key: 'motivation', label: 'Motivation', emoji: '🔥', color: '#f59e0b', desc: 'Teacher is motivated to improve teaching practices' },
+    { key: 'awareness', label: 'Awareness', emoji: '👁️', color: '#3b82f6', desc: 'Teacher is aware of current practices and gaps' },
+    { key: 'readiness', label: 'Readiness', emoji: '🎯', color: '#8b5cf6', desc: 'Teacher is ready to try new approaches' },
+    { key: 'action', label: 'Action', emoji: '🚀', color: '#10b981', desc: 'Teacher actively implements new practices in classroom' },
+    { key: 'internalization', label: 'Internalization', emoji: '💎', color: '#ec4899', desc: 'New practices are internalized and consistently applied' }
+];
+
+// ===== MARAI INTERVENTION SUGGESTIONS ENGINE =====
+// Stage-wise long-term intervention strategies with subjects, topics & frequency
+const MARAI_INTERVENTIONS = {
+    motivation: {
+        goal: 'Build intrinsic motivation and willingness to grow',
+        duration: '4–6 weeks',
+        frequency: 'Weekly (1–2 visits/week)',
+        strategies: [
+            { area: 'Classroom Visit & Rapport', icon: '🤝', topics: [
+                'Informal classroom visit — observe without judgment',
+                'Appreciate existing good practices publicly',
+                'Share success stories from other teachers',
+                'Casual conversation about teaching journey & aspirations'
+            ]},
+            { area: 'Exposure & Inspiration', icon: '✨', topics: [
+                'Show engaging classroom videos / demo lessons',
+                'Share student work samples from active classrooms',
+                'Invite to observe a peer teacher\'s classroom',
+                'Share simple articles on joyful learning'
+            ]},
+            { area: 'Quick Wins', icon: '🏆', topics: [
+                'Suggest one small activity (story, rhyme, game)',
+                'Co-facilitate a 10-min engaging activity in class',
+                'Help with classroom display / TLM arrangement',
+                'Celebrate small improvements immediately'
+            ]}
+        ],
+        subjectWise: {
+            'Language': ['Read-aloud session with picture book', 'Word wall creation', 'Story telling activity', 'Simple conversation circles'],
+            'Hindi': ['कहानी सुनाओ गतिविधि', 'शब्द दीवार बनाना', 'चित्र देखकर बोलो', 'सरल कविता गायन'],
+            'English': ['Picture talk activity', 'Simple rhyme singing', 'Label the classroom', 'Show & tell with objects'],
+            'Mathematics': ['Number game using local materials', 'Math in daily life examples', 'Simple measurement activity', 'Pattern recognition with objects'],
+            'EVS': ['Nature walk & observation', 'My family tree activity', 'Local plants identification', 'Weather observation chart'],
+            'Science': ['Simple experiment demonstration', 'Observation journal start', 'Question of the day practice', 'Science in daily life discussion']
+        }
+    },
+    awareness: {
+        goal: 'Help teacher observe gaps & understand child-centered pedagogy',
+        duration: '6–8 weeks',
+        frequency: 'Weekly (1–2 sessions/week)',
+        strategies: [
+            { area: 'Reflective Practice', icon: '🪞', topics: [
+                'Joint classroom observation with reflection',
+                'Video of own teaching + self-reflection discussion',
+                'Student engagement mapping exercise',
+                'Identify 3 things working & 3 to improve'
+            ]},
+            { area: 'Understanding Learners', icon: '👁️', topics: [
+                'Student work sample analysis together',
+                'Observe student-student interaction in class',
+                'Identify learning levels in class (baseline)',
+                'Discuss difference between rote & understanding'
+            ]},
+            { area: 'Curriculum & Pedagogy', icon: '📖', topics: [
+                'Read NCF/SCF key points together',
+                'Discuss constructivist vs traditional approach',
+                'Analyze textbook vs learning outcomes mapping',
+                'Share Azim Premji Foundation resource materials'
+            ]}
+        ],
+        subjectWise: {
+            'Language': ['Identify reading levels in class', 'Analyze writing samples for gaps', 'Observe oral expression opportunities', 'Review language textbook activities critically'],
+            'Hindi': ['बच्चों की पठन क्षमता आकलन', 'लेखन नमूनों का विश्लेषण', 'मौखिक अभिव्यक्ति के अवसर', 'पाठ्यपुस्तक गतिविधियों की समीक्षा'],
+            'English': ['Assess reading fluency levels', 'Analyze common writing errors', 'Check comprehension vs decoding', 'Map textbook activities to skills'],
+            'Mathematics': ['Diagnose number sense understanding', 'Identify conceptual vs procedural gaps', 'Observe math anxiety signs', 'Review worksheet dependency vs manipulation'],
+            'EVS': ['Check experiential learning opportunities', 'Review project-based activities in class', 'Observe inquiry questions from students', 'Map local knowledge integration'],
+            'Science': ['Check experiment vs theory ratio', 'Assess scientific thinking in responses', 'Review lab/activity usage', 'Discuss misconceptions in key topics']
+        }
+    },
+    readiness: {
+        goal: 'Prepare teacher to try new methods — build skills & confidence',
+        duration: '6–8 weeks',
+        frequency: 'Bi-weekly visits + monthly workshop',
+        strategies: [
+            { area: 'Skill Building', icon: '🛠️', topics: [
+                'Model a lesson in teacher\'s classroom',
+                'Co-plan a lesson together (gradual release)',
+                'Practice questioning techniques together',
+                'Prepare TLM / worksheets collaboratively'
+            ]},
+            { area: 'Lesson Planning', icon: '📝', topics: [
+                'Introduction to learning outcomes-based planning',
+                'Differentiated instruction for multi-level class',
+                'Group work & collaborative learning design',
+                'Formative assessment integration in lesson'
+            ]},
+            { area: 'Peer Learning', icon: '👥', topics: [
+                'Arrange peer school visit for the teacher',
+                'Teacher Learning Circle (TLC) participation',
+                'Share & discuss classroom videos together',
+                'Connect with mentor teacher in cluster'
+            ]}
+        ],
+        subjectWise: {
+            'Language': ['Plan a shared reading lesson together', 'Design process writing activity', 'Create reading corner with leveled books', 'Plan oral language development activities'],
+            'Hindi': ['साझा पठन पाठ योजना बनाना', 'प्रक्रिया लेखन गतिविधि', 'स्तरानुसार पुस्तक कोना', 'मौखिक भाषा विकास गतिविधियाँ'],
+            'English': ['Design a picture composition lesson', 'Plan a phonics-based reading session', 'Create vocabulary games for class', 'Plan a storytelling-based grammar lesson'],
+            'Mathematics': ['Plan a manipulative-based math lesson', 'Design math games for practice', 'Create word problem solving framework', 'Plan a measurement activity outdoors'],
+            'EVS': ['Plan a field visit-based lesson', 'Design a community mapping activity', 'Create a simple experiment together', 'Plan seed-to-plant observation journal'],
+            'Science': ['Co-plan an inquiry-based lesson', 'Design a hands-on experiment', 'Plan a science journal activity', 'Create concept map for a chapter']
+        }
+    },
+    action: {
+        goal: 'Support sustained implementation of new practices in classroom',
+        duration: '8–12 weeks',
+        frequency: 'Bi-weekly visits + monthly reflection',
+        strategies: [
+            { area: 'Implementation Support', icon: '🚀', topics: [
+                'Observe teacher\'s new practice & give feedback',
+                'Troubleshoot implementation challenges together',
+                'Help adjust activities for class context',
+                'Document what\'s working with evidence'
+            ]},
+            { area: 'Assessment & Data', icon: '📊', topics: [
+                'Help design student assessment tools',
+                'Track student learning progress together',
+                'Use data to adjust teaching strategies',
+                'Portfolio-based assessment introduction'
+            ]},
+            { area: 'Deepening Practice', icon: '🔬', topics: [
+                'Try practice in a different subject / class',
+                'Add complexity — group work + differentiation',
+                'Integrate library / print-rich environment',
+                'Student-led activities & peer learning'
+            ]}
+        ],
+        subjectWise: {
+            'Language': ['Implement daily reading program', 'Start creative writing wall magazine', 'Conduct literature circle / book clubs', 'Run a class newspaper project'],
+            'Hindi': ['दैनिक पठन कार्यक्रम शुरू करें', 'रचनात्मक लेखन दीवार पत्रिका', 'कहानी / कविता मंडली', 'कक्षा समाचार पत्र परियोजना'],
+            'English': ['Start sustained silent reading (SSR)', 'Implement process writing weekly', 'Run English corner activities', 'Student-led show & tell sessions'],
+            'Mathematics': ['Daily mental math routine', 'Math journal implementation', 'Student-created word problems', 'Math lab activities weekly'],
+            'EVS': ['Weekly hands-on experiment', 'Student-led field documentation', 'Local knowledge integration project', 'Environmental audit by students'],
+            'Science': ['Weekly experiment journal', 'Student-designed experiments', 'Science exhibition preparation', 'Cross-curricular science projects']
+        }
+    },
+    internalization: {
+        goal: 'Sustain, mentor others & continuously improve',
+        duration: 'Ongoing (Quarterly check-ins)',
+        frequency: 'Monthly visit + quarterly reflection',
+        strategies: [
+            { area: 'Leadership & Mentoring', icon: '👑', topics: [
+                'Mentor a peer teacher in the school',
+                'Lead Teacher Learning Circle (TLC)',
+                'Present in Block / Cluster meeting',
+                'Document own journey for others'
+            ]},
+            { area: 'Action Research', icon: '🔍', topics: [
+                'Identify a classroom inquiry question',
+                'Design simple action research plan',
+                'Collect data & student work evidence',
+                'Share findings in teacher forum'
+            ]},
+            { area: 'Continuous Growth', icon: '🌱', topics: [
+                'Explore new pedagogies independently',
+                'Attend advanced workshops / conferences',
+                'Write about teaching experiences',
+                'Build community of practice in school'
+            ]}
+        ],
+        subjectWise: {
+            'Language': ['Action research on reading comprehension', 'Mentor other teachers in language pedagogy', 'Create language resource bank for school', 'Lead a book reading movement'],
+            'Hindi': ['पठन बोध पर कार्य अनुसंधान', 'भाषा शिक्षण में सहकर्मी मार्गदर्शन', 'विद्यालय स्तर भाषा संसाधन बैंक', 'पुस्तक पठन आंदोलन का नेतृत्व'],
+            'English': ['Action research on writing skills', 'Create English resource repository', 'Train peers in communicative approach', 'Lead English reading program school-wide'],
+            'Mathematics': ['Action research on math conceptual understanding', 'Create school math resource kit', 'Lead math mela / exhibition', 'Mentor peers in manipulative-based teaching'],
+            'EVS': ['Action research on inquiry learning', 'Create school EVS garden / lab', 'Lead community engagement project', 'Document local knowledge resources'],
+            'Science': ['Action research on scientific thinking', 'Create school science lab resources', 'Lead annual science fair', 'Mentor peers in experiment-based teaching']
+        }
+    }
+};
+
+// Generate personalized intervention plan for a teacher
+function generateMaraiPlan(teacherKey) {
+    const observations = DB.get('observations');
+    const maraiRecords = DB.get('maraiTracking');
+
+    // Get teacher observations
+    const teacherObs = observations.filter(o => (o.teacher || '').trim().toLowerCase() === teacherKey);
+    const teacherMarai = maraiRecords.filter(r => (r.teacher || '').trim().toLowerCase() === teacherKey);
+    const sortedMarai = [...teacherMarai].sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+    const latestRecord = sortedMarai[0];
+    const currentStage = latestRecord ? latestRecord.stage : 'motivation';
+    const intervention = MARAI_INTERVENTIONS[currentStage];
+    const stageInfo = MARAI_STAGES.find(s => s.key === currentStage);
+
+    // Analyze teacher's subjects from observations
+    const subjectCounts = {};
+    const topicSet = new Set();
+    const classCounts = {};
+    const practices = [];
+    const areasList = [];
+    const strengthsList = [];
+    let totalObs = teacherObs.length;
+    let lowEngagement = 0;
+
+    teacherObs.forEach(o => {
+        if (o.subject) subjectCounts[o.subject] = (subjectCounts[o.subject] || 0) + 1;
+        if (o.topic) topicSet.add(o.topic);
+        if (o.class) classCounts[o.class] = (classCounts[o.class] || 0) + 1;
+        if (o.practice) practices.push(o.practice);
+        if (o.areas) areasList.push(o.areas);
+        if (o.strengths) strengthsList.push(o.strengths);
+        if (o.engagementLevel && o.engagementLevel !== 'More Engaged' && o.engagementLevel !== 'Engaged') lowEngagement++;
+    });
+
+    // Top subjects
+    const topSubjects = Object.entries(subjectCounts).sort((a, b) => b[1] - a[1]).map(e => e[0]);
+    const primarySubject = topSubjects[0] || 'Language';
+    const topClasses = Object.entries(classCounts).sort((a, b) => b[1] - a[1]).map(e => e[0]);
+
+    // Calculate time in current stage
+    const stageRecords = sortedMarai.filter(r => r.stage === currentStage);
+    let daysInStage = 0;
+    if (stageRecords.length > 0) {
+        const earliest = stageRecords[stageRecords.length - 1];
+        daysInStage = Math.floor((Date.now() - new Date(earliest.date).getTime()) / 86400000);
+    }
+
+    // Determine visit frequency gaps
+    const obsDates = teacherObs.map(o => o.date).filter(Boolean).sort();
+    let avgGapDays = 0;
+    if (obsDates.length > 1) {
+        let totalGap = 0;
+        for (let i = 1; i < obsDates.length; i++) {
+            totalGap += (new Date(obsDates[i]) - new Date(obsDates[i - 1])) / 86400000;
+        }
+        avgGapDays = Math.round(totalGap / (obsDates.length - 1));
+    }
+    const lastVisitDate = obsDates[obsDates.length - 1] || null;
+    const daysSinceLast = lastVisitDate ? Math.floor((Date.now() - new Date(lastVisitDate).getTime()) / 86400000) : null;
+
+    // Get subject-specific suggestions
+    const subjectSuggestions = [];
+    topSubjects.slice(0, 3).forEach(subj => {
+        const match = Object.keys(intervention.subjectWise).find(k => subj.toLowerCase().includes(k.toLowerCase()) || k.toLowerCase().includes(subj.toLowerCase()));
+        if (match) {
+            subjectSuggestions.push({ subject: subj, activities: intervention.subjectWise[match] });
+        }
+    });
+    // Add default if no match
+    if (subjectSuggestions.length === 0) {
+        subjectSuggestions.push({ subject: primarySubject, activities: intervention.subjectWise[primarySubject] || intervention.subjectWise['Language'] || [] });
+    }
+
+    // Build timeline
+    const timeline = buildInterventionTimeline(currentStage, subjectSuggestions, intervention);
+
+    return {
+        currentStage, stageInfo, intervention,
+        totalObs, lowEngagement,
+        topSubjects, topClasses, primarySubject,
+        practices, areasList, strengthsList,
+        subjectSuggestions, daysInStage, avgGapDays,
+        daysSinceLast, lastVisitDate,
+        teacherName: latestRecord?.teacher || '',
+        school: latestRecord?.school || '',
+        timeline
+    };
+}
+
+function buildInterventionTimeline(stage, subjectSuggestions, intervention) {
+    const weeks = [];
+    const totalWeeks = stage === 'motivation' ? 6 : stage === 'awareness' ? 8 : stage === 'readiness' ? 8 : stage === 'action' ? 12 : 12;
+    const strategies = intervention.strategies;
+
+    for (let w = 1; w <= totalWeeks; w++) {
+        const stratIdx = (w - 1) % strategies.length;
+        const strat = strategies[stratIdx];
+        const topicIdx = Math.floor((w - 1) / strategies.length) % strat.topics.length;
+        const subj = subjectSuggestions[(w - 1) % subjectSuggestions.length];
+        const subjActIdx = (w - 1) % (subj?.activities?.length || 1);
+
+        weeks.push({
+            week: w,
+            area: strat.area,
+            icon: strat.icon,
+            topic: strat.topics[topicIdx],
+            subject: subj?.subject || '',
+            subjectActivity: subj?.activities?.[subjActIdx] || '',
+            isReview: w % 4 === 0
+        });
+    }
+    return weeks;
+}
+
+function getMaraiStageIndex(stage) {
+    return MARAI_STAGES.findIndex(s => s.key === stage);
+}
+
+// Validate teacher name — filter out metadata strings like 'Stage: Primary| NID: 113727'
+function isValidTeacherName(name) {
+    if (!name || typeof name !== 'string') return false;
+    const n = name.trim();
+    if (n.length < 2 || n.length > 100) return false;
+    // Reject if contains metadata patterns
+    if (/NID\s*:/i.test(n)) return false;
+    if (/Stage\s*:/i.test(n)) return false;
+    if (/\|/.test(n) && /\d{4,}/.test(n)) return false; // pipe + long number = metadata
+    if (/^\d+$/.test(n)) return false; // purely numeric
+    if (/^(null|undefined|none|n\/a|na|test|#)$/i.test(n)) return false;
+    return true;
+}
+
+function renderMaraiTracking() {
+    const records = DB.get('maraiTracking');
+    const container = document.getElementById('maraiContainer');
+    const searchTerm = (document.getElementById('maraiSearchInput')?.value || '').toLowerCase();
+    const stageFilter = document.getElementById('maraiStageFilter')?.value || 'all';
+    const schoolFilter = document.getElementById('maraiSchoolFilter')?.value || 'all';
+    const blockFilter = document.getElementById('maraiBlockFilter')?.value || 'all';
+    const sortBy = document.getElementById('maraiSortSelect')?.value || 'recent';
+    const smartFilter = window._maraiSmartFilter || 'none';
+
+    // Build teacher map from MARAI records
+    const teacherMap = {};
+    records.forEach(r => {
+        const key = (r.teacher || '').trim().toLowerCase();
+        if (!isValidTeacherName(r.teacher)) return;
+        if (!teacherMap[key]) teacherMap[key] = { name: r.teacher, school: r.school || '', block: '', cluster: '', records: [], obsCount: 0, subjects: new Set() };
+        if (r.school && !teacherMap[key].school) teacherMap[key].school = r.school;
+        teacherMap[key].records.push(r);
+    });
+
+    // Pull in teachers from observations + enrich with block/cluster/subject/obs count
+    const observations = DB.get('observations');
+    const allSchools = new Set();
+    const allBlocks = new Set();
+    observations.forEach(o => {
+        const teacher = (o.teacher || '').trim();
+        if (!teacher || !isValidTeacherName(teacher)) return;
+        const key = teacher.toLowerCase();
+        if (!teacherMap[key]) {
+            teacherMap[key] = { name: teacher, school: o.school || '', block: '', cluster: '', records: [], obsCount: 0, subjects: new Set() };
+        }
+        const t = teacherMap[key];
+        if (o.school && !t.school) t.school = o.school;
+        if (o.block && !t.block) t.block = o.block.trim();
+        if (o.cluster && !t.cluster) t.cluster = o.cluster.trim();
+        if (o.subject) t.subjects.add(o.subject);
+        t.obsCount++;
+        if (o.school) allSchools.add(o.school.trim());
+        if (o.block) allBlocks.add(o.block.trim());
+    });
+    // Also gather schools/blocks from MARAI records 
+    records.forEach(r => { if (r.school) allSchools.add(r.school.trim()); });
+
+    // Populate school & block filter dropdowns (preserving selection)
+    const schoolSel = document.getElementById('maraiSchoolFilter');
+    const blockSel = document.getElementById('maraiBlockFilter');
+    if (schoolSel) {
+        const curSchool = schoolSel.value;
+        const opts = ['<option value="all">🏫 All Schools</option>'];
+        [...allSchools].sort().forEach(s => opts.push(`<option value="${escapeHtml(s)}">${escapeHtml(s)}</option>`));
+        schoolSel.innerHTML = opts.join('');
+        schoolSel.value = [...allSchools].includes(curSchool) ? curSchool : 'all';
+    }
+    if (blockSel) {
+        const curBlock = blockSel.value;
+        const opts = ['<option value="all">📍 All Blocks</option>'];
+        [...allBlocks].sort().forEach(b => opts.push(`<option value="${escapeHtml(b)}">${escapeHtml(b)}</option>`));
+        blockSel.innerHTML = opts.join('');
+        blockSel.value = [...allBlocks].includes(curBlock) ? curBlock : 'all';
+    }
+
+    let teachers = Object.values(teacherMap);
+
+    // Compute per-teacher derived data for filtering/sorting
+    const now = Date.now();
+    teachers.forEach(t => {
+        const sorted = [...t.records].sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+        t._latest = sorted[0] || null;
+        t._currentStage = t._latest ? t._latest.stage : null;
+        t._stageIdx = t._currentStage ? getMaraiStageIndex(t._currentStage) : -1;
+        // Days since last MARAI record or observation
+        const allDates = [...t.records.map(r => r.date)].filter(Boolean).sort();
+        const obsForTeacher = observations.filter(o => (o.teacher || '').trim().toLowerCase() === t.name.trim().toLowerCase());
+        obsForTeacher.forEach(o => { if (o.date) allDates.push(o.date); });
+        allDates.sort();
+        const lastDate = allDates[allDates.length - 1];
+        t._daysSinceLast = lastDate ? Math.floor((now - new Date(lastDate).getTime()) / 86400000) : 9999;
+        t._lastDate = lastDate || '';
+        // Days in current stage
+        if (t._latest) {
+            const stageRecords = sorted.filter(r => r.stage === t._currentStage);
+            const earliest = stageRecords[stageRecords.length - 1];
+            t._daysInStage = earliest ? Math.floor((now - new Date(earliest.date).getTime()) / 86400000) : 0;
+        } else { t._daysInStage = 0; }
+        // Low engagement from observations
+        t._lowEngagement = obsForTeacher.filter(o => o.engagementLevel && o.engagementLevel !== 'More Engaged' && o.engagementLevel !== 'Engaged').length;
+    });
+
+    // ---- FILTERS ----
+    if (searchTerm) {
+        teachers = teachers.filter(t =>
+            t.name.toLowerCase().includes(searchTerm) ||
+            (t.school || '').toLowerCase().includes(searchTerm) ||
+            (t.block || '').toLowerCase().includes(searchTerm) ||
+            (t.cluster || '').toLowerCase().includes(searchTerm)
+        );
+    }
+    if (stageFilter === 'untracked') {
+        teachers = teachers.filter(t => t.records.length === 0);
+    } else if (stageFilter !== 'all') {
+        teachers = teachers.filter(t => t._currentStage === stageFilter);
+    }
+    if (schoolFilter !== 'all') {
+        teachers = teachers.filter(t => (t.school || '').trim() === schoolFilter);
+    }
+    if (blockFilter !== 'all') {
+        teachers = teachers.filter(t => (t.block || '').trim() === blockFilter);
+    }
+
+    // Smart filters
+    if (smartFilter === 'needs-visit') {
+        teachers = teachers.filter(t => t._daysSinceLast >= 14);
+    } else if (smartFilter === 'low-engagement') {
+        teachers = teachers.filter(t => t._lowEngagement > 0);
+    } else if (smartFilter === 'stuck') {
+        teachers = teachers.filter(t => t._daysInStage >= 45 && t._currentStage && t._currentStage !== 'internalization');
+    } else if (smartFilter === 'new-progress') {
+        teachers = teachers.filter(t => t.records.length > 1);
+    } else if (smartFilter === 'no-observations') {
+        teachers = teachers.filter(t => t.obsCount === 0);
+    }
+
+    // ---- SORTING ----
+    switch (sortBy) {
+        case 'name':
+            teachers.sort((a, b) => a.name.localeCompare(b.name));
+            break;
+        case 'stage-asc':
+            teachers.sort((a, b) => a._stageIdx - b._stageIdx || a.name.localeCompare(b.name));
+            break;
+        case 'stage-desc':
+            teachers.sort((a, b) => b._stageIdx - a._stageIdx || a.name.localeCompare(b.name));
+            break;
+        case 'most-observed':
+            teachers.sort((a, b) => b.obsCount - a.obsCount || a.name.localeCompare(b.name));
+            break;
+        case 'least-observed':
+            teachers.sort((a, b) => a.obsCount - b.obsCount || a.name.localeCompare(b.name));
+            break;
+        case 'overdue':
+            teachers.sort((a, b) => b._daysSinceLast - a._daysSinceLast || a.name.localeCompare(b.name));
+            break;
+        case 'recent':
+        default:
+            teachers.sort((a, b) => (b._lastDate || '').localeCompare(a._lastDate || '') || a.name.localeCompare(b.name));
+            break;
+    }
+
+    // ---- Smart filter chips ----
+    const allTeachersRaw = Object.values(teacherMap);
+    const needsVisitCount = allTeachersRaw.filter(t => t._daysSinceLast >= 14).length;
+    const lowEngCount = allTeachersRaw.filter(t => t._lowEngagement > 0).length;
+    const stuckCount = allTeachersRaw.filter(t => t._daysInStage >= 45 && t._currentStage && t._currentStage !== 'internalization').length;
+    const progressCount = allTeachersRaw.filter(t => t.records.length > 1).length;
+    const noObsCount = allTeachersRaw.filter(t => t.obsCount === 0).length;
+    const untrackedCount = allTeachersRaw.filter(t => t.records.length === 0).length;
+
+    const chipData = [
+        { key: 'needs-visit', label: '⏰ Needs Visit', count: needsVisitCount, color: '#ef4444', desc: '14+ days since last activity' },
+        { key: 'stuck', label: '🔒 Stuck in Stage', count: stuckCount, color: '#f59e0b', desc: '45+ days in same stage' },
+        { key: 'low-engagement', label: '😐 Low Engagement', count: lowEngCount, color: '#f97316', desc: 'Has low-engagement observations' },
+        { key: 'no-observations', label: '👻 No Observations', count: noObsCount, color: '#6b7280', desc: 'No classroom observations yet' },
+        { key: 'new-progress', label: '📈 Has Progress', count: progressCount, color: '#10b981', desc: 'Multiple MARAI records' }
+    ];
+
+    const smartChipsEl = document.getElementById('maraiSmartFilters');
+    if (smartChipsEl) {
+        smartChipsEl.innerHTML = chipData.map(c =>
+            `<button class="marai-smart-chip ${smartFilter === c.key ? 'active' : ''}" style="--chip-color:${c.color}" onclick="window._maraiSmartFilter = window._maraiSmartFilter === '${c.key}' ? 'none' : '${c.key}'; _pageState.marai=1; renderMaraiTracking()" title="${c.desc}">
+                ${c.label} <span class="marai-chip-count">${c.count}</span>
+            </button>`
+        ).join('') + (smartFilter !== 'none' ? `<button class="marai-smart-chip marai-chip-clear" onclick="window._maraiSmartFilter='none';_pageState.marai=1;renderMaraiTracking()" title="Clear filter"><i class="fas fa-times"></i> Clear</button>` : '');
+    }
+
+    // Summary stats
+    const allTeachers = allTeachersRaw;
+    const stageCounts = {};
+    MARAI_STAGES.forEach(s => stageCounts[s.key] = 0);
+    let untracked = 0;
+    allTeachers.forEach(t => {
+        if (t.records.length === 0) { untracked++; return; }
+        const latest = t.records.sort((a, b) => (b.date || '').localeCompare(a.date || ''))[0];
+        if (latest && stageCounts.hasOwnProperty(latest.stage)) stageCounts[latest.stage]++;
+    });
+
+    document.getElementById('maraiStats').innerHTML = 
+        MARAI_STAGES.map(s => `<div class="marai-stat-card" style="--marai-color:${s.color}"><span class="marai-stat-emoji">${s.emoji}</span><span class="marai-stat-value">${stageCounts[s.key]}</span><span class="marai-stat-label">${s.label}</span></div>`).join('') +
+        `<div class="marai-stat-card" style="--marai-color:#6b7280"><span class="marai-stat-emoji">📋</span><span class="marai-stat-value">${untracked}</span><span class="marai-stat-label">Untracked</span></div>` +
+        `<div class="marai-stat-card" style="--marai-color:var(--accent)"><span class="marai-stat-emoji">👥</span><span class="marai-stat-value">${allTeachers.length}</span><span class="marai-stat-label">Total</span></div>`;
+
+    if (teachers.length === 0) {
+        container.innerHTML = `<div class="idea-empty"><i class="fas fa-route"></i><h3>No teachers match filters</h3><p>${allTeachers.length} total teachers. Try adjusting your filters.</p><button class="btn btn-outline" onclick="resetMaraiFilters()"><i class="fas fa-undo"></i> Reset Filters</button></div>`;
+        return;
+    }
+
+    const isFiltered = searchTerm || stageFilter !== 'all' || schoolFilter !== 'all' || blockFilter !== 'all' || smartFilter !== 'none';
+    const filterInfo = isFiltered ? `<div class="marai-filter-info"><i class="fas fa-filter"></i> Showing <strong>${teachers.length}</strong> of ${allTeachers.length} teachers${smartFilter !== 'none' ? ` — <em>${chipData.find(c => c.key === smartFilter)?.label || smartFilter}</em>` : ''} <button class="btn btn-sm btn-outline" onclick="resetMaraiFilters()"><i class="fas fa-undo"></i> Reset</button></div>` : '';
+
+    const pg = getPaginatedItems(teachers, 'marai', 15);
+
+    container.innerHTML = filterInfo + pg.items.map(t => {
+        const sorted = [...t.records].sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+        const latest = sorted[0];
+        const currentStage = latest ? MARAI_STAGES.find(s => s.key === latest.stage) : null;
+        const stageIdx = currentStage ? getMaraiStageIndex(currentStage.key) : -1;
+
+        // Progress bar
+        const progressDots = MARAI_STAGES.map((s, i) => {
+            const reached = i <= stageIdx;
+            const isCurrent = i === stageIdx;
+            return `<div class="marai-dot ${reached ? 'reached' : ''} ${isCurrent ? 'current' : ''}" style="--dot-color:${s.color}" title="${s.label}">
+                <span class="marai-dot-emoji">${s.emoji}</span>
+            </div>`;
+        }).join('<div class="marai-connector"></div>');
+
+        const lastNote = latest?.notes || '';
+        const lastDate = latest ? new Date(latest.date).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : 'Not tracked';
+        const teacherKey = encodeURIComponent(t.name.trim().toLowerCase());
+
+        // Generate quick suggestion snippet
+        const suggSnippet = generateMaraiSuggestionSnippet(teacherKey, currentStage?.key);
+
+        return `<div class="marai-card">
+            <div class="marai-card-header">
+                <div class="marai-teacher-info">
+                    <h4>${escapeHtml(t.name)}</h4>
+                    ${t.school ? `<span class="marai-school"><i class="fas fa-school"></i> ${escapeHtml(t.school)}</span>` : ''}
+                </div>
+                <div class="marai-card-actions">
+                    <button class="btn btn-sm btn-accent" onclick="showMaraiPlanModal('${teacherKey}')" title="View Intervention Plan"><i class="fas fa-clipboard-list"></i> Plan</button>
+                    <button class="btn btn-sm btn-primary" onclick="openMaraiRecordModal('${teacherKey}')"><i class="fas fa-plus"></i> Update Stage</button>
+                </div>
+            </div>
+            <div class="marai-progress">${progressDots}</div>
+            <div class="marai-card-footer">
+                <span class="marai-current-stage" style="color:${currentStage?.color || 'var(--text-muted)'}">
+                    ${currentStage ? `${currentStage.emoji} ${currentStage.label}` : '📋 Not Yet Tracked'}
+                </span>
+                <span class="marai-last-date"><i class="fas fa-calendar-alt"></i> ${lastDate}</span>
+                ${lastNote ? `<span class="marai-last-note" title="${escapeHtml(lastNote)}"><i class="fas fa-sticky-note"></i> ${escapeHtml(lastNote.substring(0, 60))}${lastNote.length > 60 ? '...' : ''}</span>` : ''}
+            </div>
+            ${suggSnippet}
+            ${sorted.length > 0 ? `<div class="marai-history-toggle" onclick="this.nextElementSibling.classList.toggle('show');this.querySelector('i').classList.toggle('fa-chevron-down');this.querySelector('i').classList.toggle('fa-chevron-up')"><i class="fas fa-chevron-down"></i> ${sorted.length} record${sorted.length !== 1 ? 's' : ''}</div>
+            <div class="marai-history">${sorted.map(r => {
+                const s = MARAI_STAGES.find(st => st.key === r.stage);
+                return `<div class="marai-history-item">
+                    <span class="marai-history-badge" style="background:${s?.color || '#6b7280'}20;color:${s?.color || '#6b7280'}">${s?.emoji || '📋'} ${s?.label || r.stage}</span>
+                    <span class="marai-history-date">${new Date(r.date).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}</span>
+                    ${r.notes ? `<span class="marai-history-note">${escapeHtml(r.notes)}</span>` : ''}
+                    <button class="btn-icon-sm" onclick="deleteMaraiRecord('${r.id}')" title="Delete"><i class="fas fa-trash"></i></button>
+                </div>`;
+            }).join('')}</div>` : ''}
+        </div>`;
+    }).join('') + renderPaginationControls('marai', pg, 'renderMaraiTracking');
+}
+
+function openMaraiRecordModal(encodedTeacherKey) {
+    const teacherKey = decodeURIComponent(encodedTeacherKey);
+    const form = document.getElementById('maraiRecordForm');
+    form.reset();
+
+    // Find teacher name
+    const observations = DB.get('observations');
+    const maraiRecords = DB.get('maraiTracking');
+    let teacherName = '';
+    let school = '';
+
+    // Check MARAI records first
+    const existingRecords = maraiRecords.filter(r => (r.teacher || '').trim().toLowerCase() === teacherKey);
+    if (existingRecords.length > 0) {
+        const latest = existingRecords.sort((a, b) => (b.date || '').localeCompare(a.date || ''))[0];
+        teacherName = latest.teacher;
+        school = latest.school || '';
+    }
+
+    // Check observations
+    if (!teacherName) {
+        const obs = observations.find(o => (o.teacher || '').trim().toLowerCase() === teacherKey);
+        if (obs) { teacherName = obs.teacher; school = obs.school || ''; }
+    }
+
+    document.getElementById('maraiTeacherName').value = teacherName;
+    document.getElementById('maraiSchool').value = school;
+    document.getElementById('maraiDate').value = new Date().toISOString().split('T')[0];
+
+    // Default to next stage
+    if (existingRecords.length > 0) {
+        const latest = existingRecords.sort((a, b) => (b.date || '').localeCompare(a.date || ''))[0];
+        const currentIdx = getMaraiStageIndex(latest.stage);
+        const nextIdx = Math.min(currentIdx + 1, MARAI_STAGES.length - 1);
+        document.getElementById('maraiStage').value = MARAI_STAGES[nextIdx].key;
+    }
+
+    document.getElementById('maraiModalTitle').innerHTML = '<i class="fas fa-route"></i> Update MARAI Stage';
+    openModal('maraiRecordModal');
+    updateMaraiStagePreview();
+}
+
+function saveMaraiRecord(e) {
+    e.preventDefault();
+    const records = DB.get('maraiTracking');
+    const record = {
+        id: DB.generateId(),
+        teacher: document.getElementById('maraiTeacherName').value.trim(),
+        school: document.getElementById('maraiSchool').value.trim(),
+        stage: document.getElementById('maraiStage').value,
+        date: document.getElementById('maraiDate').value,
+        notes: document.getElementById('maraiNotes').value.trim(),
+        createdAt: new Date().toISOString()
+    };
+
+    records.push(record);
+    DB.set('maraiTracking', records);
+    closeModal('maraiRecordModal');
+    renderMaraiTracking();
+    const stageInfo = MARAI_STAGES.find(s => s.key === record.stage);
+    showToast(`${stageInfo?.emoji || '✅'} ${record.teacher} → ${stageInfo?.label || record.stage}`);
+}
+
+// Live stage preview for MARAI modal
+function updateMaraiStagePreview() {
+    const selectedStage = document.getElementById('maraiStage')?.value;
+    const previewEl = document.getElementById('maraiPreviewDots');
+    const previewContainer = document.getElementById('maraiStagePreview');
+    if (!previewEl || !previewContainer) return;
+    const stageIdx = MARAI_STAGES.findIndex(s => s.key === selectedStage);
+    const stageInfo = MARAI_STAGES[stageIdx];
+    // Update stage-specific accent color on the modal
+    const modal = document.querySelector('.marai-record-modal');
+    if (modal) modal.style.setProperty('--marai-modal-accent', stageInfo?.color || '#f59e0b');
+
+    previewEl.innerHTML = MARAI_STAGES.map((s, i) => {
+        const reached = i <= stageIdx;
+        const isCurrent = i === stageIdx;
+        return `<div class="marai-pv-step ${reached ? 'reached' : ''} ${isCurrent ? 'current' : ''}" style="--pv-color:${s.color}" title="${s.label}">
+            <div class="marai-pv-dot">${s.emoji}</div>
+            <span class="marai-pv-label">${s.label}</span>
+        </div>${i < MARAI_STAGES.length - 1 ? '<div class="marai-pv-line' + (reached && i < stageIdx ? ' reached' : '') + '"></div>' : ''}`;
+    }).join('');
+    previewContainer.style.setProperty('--preview-accent', stageInfo?.color || '#f59e0b');
+}
+
+function deleteMaraiRecord(id) {
+    if (!confirm('Delete this MARAI record?')) return;
+    let records = DB.get('maraiTracking');
+    records = records.filter(r => r.id !== id);
+    DB.set('maraiTracking', records);
+    renderMaraiTracking();
+    showToast('Record deleted');
+}
+
+function resetMaraiFilters() {
+    const ids = ['maraiStageFilter', 'maraiSchoolFilter', 'maraiBlockFilter', 'maraiSortSelect'];
+    ids.forEach(id => { const el = document.getElementById(id); if (el) el.value = el.options[0]?.value || 'all'; });
+    const search = document.getElementById('maraiSearchInput');
+    if (search) search.value = '';
+    window._maraiSmartFilter = 'none';
+    _pageState.marai = 1;
+    renderMaraiTracking();
+}
+
+// Generate a compact suggestion snippet for MARAI card
+function generateMaraiSuggestionSnippet(teacherKey, stage) {
+    if (!stage) {
+        return `<div class="marai-suggestion-snippet">
+            <div class="marai-sugg-header"><i class="fas fa-lightbulb"></i> Start by tracking this teacher's MARAI stage to get intervention suggestions</div>
+        </div>`;
+    }
+    const intervention = MARAI_INTERVENTIONS[stage];
+    if (!intervention) return '';
+
+    const observations = DB.get('observations');
+    const teacherObs = observations.filter(o => (o.teacher || '').trim().toLowerCase() === teacherKey);
+
+    // Find primary subject
+    const subjCount = {};
+    teacherObs.forEach(o => { if (o.subject) subjCount[o.subject] = (subjCount[o.subject] || 0) + 1; });
+    const topSubj = Object.entries(subjCount).sort((a, b) => b[1] - a[1])[0];
+    const primarySubj = topSubj ? topSubj[0] : null;
+
+    // Get matching subject suggestions
+    let subjActivities = [];
+    if (primarySubj) {
+        const match = Object.keys(intervention.subjectWise).find(k => primarySubj.toLowerCase().includes(k.toLowerCase()) || k.toLowerCase().includes(primarySubj.toLowerCase()));
+        if (match) subjActivities = intervention.subjectWise[match].slice(0, 2);
+    }
+    if (subjActivities.length === 0) {
+        subjActivities = (intervention.subjectWise['Language'] || Object.values(intervention.subjectWise)[0] || []).slice(0, 2);
+    }
+
+    // Pick 2 strategy topics
+    const stratTopics = intervention.strategies.slice(0, 2).map(s => `${s.icon} ${s.topics[0]}`);
+
+    // Visit frequency suggestion
+    const obsDates = teacherObs.map(o => o.date).filter(Boolean).sort();
+    const lastDate = obsDates[obsDates.length - 1];
+    const daysSince = lastDate ? Math.floor((Date.now() - new Date(lastDate).getTime()) / 86400000) : null;
+    let urgencyMsg = '';
+    if (daysSince !== null && daysSince > 14) {
+        urgencyMsg = `<span class="marai-sugg-urgent"><i class="fas fa-exclamation-triangle"></i> ${daysSince} days since last visit — visit soon!</span>`;
+    }
+
+    return `<div class="marai-suggestion-snippet">
+        <div class="marai-sugg-header"><i class="fas fa-lightbulb"></i> Suggested Interventions <span class="marai-sugg-freq">${intervention.frequency}</span></div>
+        <div class="marai-sugg-items">
+            ${stratTopics.map(t => `<span class="marai-sugg-item">${t}</span>`).join('')}
+            ${subjActivities.map(a => `<span class="marai-sugg-item marai-sugg-subject"><i class="fas fa-book"></i> ${primarySubj ? escapeHtml(primarySubj) + ': ' : ''}${escapeHtml(a)}</span>`).join('')}
+        </div>
+        ${urgencyMsg}
+    </div>`;
+}
+
+// Show full intervention plan modal
+function showMaraiPlanModal(encodedTeacherKey) {
+    const teacherKey = decodeURIComponent(encodedTeacherKey);
+    const plan = generateMaraiPlan(teacherKey);
+    const modal = document.getElementById('maraiPlanModal');
+    const body = document.getElementById('maraiPlanBody');
+
+    const stageColor = plan.stageInfo?.color || 'var(--accent)';
+    const stageEmoji = plan.stageInfo?.emoji || '📋';
+    const stageName = plan.stageInfo?.label || 'Not Tracked';
+
+    // Header with teacher info
+    let html = `<div class="mp-teacher-header" style="--mp-color:${stageColor}">
+        <div class="mp-teacher-info">
+            <h3>${escapeHtml(plan.teacherName || teacherKey)}</h3>
+            ${plan.school ? `<span><i class="fas fa-school"></i> ${escapeHtml(plan.school)}</span>` : ''}
+        </div>
+        <div class="mp-stage-badge" style="background:${stageColor}">${stageEmoji} ${stageName}</div>
+    </div>`;
+
+    // Analytics summary
+    html += `<div class="mp-analytics">
+        <div class="mp-analytic"><span class="mp-analytic-val">${plan.totalObs}</span><span class="mp-analytic-label">Observations</span></div>
+        <div class="mp-analytic"><span class="mp-analytic-val">${plan.topSubjects.length}</span><span class="mp-analytic-label">Subjects</span></div>
+        <div class="mp-analytic"><span class="mp-analytic-val">${plan.daysInStage}d</span><span class="mp-analytic-label">In Stage</span></div>
+        <div class="mp-analytic"><span class="mp-analytic-val">${plan.avgGapDays || '—'}d</span><span class="mp-analytic-label">Avg Gap</span></div>
+        <div class="mp-analytic"><span class="mp-analytic-val">${plan.daysSinceLast ?? '—'}d</span><span class="mp-analytic-label">Since Last</span></div>
+        <div class="mp-analytic"><span class="mp-analytic-val">${plan.lowEngagement}</span><span class="mp-analytic-label">Low Engage</span></div>
+    </div>`;
+
+    // Alerts
+    if (plan.daysSinceLast !== null && plan.daysSinceLast > 14) {
+        html += `<div class="mp-alert mp-alert-warn"><i class="fas fa-exclamation-triangle"></i> <strong>${plan.daysSinceLast} days since last visit.</strong> Recommended: ${plan.intervention.frequency}</div>`;
+    }
+    if (plan.daysInStage > 60 && plan.currentStage !== 'internalization') {
+        html += `<div class="mp-alert mp-alert-info"><i class="fas fa-info-circle"></i> Teacher has been in <strong>${stageName}</strong> stage for ${plan.daysInStage} days. Consider if ready to progress.</div>`;
+    }
+
+    // Goal & Duration
+    html += `<div class="mp-goal-card">
+        <div class="mp-goal-title"><i class="fas fa-bullseye"></i> Stage Goal</div>
+        <p class="mp-goal-text">${plan.intervention.goal}</p>
+        <div class="mp-goal-meta">
+            <span><i class="fas fa-clock"></i> Duration: <strong>${plan.intervention.duration}</strong></span>
+            <span><i class="fas fa-calendar-check"></i> Frequency: <strong>${plan.intervention.frequency}</strong></span>
+        </div>
+    </div>`;
+
+    // Strategy areas
+    html += `<div class="mp-section-title"><i class="fas fa-chess"></i> Intervention Strategies</div>`;
+    html += `<div class="mp-strategies">`;
+    plan.intervention.strategies.forEach(s => {
+        html += `<div class="mp-strategy-card">
+            <div class="mp-strat-icon">${s.icon}</div>
+            <div class="mp-strat-content">
+                <h4>${s.area}</h4>
+                <ul>${s.topics.map(t => `<li>${t}</li>`).join('')}</ul>
+            </div>
+        </div>`;
+    });
+    html += `</div>`;
+
+    // Subject-specific plan
+    if (plan.subjectSuggestions.length > 0) {
+        html += `<div class="mp-section-title"><i class="fas fa-book-open"></i> Subject-Wise Activities</div>`;
+        html += `<div class="mp-subject-cards">`;
+        plan.subjectSuggestions.forEach(ss => {
+            html += `<div class="mp-subject-card">
+                <h4><i class="fas fa-book"></i> ${escapeHtml(ss.subject)}</h4>
+                <ul>${ss.activities.map(a => `<li>${escapeHtml(a)}</li>`).join('')}</ul>
+            </div>`;
+        });
+        html += `</div>`;
+    }
+
+    // From observations: Strengths & Areas
+    if (plan.strengthsList.length > 0 || plan.areasList.length > 0) {
+        html += `<div class="mp-section-title"><i class="fas fa-chart-bar"></i> From Observations</div>`;
+        html += `<div class="mp-obs-insights">`;
+        if (plan.strengthsList.length > 0) {
+            const uniqStrengths = [...new Set(plan.strengthsList.filter(Boolean))].slice(0, 5);
+            html += `<div class="mp-insight-block mp-insight-good">
+                <h5><i class="fas fa-check-circle"></i> Strengths Observed</h5>
+                <ul>${uniqStrengths.map(s => `<li>${escapeHtml(s.length > 100 ? s.substring(0, 100) + '...' : s)}</li>`).join('')}</ul>
+            </div>`;
+        }
+        if (plan.areasList.length > 0) {
+            const uniqAreas = [...new Set(plan.areasList.filter(Boolean))].slice(0, 5);
+            html += `<div class="mp-insight-block mp-insight-improve">
+                <h5><i class="fas fa-exclamation-circle"></i> Areas for Improvement</h5>
+                <ul>${uniqAreas.map(a => `<li>${escapeHtml(a.length > 100 ? a.substring(0, 100) + '...' : a)}</li>`).join('')}</ul>
+            </div>`;
+        }
+        html += `</div>`;
+    }
+
+    // Weekly Timeline
+    html += `<div class="mp-section-title"><i class="fas fa-calendar-alt"></i> Suggested Weekly Plan (${plan.timeline.length} weeks)</div>`;
+    html += `<div class="mp-timeline">`;
+    plan.timeline.forEach(w => {
+        html += `<div class="mp-week ${w.isReview ? 'mp-week-review' : ''}">
+            <div class="mp-week-num">${w.isReview ? '🔄' : w.icon} W${w.week}</div>
+            <div class="mp-week-content">
+                <div class="mp-week-area">${w.area}${w.isReview ? ' — <strong>Review & Reflect</strong>' : ''}</div>
+                <div class="mp-week-topic">${w.topic}</div>
+                ${w.subjectActivity ? `<div class="mp-week-subject"><i class="fas fa-book"></i> ${escapeHtml(w.subject)}: ${escapeHtml(w.subjectActivity)}</div>` : ''}
+            </div>
+        </div>`;
+    });
+    html += `</div>`;
+
+    // Next steps
+    const nextStageIdx = getMaraiStageIndex(plan.currentStage) + 1;
+    if (nextStageIdx < MARAI_STAGES.length) {
+        const next = MARAI_STAGES[nextStageIdx];
+        html += `<div class="mp-next-stage">
+            <div class="mp-next-title"><i class="fas fa-arrow-right"></i> Path to Next Stage: ${next.emoji} ${next.label}</div>
+            <p>${next.desc}</p>
+            <p class="mp-next-criteria">When the teacher consistently demonstrates the characteristics of the <strong>${stageName}</strong> stage, consider moving them to <strong>${next.label}</strong>.</p>
+        </div>`;
+    }
+
+    body.innerHTML = html;
+    openModal('maraiPlanModal');
+}
+
+// ===== SCHOOL-BASED WORK TRACKING =====
+// Track: Assembly, Print-Rich Environment, Library, Creative Writing, Bal Shodh Mela
+const SCHOOL_WORK_TYPES = [
+    { key: 'assembly', label: 'Assembly', emoji: '🎤', color: '#6366f1', desc: 'Morning assembly activities, cultural programs, theme days' },
+    { key: 'print-rich', label: 'Print Rich', emoji: '🖼️', color: '#f59e0b', desc: 'Classroom/school print-rich environment — charts, labels, displays' },
+    { key: 'library', label: 'Library', emoji: '📚', color: '#10b981', desc: 'Library setup, reading programs, book access, reading corners' },
+    { key: 'creative-writing', label: 'Creative Writing', emoji: '✍️', color: '#ec4899', desc: 'Student creative writing activities, wall magazines, story writing' },
+    { key: 'bal-shodh-mela', label: 'Bal Shodh Mela', emoji: '🔬', color: '#8b5cf6', desc: 'Children\'s Research Fair — student inquiry projects and presentations' },
+    { key: 'other', label: 'Other Activity', emoji: '📌', color: '#64748b', desc: 'Any other school-based work or initiative' }
+];
+
+function renderSchoolWork() {
+    const records = DB.get('schoolWork');
+    const container = document.getElementById('schoolWorkContainer');
+    const typeFilter = document.getElementById('schoolWorkTypeFilter')?.value || 'all';
+    const searchTerm = (document.getElementById('schoolWorkSearchInput')?.value || '').toLowerCase();
+
+    let filtered = [...records];
+    if (typeFilter !== 'all') {
+        filtered = filtered.filter(r => r.type === typeFilter);
+    }
+    if (searchTerm) {
+        filtered = filtered.filter(r =>
+            (r.school || '').toLowerCase().includes(searchTerm) ||
+            (r.title || '').toLowerCase().includes(searchTerm) ||
+            (r.description || '').toLowerCase().includes(searchTerm) ||
+            (r.type || '').toLowerCase().includes(searchTerm) ||
+            (Array.isArray(r.teachers) && r.teachers.some(t => t.toLowerCase().includes(searchTerm)))
+        );
+    }
+    filtered.sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+
+    // Summary stats
+    const allRecords = records;
+    const typeCounts = {};
+    SCHOOL_WORK_TYPES.forEach(t => typeCounts[t.key] = 0);
+    allRecords.forEach(r => { if (typeCounts.hasOwnProperty(r.type)) typeCounts[r.type]++; else typeCounts['other'] = (typeCounts['other'] || 0) + 1; });
+    const uniqueSchools = new Set(allRecords.map(r => (r.school || '').trim().toLowerCase()).filter(Boolean)).size;
+
+    const now = new Date();
+    const thisMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+    const thisMonthCount = allRecords.filter(r => (r.date || '').startsWith(thisMonth)).length;
+
+    document.getElementById('schoolWorkStats').innerHTML = 
+        SCHOOL_WORK_TYPES.map(t => `<div class="sw-stat-card" style="--sw-color:${t.color}"><span class="sw-stat-emoji">${t.emoji}</span><span class="sw-stat-value">${typeCounts[t.key]}</span><span class="sw-stat-label">${t.label}</span></div>`).join('') +
+        `<div class="sw-stat-card" style="--sw-color:var(--accent)"><span class="sw-stat-emoji">🏫</span><span class="sw-stat-value">${uniqueSchools}</span><span class="sw-stat-label">Schools</span></div>` +
+        `<div class="sw-stat-card" style="--sw-color:#0d9488"><span class="sw-stat-emoji">📅</span><span class="sw-stat-value">${thisMonthCount}</span><span class="sw-stat-label">This Month</span></div>`;
+
+    if (filtered.length === 0) {
+        container.innerHTML = '<div class="idea-empty"><i class="fas fa-chalkboard"></i><h3>No school work recorded</h3><p>Track school-based activities like Assembly, Library, Print-Rich Environment, Creative Writing & Bal Shodh Mela.</p></div>';
+        return;
+    }
+
+    const pg = getPaginatedItems(filtered, 'schoolWork', 15);
+
+    container.innerHTML = pg.items.map(r => {
+        const typeInfo = SCHOOL_WORK_TYPES.find(t => t.key === r.type) || SCHOOL_WORK_TYPES[5];
+        const statusColors = { planned: '#3b82f6', 'in-progress': '#f59e0b', completed: '#10b981' };
+        const statusLabels = { planned: '📋 Planned', 'in-progress': '🔄 In Progress', completed: '✅ Completed' };
+        const statusIcons = { planned: 'fa-clipboard-list', 'in-progress': 'fa-spinner', completed: 'fa-check-circle' };
+        const teachers = Array.isArray(r.teachers) ? r.teachers : [];
+
+        return `<div class="sw-card" style="--sw-accent:${typeInfo.color}">
+            <div class="sw-card-accent" style="background:linear-gradient(180deg, ${typeInfo.color}, ${typeInfo.color}66)"></div>
+            <div class="sw-card-body">
+                <div class="sw-card-header">
+                    <div class="sw-card-header-left">
+                        <div class="sw-type-badge" style="background:${typeInfo.color}18;color:${typeInfo.color};border:1px solid ${typeInfo.color}30">${typeInfo.emoji} ${typeInfo.label}</div>
+                        <span class="sw-status-badge" style="color:${statusColors[r.status] || '#6b7280'};background:${statusColors[r.status] || '#6b7280'}12"><i class="fas ${statusIcons[r.status] || 'fa-circle'}"></i> ${statusLabels[r.status] || r.status}</span>
+                    </div>
+                    <div class="sw-card-actions">
+                        <button class="btn btn-sm btn-outline" onclick="openSchoolWorkModal('${r.id}')" title="Edit"><i class="fas fa-edit"></i></button>
+                        <button class="btn btn-sm btn-outline sw-delete-btn" onclick="deleteSchoolWork('${r.id}')" title="Delete"><i class="fas fa-trash"></i></button>
+                    </div>
+                </div>
+                <h4 class="sw-card-title">${escapeHtml(r.title || typeInfo.label)}</h4>
+                <div class="sw-card-meta">
+                    <span><i class="fas fa-school"></i> ${escapeHtml(r.school || 'Not specified')}</span>
+                    <span><i class="fas fa-calendar-alt"></i> ${r.date ? new Date(r.date).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : 'N/A'}</span>
+                    ${r.participants ? `<span><i class="fas fa-users"></i> ${r.participants} participants</span>` : ''}
+                    ${r.block ? `<span><i class="fas fa-map-marker-alt"></i> ${escapeHtml(r.block)}</span>` : ''}
+                    ${r.photos ? `<span><i class="fas fa-camera"></i> ${r.photos} photo(s)</span>` : ''}
+                </div>
+                ${teachers.length > 0 ? `<div class="sw-card-teachers"><i class="fas fa-chalkboard-teacher"></i>${teachers.map(t => `<span class="sw-teacher-tag">${escapeHtml(t)}</span>`).join('')}</div>` : ''}
+                ${r.description ? `<div class="sw-card-desc">${escapeHtml(r.description)}</div>` : ''}
+                ${r.observations ? `<div class="sw-card-obs"><i class="fas fa-eye"></i> <span>${escapeHtml(r.observations)}</span></div>` : ''}
+                ${r.outcome ? `<div class="sw-card-outcome"><i class="fas fa-check-circle"></i> <span>${escapeHtml(r.outcome)}</span></div>` : ''}
+            </div>
+        </div>`;
+    }).join('') + renderPaginationControls('schoolWork', pg, 'renderSchoolWork');
+}
+
+// Assigned teachers state for school work modal
+window._swTeachers = [];
+
+function openSchoolWorkModal(id) {
+    const form = document.getElementById('schoolWorkForm');
+    form.reset();
+    document.getElementById('schoolWorkId').value = '';
+    document.getElementById('schoolWorkModalTitle').innerHTML = '<i class="fas fa-chalkboard"></i> Log School Work';
+    document.getElementById('schoolWorkDate').value = new Date().toISOString().split('T')[0];
+    window._swTeachers = [];
+
+    // Populate school autocomplete from visits
+    const visits = DB.get('visits');
+    const schoolNames = [...new Set(visits.map(v => (v.school || '').trim()).filter(Boolean))].sort();
+    const schoolList = document.getElementById('schoolWorkSchoolList');
+    if (schoolList) {
+        schoolList.innerHTML = schoolNames.map(s => `<option value="${escapeHtml(s)}">`).join('');
+    }
+
+    // Populate teacher autocomplete from observations & MARAI tracking
+    const observations = DB.get('observations');
+    const maraiRecords = DB.get('maraiTracking');
+    const teacherNames = [...new Set([
+        ...observations.map(o => (o.teacher || '').trim()).filter(Boolean),
+        ...maraiRecords.map(r => (r.teacher || '').trim()).filter(Boolean)
+    ])].sort();
+    const teacherList = document.getElementById('schoolWorkTeacherList');
+    if (teacherList) {
+        teacherList.innerHTML = teacherNames.map(t => `<option value="${escapeHtml(t)}">`).join('');
+    }
+
+    if (id) {
+        const records = DB.get('schoolWork');
+        const r = records.find(x => x.id === id);
+        if (r) {
+            document.getElementById('schoolWorkModalTitle').innerHTML = '<i class="fas fa-chalkboard"></i> Edit School Work';
+            document.getElementById('schoolWorkId').value = r.id;
+            document.getElementById('schoolWorkType').value = r.type || 'other';
+            document.getElementById('schoolWorkTitle').value = r.title || '';
+            document.getElementById('schoolWorkSchool').value = r.school || '';
+            document.getElementById('schoolWorkBlock').value = r.block || '';
+            document.getElementById('schoolWorkDate').value = r.date || '';
+            document.getElementById('schoolWorkStatus').value = r.status || 'completed';
+            document.getElementById('schoolWorkParticipants').value = r.participants || '';
+            document.getElementById('schoolWorkDescription').value = r.description || '';
+            document.getElementById('schoolWorkObservations').value = r.observations || '';
+            document.getElementById('schoolWorkOutcome').value = r.outcome || '';
+            document.getElementById('schoolWorkPhotos').value = r.photos || '';
+            window._swTeachers = Array.isArray(r.teachers) ? [...r.teachers] : [];
+        }
+    }
+
+    renderSwTeacherTags();
+    openModal('schoolWorkModal');
+}
+
+function handleSwTeacherKeydown(e) {
+    if (e.key === 'Enter') {
+        e.preventDefault();
+        addSwTeacher();
+    }
+}
+
+function addSwTeacher() {
+    const input = document.getElementById('schoolWorkTeacherInput');
+    const name = (input.value || '').trim();
+    if (!name) return;
+    if (!window._swTeachers.includes(name)) {
+        window._swTeachers.push(name);
+    }
+    input.value = '';
+    input.focus();
+    renderSwTeacherTags();
+}
+
+function removeSwTeacher(idx) {
+    window._swTeachers.splice(idx, 1);
+    renderSwTeacherTags();
+}
+
+function renderSwTeacherTags() {
+    const container = document.getElementById('schoolWorkTeacherTags');
+    if (!container) return;
+    if (window._swTeachers.length === 0) {
+        container.innerHTML = '<span class="sw-teacher-empty">No teachers assigned yet</span>';
+        return;
+    }
+    container.innerHTML = window._swTeachers.map((t, i) =>
+        `<span class="sw-teacher-tag-modal"><i class="fas fa-user"></i> ${escapeHtml(t)} <button type="button" onclick="removeSwTeacher(${i})" title="Remove"><i class="fas fa-times"></i></button></span>`
+    ).join('');
+}
+
+function saveSchoolWork(e) {
+    e.preventDefault();
+    const records = DB.get('schoolWork');
+    const id = document.getElementById('schoolWorkId').value;
+
+    const record = {
+        id: id || DB.generateId(),
+        type: document.getElementById('schoolWorkType').value,
+        title: document.getElementById('schoolWorkTitle').value.trim(),
+        school: document.getElementById('schoolWorkSchool').value.trim(),
+        block: document.getElementById('schoolWorkBlock').value.trim(),
+        date: document.getElementById('schoolWorkDate').value,
+        status: document.getElementById('schoolWorkStatus').value,
+        participants: parseInt(document.getElementById('schoolWorkParticipants').value) || 0,
+        teachers: [...(window._swTeachers || [])],
+        description: document.getElementById('schoolWorkDescription').value.trim(),
+        observations: document.getElementById('schoolWorkObservations').value.trim(),
+        outcome: document.getElementById('schoolWorkOutcome').value.trim(),
+        photos: parseInt(document.getElementById('schoolWorkPhotos').value) || 0,
+        createdAt: id ? (records.find(r => r.id === id) || {}).createdAt || new Date().toISOString() : new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+    };
+
+    if (id) {
+        const idx = records.findIndex(r => r.id === id);
+        if (idx !== -1) records[idx] = record;
+    } else {
+        records.push(record);
+    }
+
+    DB.set('schoolWork', records);
+    closeModal('schoolWorkModal');
+    renderSchoolWork();
+    const typeInfo = SCHOOL_WORK_TYPES.find(t => t.key === record.type);
+    showToast(id ? 'School work updated' : `${typeInfo?.emoji || '✅'} School work logged!`);
+}
+
+function deleteSchoolWork(id) {
+    if (!confirm('Delete this school work record?')) return;
+    let records = DB.get('schoolWork');
+    records = records.filter(r => r.id !== id);
+    DB.set('schoolWork', records);
+    renderSchoolWork();
+    showToast('Record deleted');
+}
+
+// ===== VISIT PLAN vs EXECUTION =====
+
+// --- Linked Excel (two-way sync) ---
+window._vpFileHandle = null;
+window._vpLinkedName = null;
+window._vpSyncing = false;
+
+async function vpLinkExcel() {
+    // Try File System Access API first (Chrome, Edge — enables write-back)
+    if (window.showOpenFilePicker) {
+        try {
+            const [handle] = await window.showOpenFilePicker({
+                types: [{ description: 'Excel Files', accept: { 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': ['.xlsx'] } }],
+                multiple: false
+            });
+            // Request write permission upfront so save won't prompt later
+            const perm = await handle.requestPermission({ mode: 'readwrite' });
+            if (perm !== 'granted') {
+                showToast('⚠️ Write access denied — opening read-only', 'info');
+                // Fall through to read-only
+                const file = await handle.getFile();
+                const data = new Uint8Array(await file.arrayBuffer());
+                window._vpFileHandle = null;
+                window._vpLinkedName = handle.name;
+                _vpParseWorkbook(data);
+                _vpUpdateLinkedUI(handle.name, false);
+                return;
+            }
+            window._vpFileHandle = handle;
+            window._vpLinkedName = handle.name;
+            const file = await handle.getFile();
+            const data = new Uint8Array(await file.arrayBuffer());
+            _vpParseWorkbook(data);
+            _vpUpdateLinkedUI(handle.name, true);
+            showToast('🔗 Excel linked! Changes auto-save to file.');
+            return;
+        } catch (err) {
+            if (err.name === 'AbortError') return;
+            console.warn('File System Access failed:', err.message);
+        }
+    }
+    // Fallback for Brave/Firefox/Safari — read only, data stays in app
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.xlsx,.xls';
+    input.onchange = (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        window._vpFileHandle = null;
+        window._vpLinkedName = file.name;
+        const reader = new FileReader();
+        reader.onload = function(ev) {
+            try {
+                _vpParseWorkbook(new Uint8Array(ev.target.result));
+                _vpUpdateLinkedUI(file.name, false);
+                showToast('🔗 Excel loaded! For auto-save back to file, use Chrome or Edge.');
+            } catch (err) {
+                showToast('❌ Error: ' + err.message);
+            }
+        };
+        reader.readAsArrayBuffer(file);
+    };
+    input.click();
+}
+
+function vpUnlinkExcel() {
+    window._vpFileHandle = null;
+    window._vpLinkedName = null;
+    _vpUpdateLinkedUI(null);
+    showToast('🔓 Excel unlinked');
+}
+
+function _vpUpdateLinkedUI(fileName, canWrite) {
+    const status = document.getElementById('vpLinkedStatus');
+    const nameEl = document.getElementById('vpLinkedFileName');
+    const linkBtn = document.getElementById('vpLinkBtn');
+    const modeEl = document.getElementById('vpLinkMode');
+    if (fileName) {
+        if (status) status.style.display = 'flex';
+        if (nameEl) nameEl.textContent = fileName;
+        if (modeEl) {
+            modeEl.textContent = canWrite ? 'Auto-sync' : 'Read-only';
+            modeEl.style.background = canWrite ? 'rgba(16,185,129,0.15)' : 'rgba(245,158,11,0.15)';
+            modeEl.style.color = canWrite ? '#10b981' : '#f59e0b';
+        }
+        if (linkBtn) { linkBtn.innerHTML = '<i class="fas fa-sync-alt"></i> Re-link'; linkBtn.classList.add('vp-linked-active'); }
+    } else {
+        if (status) status.style.display = 'none';
+        if (linkBtn) { linkBtn.innerHTML = '<i class="fas fa-link"></i> Link Excel'; linkBtn.classList.remove('vp-linked-active'); }
+    }
+}
+
+async function _vpSyncToExcel() {
+    if (!window._vpFileHandle) return;
+    if (window._vpSyncing) return;
+    window._vpSyncing = true;
+    const dot = document.getElementById('vpAutoSaveDot');
+    if (dot) dot.classList.add('saving');
+    try {
+        // Verify we still have write permission
+        const perm = await window._vpFileHandle.queryPermission({ mode: 'readwrite' });
+        if (perm !== 'granted') {
+            showToast('⚠️ Write permission lost. Click Re-link to reconnect.', 'info');
+            window._vpFileHandle = null;
+            _vpUpdateLinkedUI(window._vpLinkedName, false);
+            if (dot) dot.classList.remove('saving');
+            return;
+        }
+        const entries = DB.get('visitPlanEntries') || [];
+        const wb = XLSX.utils.book_new();
+
+        const header = ['Date', 'Day', 'Time', 'Plan Domain', 'Stakeholder Type', 'Cluster', 'Venue',
+            'Stakeholder Name', 'Designation', 'Broader plan/Objective', 'Review against intervention plan',
+            'Number of TPs', 'No of stakeholders', 'Qualitative comments for teachers',
+            'Qualitative comments for engagement with students', 'Report sharing'];
+        const dataRows = [header];
+        let prevDate = null;
+        for (const e of entries) {
+            const dateVal = e.dateSerial || (e.date ? _vpJSDateToExcel(new Date(e.date)) : '');
+            const showDate = dateVal !== prevDate ? dateVal : '';
+            prevDate = dateVal;
+            dataRows.push([showDate, e.day, e.time, e.domain, e.stakeholderType, e.cluster, e.venue,
+                e.stakeholderName, e.designation, e.objective, e.review,
+                e.tps, e.stakeholderCount, e.teacherComments, e.studentComments, e.reportSharing]);
+        }
+        const ws = XLSX.utils.aoa_to_sheet(dataRows);
+        ws['!cols'] = header.map((_, i) => ({ wch: i === 0 ? 12 : i >= 9 ? 30 : 18 }));
+        XLSX.utils.book_append_sheet(wb, ws, 'Sujit 2026');
+
+        const dd = DB.get('visitPlanDropdowns');
+        if (dd) {
+            const keys = ['domains', 'days', 'times', 'stakeholderTypes', 'clusters', 'stakeholderNames', 'venues', 'designations'];
+            const labels = ['Plan Domains', 'Days', 'Time', 'Stakeholder Types', 'Clusters', 'Stakeholder Names', 'Venues', 'Designations'];
+            const maxLen = Math.max(...keys.map(k => (dd[k] || []).length));
+            const ddRows = [['', ...labels], ['', ...labels.map(() => '')], ['', ...labels.map(() => '')]];
+            for (let r = 0; r < maxLen; r++) {
+                ddRows.push(['', ...keys.map(k => (dd[k] || [])[r] || '')]);
+            }
+            const ddWs = XLSX.utils.aoa_to_sheet(ddRows);
+            XLSX.utils.book_append_sheet(wb, ddWs, 'Sheet4');
+        }
+
+        const writable = await window._vpFileHandle.createWritable();
+        const xlsxData = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
+        await writable.write(new Uint8Array(xlsxData));
+        await writable.close();
+
+        if (dot) { dot.classList.remove('saving'); dot.classList.add('saved'); setTimeout(() => dot.classList.remove('saved'), 1500); }
+    } catch (err) {
+        console.error('Sync to Excel error:', err);
+        if (dot) dot.classList.remove('saving');
+        if (err.name === 'NotAllowedError') {
+            showToast('⚠️ Write permission lost. Click Re-link to reconnect.', 'warning');
+            window._vpFileHandle = null;
+            _vpUpdateLinkedUI(window._vpLinkedName, false);
+        }
+    } finally {
+        window._vpSyncing = false;
+    }
+}
+
+function _vpParseWorkbook(data) {
+    const wb = XLSX.read(data, { type: 'array' });
+
+    // Parse Sheet4 (Dropdowns)
+    const dropdowns = { domains: [], days: [], times: [], stakeholderTypes: [], clusters: [], stakeholderNames: [], venues: [], designations: [] };
+    const ddSheetName = wb.SheetNames.find(n => n.toLowerCase().includes('sheet4')) || wb.SheetNames.find(n => n.toLowerCase().includes('dropdown'));
+    if (ddSheetName) {
+        const ddSheet = wb.Sheets[ddSheetName];
+        const ddRows = XLSX.utils.sheet_to_json(ddSheet, { header: 1, defval: '' });
+        const keys = ['domains', 'days', 'times', 'stakeholderTypes', 'clusters', 'stakeholderNames', 'venues', 'designations'];
+        for (let r = 3; r < ddRows.length; r++) {
+            const row = ddRows[r];
+            for (let c = 0; c < keys.length; c++) {
+                const val = row[c + 1];
+                if (val && String(val).trim()) {
+                    const v = String(val).trim();
+                    if (!dropdowns[keys[c]].includes(v)) dropdowns[keys[c]].push(v);
+                }
+            }
+        }
+    }
+    DB.set('visitPlanDropdowns', dropdowns);
+
+    // Parse main visit data
+    const mainSheetName = wb.SheetNames.find(n => !n.toLowerCase().includes('sheet4') && !n.toLowerCase().includes('dropdown')) || wb.SheetNames[0];
+    const mainSheet = wb.Sheets[mainSheetName];
+    const rows = XLSX.utils.sheet_to_json(mainSheet, { header: 1, defval: '' });
+
+    const entries = [];
+    let lastDate = null;
+    for (let r = 1; r < rows.length; r++) {
+        const row = rows[r];
+        if (!row || row.length === 0) continue;
+        let dateVal = row[0];
+        if (dateVal && !isNaN(dateVal)) { lastDate = Number(dateVal); }
+        else if (dateVal && typeof dateVal === 'string' && dateVal.trim()) {
+            const parsed = new Date(dateVal);
+            if (!isNaN(parsed)) lastDate = _vpJSDateToExcel(parsed);
+        }
+        const time = String(row[2] || '').trim();
+        const domain = String(row[3] || '').trim();
+        const stakeholderType = String(row[4] || '').trim();
+        const cluster = String(row[5] || '').trim();
+        const venue = String(row[6] || '').trim();
+        const stakeholderName = String(row[7] || '').trim();
+        const designation = String(row[8] || '').trim();
+        const objective = String(row[9] || '').trim();
+        const review = String(row[10] || '').trim();
+        const tps = String(row[11] || '').trim();
+        const stakeholderCount = String(row[12] || '').trim();
+        const teacherComments = String(row[13] || '').trim();
+        const studentComments = String(row[14] || '').trim();
+        const reportSharing = String(row[15] || '').trim();
+        const isEmpty = !domain && !venue && !stakeholderName && !objective && !review;
+        entries.push({
+            id: DB.generateId(),
+            dateSerial: lastDate,
+            date: lastDate ? _vpExcelDateToJS(lastDate)?.toISOString().split('T')[0] : '',
+            day: lastDate ? _vpDayName(lastDate) : String(row[1] || '').trim(),
+            time, domain, stakeholderType, cluster, venue,
+            stakeholderName, designation, objective, review,
+            tps, stakeholderCount, teacherComments, studentComments, reportSharing,
+            status: isEmpty ? 'empty' : (review ? 'executed' : 'planned'),
+            source: 'excel'
+        });
+    }
+    DB.set('visitPlanEntries', entries);
+    renderVisitPlan();
+}
+
+function _vpExcelDateToJS(serial) {
+    if (!serial || isNaN(serial)) return null;
+    const utc_days = Math.floor(serial - 25569);
+    return new Date(utc_days * 86400 * 1000);
+}
+function _vpJSDateToExcel(d) {
+    if (!(d instanceof Date) || isNaN(d)) return '';
+    return Math.floor((d.getTime() / 86400000) + 25569);
+}
+function _vpFormatDate(d) {
+    if (!d) return '';
+    if (typeof d === 'number') d = _vpExcelDateToJS(d);
+    if (!(d instanceof Date) || isNaN(d)) return String(d);
+    return d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+}
+function _vpDayName(d) {
+    if (!d) return '';
+    if (typeof d === 'number') d = _vpExcelDateToJS(d);
+    if (!(d instanceof Date) || isNaN(d)) return '';
+    return d.toLocaleDateString('en-US', { weekday: 'long' });
+}
+
+function importVisitPlanExcel(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = function(e) {
+        try {
+            const data = new Uint8Array(e.target.result);
+            const wb = XLSX.read(data, { type: 'array' });
+
+            // --- Parse Sheet4 (Dropdowns / Reference) ---
+            const dropdowns = { domains: [], days: [], times: [], stakeholderTypes: [], clusters: [], stakeholderNames: [], venues: [], designations: [] };
+            const ddSheetName = wb.SheetNames.find(n => n.toLowerCase().includes('sheet4')) || wb.SheetNames.find(n => n.toLowerCase().includes('dropdown'));
+            if (ddSheetName) {
+                const ddSheet = wb.Sheets[ddSheetName];
+                const ddRows = XLSX.utils.sheet_to_json(ddSheet, { header: 1, defval: '' });
+                const keys = ['domains', 'days', 'times', 'stakeholderTypes', 'clusters', 'stakeholderNames', 'venues', 'designations'];
+                for (let r = 3; r < ddRows.length; r++) {
+                    const row = ddRows[r];
+                    for (let c = 0; c < keys.length; c++) {
+                        const val = row[c + 1]; // data starts at col B (index 1)
+                        if (val && String(val).trim()) {
+                            const v = String(val).trim();
+                            if (!dropdowns[keys[c]].includes(v)) dropdowns[keys[c]].push(v);
+                        }
+                    }
+                }
+            }
+            DB.set('visitPlanDropdowns', dropdowns);
+
+            // --- Parse main visit data sheet ---
+            const mainSheetName = wb.SheetNames.find(n => !n.toLowerCase().includes('sheet4') && !n.toLowerCase().includes('dropdown')) || wb.SheetNames[0];
+            const mainSheet = wb.Sheets[mainSheetName];
+            const rows = XLSX.utils.sheet_to_json(mainSheet, { header: 1, defval: '' });
+
+            const entries = [];
+            let lastDate = null;
+            for (let r = 1; r < rows.length; r++) {
+                const row = rows[r];
+                if (!row || row.length === 0) continue;
+
+                let dateVal = row[0];
+                if (dateVal && !isNaN(dateVal)) {
+                    lastDate = Number(dateVal);
+                } else if (dateVal && typeof dateVal === 'string' && dateVal.trim()) {
+                    const parsed = new Date(dateVal);
+                    if (!isNaN(parsed)) lastDate = _vpJSDateToExcel(parsed);
+                }
+
+                const time = String(row[2] || '').trim();
+                const domain = String(row[3] || '').trim();
+                const stakeholderType = String(row[4] || '').trim();
+                const cluster = String(row[5] || '').trim();
+                const venue = String(row[6] || '').trim();
+                const stakeholderName = String(row[7] || '').trim();
+                const designation = String(row[8] || '').trim();
+                const objective = String(row[9] || '').trim();
+                const review = String(row[10] || '').trim();
+                const tps = String(row[11] || '').trim();
+                const stakeholderCount = String(row[12] || '').trim();
+                const teacherComments = String(row[13] || '').trim();
+                const studentComments = String(row[14] || '').trim();
+                const reportSharing = String(row[15] || '').trim();
+
+                const isEmpty = !domain && !venue && !stakeholderName && !objective && !review;
+
+                entries.push({
+                    id: DB.generateId(),
+                    dateSerial: lastDate,
+                    date: lastDate ? _vpExcelDateToJS(lastDate)?.toISOString().split('T')[0] : '',
+                    day: lastDate ? _vpDayName(lastDate) : String(row[1] || '').trim(),
+                    time, domain, stakeholderType, cluster, venue,
+                    stakeholderName, designation, objective, review,
+                    tps, stakeholderCount, teacherComments, studentComments, reportSharing,
+                    status: isEmpty ? 'empty' : (review ? 'executed' : 'planned'),
+                    source: 'excel'
+                });
+            }
+            DB.set('visitPlanEntries', entries);
+            renderVisitPlan();
+            showToast(`✅ Imported ${entries.length} entries from Excel`);
+        } catch (err) {
+            console.error('Excel Import Error:', err);
+            showToast('❌ Error importing Excel: ' + err.message);
+        }
+    };
+    reader.readAsArrayBuffer(file);
+    event.target.value = '';
+}
+
+function exportVisitPlanExcel() {
+    const entries = DB.get('visitPlanEntries') || [];
+    if (!entries.length) { showToast('No visit plan data to export'); return; }
+
+    const wb = XLSX.utils.book_new();
+
+    // --- Main data sheet ---
+    const header = ['Date', 'Day', 'Time', 'Plan Domain', 'Stakeholder Type', 'Cluster', 'Venue',
+        'Stakeholder Name', 'Designation', 'Broader plan/Objective', 'Review against intervention plan',
+        'Number of TPs', 'No of stakeholders', 'Qualitative comments for teachers',
+        'Qualitative comments for engagement with students', 'Report sharing'];
+    const dataRows = [header];
+    let prevDate = null;
+    for (const e of entries) {
+        const dateVal = e.dateSerial || (e.date ? _vpJSDateToExcel(new Date(e.date)) : '');
+        const showDate = dateVal !== prevDate ? dateVal : '';
+        prevDate = dateVal;
+        dataRows.push([showDate, e.day, e.time, e.domain, e.stakeholderType, e.cluster, e.venue,
+            e.stakeholderName, e.designation, e.objective, e.review,
+            e.tps, e.stakeholderCount, e.teacherComments, e.studentComments, e.reportSharing]);
+    }
+    const ws = XLSX.utils.aoa_to_sheet(dataRows);
+    ws['!cols'] = header.map((_, i) => ({ wch: i === 0 ? 12 : i >= 9 ? 30 : 18 }));
+    XLSX.utils.book_append_sheet(wb, ws, 'Visit Plan');
+
+    // --- Dropdowns sheet ---
+    const dd = DB.get('visitPlanDropdowns');
+    if (dd) {
+        const keys = ['domains', 'days', 'times', 'stakeholderTypes', 'clusters', 'stakeholderNames', 'venues', 'designations'];
+        const labels = ['Plan Domains', 'Days', 'Time', 'Stakeholder Types', 'Clusters', 'Stakeholder Names', 'Venues', 'Designations'];
+        const maxLen = Math.max(...keys.map(k => (dd[k] || []).length));
+        const ddRows = [['', ...labels], ['', ...labels.map(() => '')], ['', ...labels.map(() => '')]];
+        for (let r = 0; r < maxLen; r++) {
+            ddRows.push(['', ...keys.map(k => (dd[k] || [])[r] || '')]);
+        }
+        const ddWs = XLSX.utils.aoa_to_sheet(ddRows);
+        XLSX.utils.book_append_sheet(wb, ddWs, 'Sheet4');
+    }
+
+    XLSX.writeFile(wb, 'Visit_Plan_Export.xlsx');
+    showToast('📥 Exported to Visit_Plan_Export.xlsx');
+}
+
+function _vpPopulateDropdowns() {
+    const dd = DB.get('visitPlanDropdowns') || {};
+    const entries = DB.get('visitPlanEntries') || [];
+
+    // Merge helper: combine imported dropdown data + template defaults + existing entry values
+    const mergeUnique = (...arrays) => {
+        const seen = new Set();
+        const result = [];
+        arrays.flat().forEach(v => {
+            if (v && String(v).trim() && !seen.has(v)) { seen.add(v); result.push(v); }
+        });
+        return result;
+    };
+
+    // Build merged lists — Excel data first, then templates, then from existing entries
+    const templateDomains = VP_DOMAIN_TEMPLATES.map(t => t.domain);
+    const entryDomains = entries.map(e => e.domain).filter(Boolean);
+    const domains = mergeUnique(dd.domains, templateDomains, entryDomains);
+
+    const defaultStakeholders = ['PS Teachers', 'AW Teachers', 'BRCC', 'Supervisors', 'BEO', 'Parents', 'Community Members', 'DIET Faculty', 'CRC', 'SMC Members'];
+    const entryStakeholders = entries.map(e => e.stakeholderType).filter(Boolean);
+    const stakeholderTypes = mergeUnique(dd.stakeholderTypes, defaultStakeholders, entryStakeholders);
+
+    const defaultClusters = [];
+    const entryClusters = entries.map(e => e.cluster).filter(Boolean);
+    const clusters = mergeUnique(dd.clusters, defaultClusters, entryClusters);
+
+    const entryVenues = entries.map(e => e.venue).filter(Boolean);
+    const venues = mergeUnique(dd.venues, entryVenues);
+
+    const entryNames = entries.map(e => e.stakeholderName).filter(Boolean);
+    const stakeholderNames = mergeUnique(dd.stakeholderNames, entryNames);
+
+    const populate = (selectId, items) => {
+        const el = document.getElementById(selectId);
+        if (!el) return;
+        const current = el.value;
+        const firstOpt = el.querySelector('option');
+        el.innerHTML = '';
+        if (firstOpt) el.appendChild(firstOpt);
+        (items || []).forEach(v => {
+            const o = document.createElement('option');
+            o.value = v; o.textContent = v;
+            el.appendChild(o);
+        });
+        if (current) el.value = current;
+    };
+    populate('vpDomain', domains);
+    populate('vpStakeholder', stakeholderTypes);
+    populate('vpCluster', clusters);
+
+    // Datalists
+    const fillDatalist = (id, items) => {
+        const dl = document.getElementById(id);
+        if (!dl) return;
+        dl.innerHTML = '';
+        (items || []).forEach(v => {
+            const o = document.createElement('option');
+            o.value = v;
+            dl.appendChild(o);
+        });
+    };
+    fillDatalist('vpVenueList', venues);
+    fillDatalist('vpStakeholderNameList', stakeholderNames);
+
+    // Filter dropdowns (reuse entries from above)
+    const populateFilter = (selectId, key, icon) => {
+        const el = document.getElementById(selectId);
+        if (!el) return;
+        const current = el.value;
+        const vals = [...new Set(entries.map(e => e[key]).filter(Boolean))].sort();
+        el.innerHTML = `<option value="all">${icon} All</option>`;
+        vals.forEach(v => {
+            const o = document.createElement('option');
+            o.value = v; o.textContent = v;
+            el.appendChild(o);
+        });
+        el.value = current || 'all';
+    };
+    populateFilter('vpDomainFilter', 'domain', '📂');
+    populateFilter('vpStakeholderFilter', 'stakeholderType', '👥');
+    populateFilter('vpClusterFilter', 'cluster', '📍');
+
+    // Month filter from dates
+    const monthEl = document.getElementById('vpMonthFilter');
+    if (monthEl) {
+        const cur = monthEl.value;
+        const months = [...new Set(entries.map(e => {
+            if (!e.date) return null;
+            const d = new Date(e.date);
+            return isNaN(d) ? null : d.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+        }).filter(Boolean))];
+        monthEl.innerHTML = '<option value="all">📅 All Months</option>';
+        months.forEach(m => {
+            const o = document.createElement('option');
+            o.value = m; o.textContent = m;
+            monthEl.appendChild(o);
+        });
+        monthEl.value = cur || 'all';
+    }
+}
+
+const VP_DOMAIN_TEMPLATES = [
+    { domain: 'School Visits',       icon: 'fa-school',            color: '#8b5cf6', stakeholder: 'PS Teachers', fields: { designation: 'Teacher' } },
+    { domain: 'AW Visits',           icon: 'fa-child',             color: '#ec4899', stakeholder: 'AW Teachers', fields: { designation: 'Teacher' } },
+    { domain: 'Cluster Workshop',    icon: 'fa-users-cog',         color: '#3b82f6', stakeholder: '',             fields: {} },
+    { domain: 'Mobilization',        icon: 'fa-bullhorn',          color: '#f59e0b', stakeholder: '',             fields: {} },
+    { domain: 'Block Level Meeting', icon: 'fa-building',          color: '#10b981', stakeholder: 'BRCC',         fields: { designation: 'CAC' } },
+    { domain: 'Meeting',             icon: 'fa-handshake',         color: '#06b6d4', stakeholder: '',             fields: {} },
+    { domain: 'Training',            icon: 'fa-chalkboard-teacher',color: '#f97316', stakeholder: '',             fields: {} },
+    { domain: 'Admin Work',          icon: 'fa-file-alt',          color: '#6366f1', stakeholder: '',             fields: {} },
+    { domain: 'Community Engagement',icon: 'fa-people-carry',      color: '#14b8a6', stakeholder: 'Supervisors',  fields: {} },
+    { domain: 'Data Collection',     icon: 'fa-database',          color: '#ef4444', stakeholder: '',             fields: {} },
+];
+
+function _vpRenderQuickBar() {
+    const bar = document.getElementById('vpQuickBar');
+    if (!bar) return;
+    const dd = DB.get('visitPlanDropdowns') || {};
+    const importedDomains = dd.domains || [];
+
+    // Merge: use templates + any imported domains not already in templates
+    const templateDomains = VP_DOMAIN_TEMPLATES.map(t => t.domain.toLowerCase());
+    const extras = importedDomains.filter(d => !templateDomains.includes(d.toLowerCase()));
+
+    let html = '<div class="vp-quick-label"><i class="fas fa-bolt"></i> Quick Add</div><div class="vp-quick-chips">';
+    VP_DOMAIN_TEMPLATES.forEach(t => {
+        html += `<button class="vp-quick-chip" style="--qc-color:${t.color}" onclick="vpQuickAdd('${t.domain.replace(/'/g,"\\'")}')"><i class="fas ${t.icon}"></i> ${t.domain}</button>`;
+    });
+    extras.forEach(d => {
+        html += `<button class="vp-quick-chip" style="--qc-color:#6b7280" onclick="vpQuickAdd('${d.replace(/'/g,"\\'")}')"><i class="fas fa-folder"></i> ${d}</button>`;
+    });
+    html += '</div>';
+    bar.innerHTML = html;
+}
+
+function vpQuickAdd(domain) {
+    const tpl = VP_DOMAIN_TEMPLATES.find(t => t.domain === domain) || {};
+    _vpPopulateDropdowns();
+    const form = document.getElementById('vpForm');
+    form.reset();
+    document.getElementById('vpEntryId').value = '';
+    document.getElementById('vpModalTitle').innerHTML = `<i class="fas ${tpl.icon || 'fa-clipboard-check'}"></i> ${domain}`;
+
+    // Pre-fill today's date
+    const today = new Date().toISOString().split('T')[0];
+    document.getElementById('vpDate').value = today;
+    document.getElementById('vpTime').value = 'First Half';
+    document.getElementById('vpDomain').value = domain;
+
+    if (tpl.stakeholder) {
+        document.getElementById('vpStakeholder').value = tpl.stakeholder;
+    }
+    if (tpl.fields) {
+        if (tpl.fields.designation) document.getElementById('vpDesignation').value = tpl.fields.designation;
+    }
+    openModal('visitPlanModal');
+}
+
+function openVisitPlanModal(id) {
+    _vpPopulateDropdowns();
+    const form = document.getElementById('vpForm');
+    form.reset();
+    document.getElementById('vpEntryId').value = '';
+    document.getElementById('vpModalTitle').innerHTML = '<i class="fas fa-clipboard-check"></i> New Visit Plan Entry';
+
+    if (id) {
+        const entries = DB.get('visitPlanEntries') || [];
+        const entry = entries.find(e => e.id === id);
+        if (entry) {
+            document.getElementById('vpEntryId').value = entry.id;
+            document.getElementById('vpModalTitle').innerHTML = '<i class="fas fa-edit"></i> Edit Visit Plan Entry';
+            document.getElementById('vpDate').value = entry.date || '';
+            document.getElementById('vpTime').value = entry.time || 'First Half';
+            document.getElementById('vpDomain').value = entry.domain || '';
+            document.getElementById('vpStakeholder').value = entry.stakeholderType || '';
+            document.getElementById('vpCluster').value = entry.cluster || '';
+            document.getElementById('vpVenue').value = entry.venue || '';
+            document.getElementById('vpStakeholderName').value = entry.stakeholderName || '';
+            document.getElementById('vpDesignation').value = entry.designation || '';
+            document.getElementById('vpObjective').value = entry.objective || '';
+            document.getElementById('vpReview').value = entry.review || '';
+            document.getElementById('vpTPs').value = entry.tps || '';
+            document.getElementById('vpStakeholderCount').value = entry.stakeholderCount || '';
+            document.getElementById('vpTeacherComments').value = entry.teacherComments || '';
+            document.getElementById('vpStudentComments').value = entry.studentComments || '';
+            document.getElementById('vpReportSharing').value = entry.reportSharing || '';
+        }
+    }
+    openModal('visitPlanModal');
+}
+
+function saveVisitPlanEntry(event) {
+    event.preventDefault();
+    const id = document.getElementById('vpEntryId').value;
+    const dateStr = document.getElementById('vpDate').value;
+    const dateObj = dateStr ? new Date(dateStr) : null;
+
+    const entry = {
+        id: id || DB.generateId(),
+        date: dateStr,
+        dateSerial: dateObj ? _vpJSDateToExcel(dateObj) : null,
+        day: dateObj ? _vpDayName(dateObj) : '',
+        time: document.getElementById('vpTime').value,
+        domain: document.getElementById('vpDomain').value,
+        stakeholderType: document.getElementById('vpStakeholder').value,
+        cluster: document.getElementById('vpCluster').value,
+        venue: document.getElementById('vpVenue').value,
+        stakeholderName: document.getElementById('vpStakeholderName').value,
+        designation: document.getElementById('vpDesignation').value,
+        objective: document.getElementById('vpObjective').value,
+        review: document.getElementById('vpReview').value,
+        tps: document.getElementById('vpTPs').value,
+        stakeholderCount: document.getElementById('vpStakeholderCount').value,
+        teacherComments: document.getElementById('vpTeacherComments').value,
+        studentComments: document.getElementById('vpStudentComments').value,
+        reportSharing: document.getElementById('vpReportSharing').value,
+        status: document.getElementById('vpReview').value.trim() ? 'executed' : (document.getElementById('vpDomain').value ? 'planned' : 'empty'),
+        source: 'manual'
+    };
+
+    let entries = DB.get('visitPlanEntries') || [];
+    if (id) {
+        const idx = entries.findIndex(e => e.id === id);
+        if (idx >= 0) entries[idx] = { ...entries[idx], ...entry };
+        else entries.push(entry);
+    } else {
+        entries.push(entry);
+    }
+    DB.set('visitPlanEntries', entries);
+    closeModal('visitPlanModal');
+    renderVisitPlan();
+    showToast(id ? '✏️ Entry updated' : '✅ Entry added');
+    setTimeout(() => _vpSyncToExcel(), 200);
+}
+
+function deleteVisitPlanEntry(id) {
+    if (!confirm('Delete this visit plan entry?')) return;
+    let entries = DB.get('visitPlanEntries') || [];
+    entries = entries.filter(e => e.id !== id);
+    DB.set('visitPlanEntries', entries);
+    renderVisitPlan();
+    showToast('🗑️ Entry deleted');
+    setTimeout(() => _vpSyncToExcel(), 200);
+}
+
+function vpBulkClear() {
+    const entries = DB.get('visitPlanEntries') || [];
+    const domainF = document.getElementById('vpDomainFilter')?.value || 'all';
+    const stakeholderF = document.getElementById('vpStakeholderFilter')?.value || 'all';
+    const clusterF = document.getElementById('vpClusterFilter')?.value || 'all';
+    const monthF = document.getElementById('vpMonthFilter')?.value || 'all';
+    const statusF = document.getElementById('vpStatusFilter')?.value || 'all';
+    const search = (document.getElementById('vpSearchInput')?.value || '').toLowerCase().trim();
+
+    const isFiltered = domainF !== 'all' || stakeholderF !== 'all' || clusterF !== 'all' || monthF !== 'all' || statusF !== 'all' || search;
+
+    const toDelete = new Set();
+    entries.forEach(e => {
+        let match = true;
+        if (domainF !== 'all' && e.domain !== domainF) match = false;
+        if (stakeholderF !== 'all' && e.stakeholderType !== stakeholderF) match = false;
+        if (clusterF !== 'all' && e.cluster !== clusterF) match = false;
+        if (statusF !== 'all' && e.status !== statusF) match = false;
+        if (monthF !== 'all') {
+            if (!e.date) { match = false; }
+            else {
+                const d = new Date(e.date);
+                const m = d.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+                if (m !== monthF) match = false;
+            }
+        }
+        if (search) {
+            const hay = [e.domain, e.venue, e.stakeholderName, e.cluster, e.objective, e.review, e.time, e.designation].join(' ').toLowerCase();
+            if (!hay.includes(search)) match = false;
+        }
+        if (match) toDelete.add(e.id);
+    });
+
+    if (toDelete.size === 0) { showToast('No entries match current filters'); return; }
+
+    const label = isFiltered ? `Delete ${toDelete.size} filtered entries?` : `Delete ALL ${toDelete.size} entries?`;
+    if (!confirm(label + '\n\nThis cannot be undone.')) return;
+
+    const remaining = entries.filter(e => !toDelete.has(e.id));
+    DB.set('visitPlanEntries', remaining);
+    _pageState.visitplan = 1;
+    renderVisitPlan();
+    showToast(`🗑️ ${toDelete.size} entries deleted`);
+    setTimeout(() => _vpSyncToExcel(), 200);
+}
+
+function vpSendToSchoolVisits(id) {
+    const entries = DB.get('visitPlanEntries') || [];
+    const e = entries.find(x => x.id === id);
+    if (!e) { showToast('Entry not found'); return; }
+
+    // Build notes from all available info
+    const notesParts = [];
+    if (e.objective) notesParts.push('Objective: ' + e.objective);
+    if (e.review) notesParts.push('Review: ' + e.review);
+    if (e.teacherComments) notesParts.push('Teacher Comments: ' + e.teacherComments);
+    if (e.studentComments) notesParts.push('Student Engagement: ' + e.studentComments);
+    if (e.tps) notesParts.push('TPs: ' + e.tps);
+    if (e.stakeholderCount) notesParts.push('Stakeholders: ' + e.stakeholderCount);
+
+    // Map purpose from domain
+    const purposeMap = {
+        'School Visits': 'Classroom Observation',
+        'AW Visits': 'Classroom Observation',
+        'Cluster Workshop': 'Workshop Facilitation',
+        'Training': 'Workshop Facilitation',
+        'Meeting': 'Meeting with HM',
+        'Block Level Meeting': 'Meeting with HM',
+        'Mobilization': 'Community Outreach',
+        'Community Engagement': 'Community Outreach',
+        'Data Collection': 'Data Collection',
+        'Admin Work': 'Admin'
+    };
+    const purpose = purposeMap[e.domain] || 'Classroom Observation';
+    const status = e.review ? 'completed' : 'planned';
+
+    const visit = {
+        id: DB.generateId(),
+        school: e.venue || '',
+        block: '',
+        cluster: e.cluster || '',
+        district: '',
+        date: e.date || new Date().toISOString().split('T')[0],
+        status: status,
+        purpose: purpose,
+        duration: e.time || '',
+        peopleMet: [e.stakeholderName, e.designation ? '(' + e.designation + ')' : ''].filter(Boolean).join(' '),
+        rating: '',
+        notes: notesParts.join('\n'),
+        followUp: e.reportSharing || '',
+        nextDate: '',
+        createdAt: new Date().toISOString(),
+        fromVisitPlan: e.id
+    };
+
+    const visits = DB.get('visits') || [];
+    visits.push(visit);
+    DB.set('visits', visits);
+
+    // Mark entry as executed in visit plan
+    const idx = entries.findIndex(x => x.id === id);
+    if (idx >= 0) {
+        entries[idx].status = 'executed';
+        entries[idx].sentToVisits = true;
+        DB.set('visitPlanEntries', entries);
+    }
+
+    renderVisitPlan();
+    showToast('🏫 Added to School Visits!', 'success');
+    setTimeout(() => _vpSyncToExcel(), 200);
+}
+
+function vpSendToTraining(id) {
+    const entries = DB.get('visitPlanEntries') || [];
+    const e = entries.find(x => x.id === id);
+    if (!e) { showToast('Entry not found'); return; }
+
+    const notesParts = [];
+    if (e.objective) notesParts.push('Objective: ' + e.objective);
+    if (e.review) notesParts.push('Review: ' + e.review);
+    if (e.teacherComments) notesParts.push('Teacher Comments: ' + e.teacherComments);
+    if (e.studentComments) notesParts.push('Student Engagement: ' + e.studentComments);
+    if (e.tps) notesParts.push('TPs: ' + e.tps);
+    if (e.stakeholderCount) notesParts.push('Stakeholders: ' + e.stakeholderCount);
+
+    const targetMap = {
+        'PS Teachers': 'Teachers',
+        'AW Teachers': 'Teachers',
+        'BRCC': 'CRPs/BRPs',
+        'Supervisors': 'CRPs/BRPs',
+        'DIET Faculty': 'CRPs/BRPs',
+        'CRC': 'CRPs/BRPs',
+        'BEO': 'CRPs/BRPs',
+        'Parents': 'Community',
+        'Community Members': 'Community',
+        'SMC Members': 'SMC'
+    };
+    const target = targetMap[e.stakeholderType] || 'Teachers';
+    const status = e.review ? 'completed' : 'planned';
+
+    const training = {
+        id: DB.generateId(),
+        title: e.domain || 'Training Session',
+        topic: e.objective || '',
+        date: e.date || new Date().toISOString().split('T')[0],
+        duration: 3,
+        venue: e.venue || '',
+        status: status,
+        attendees: parseInt(e.stakeholderCount) || 0,
+        target: target,
+        notes: notesParts.join('\n'),
+        feedback: e.reportSharing || '',
+        createdAt: new Date().toISOString(),
+        fromVisitPlan: e.id
+    };
+
+    const trainings = DB.get('trainings') || [];
+    trainings.push(training);
+    DB.set('trainings', trainings);
+
+    // Mark in visit plan
+    const idx = entries.findIndex(x => x.id === id);
+    if (idx >= 0) {
+        entries[idx].sentToTraining = true;
+        DB.set('visitPlanEntries', entries);
+    }
+
+    renderVisitPlan();
+    showToast('📚 Added to Teacher Training!', 'success');
+    setTimeout(() => _vpSyncToExcel(), 200);
+}
+
+function renderVisitPlan() {
+  try {
+    const entries = DB.get('visitPlanEntries') || [];
+    _vpPopulateDropdowns();
+    _vpRenderQuickBar();
+
+    // --- Filters ---
+    const domainF = document.getElementById('vpDomainFilter')?.value || 'all';
+    const stakeholderF = document.getElementById('vpStakeholderFilter')?.value || 'all';
+    const clusterF = document.getElementById('vpClusterFilter')?.value || 'all';
+    const monthF = document.getElementById('vpMonthFilter')?.value || 'all';
+    const statusF = document.getElementById('vpStatusFilter')?.value || 'all';
+    const search = (document.getElementById('vpSearchInput')?.value || '').toLowerCase().trim();
+
+    let filtered = entries.filter(e => {
+        if (domainF !== 'all' && e.domain !== domainF) return false;
+        if (stakeholderF !== 'all' && e.stakeholderType !== stakeholderF) return false;
+        if (clusterF !== 'all' && e.cluster !== clusterF) return false;
+        if (statusF !== 'all' && e.status !== statusF) return false;
+        if (monthF !== 'all') {
+            if (!e.date) return false;
+            const d = new Date(e.date);
+            const m = d.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+            if (m !== monthF) return false;
+        }
+        if (search) {
+            const hay = [e.domain, e.venue, e.stakeholderName, e.cluster, e.objective, e.review, e.time, e.designation].join(' ').toLowerCase();
+            if (!hay.includes(search)) return false;
+        }
+        return true;
+    });
+
+    // --- Stats ---
+    const total = entries.length;
+    const planned = entries.filter(e => e.status === 'planned').length;
+    const executed = entries.filter(e => e.status === 'executed').length;
+    const empty = entries.filter(e => e.status === 'empty').length;
+    const domains = new Set(entries.map(e => e.domain).filter(Boolean)).size;
+    const clusters = new Set(entries.map(e => e.cluster).filter(Boolean)).size;
+
+    // --- Bulk Clear Button ---
+    const isFiltered = domainF !== 'all' || stakeholderF !== 'all' || clusterF !== 'all' || monthF !== 'all' || statusF !== 'all' || search;
+    const bulkBtn = document.getElementById('vpBulkClearBtn');
+    const bulkLabel = document.getElementById('vpBulkClearLabel');
+    if (bulkBtn) {
+        if (filtered.length > 0) {
+            bulkBtn.style.display = '';
+            bulkLabel.textContent = isFiltered ? `Clear ${filtered.length}` : 'Clear All';
+        } else {
+            bulkBtn.style.display = 'none';
+        }
+    }
+
+    const statsEl = document.getElementById('vpStats');
+    if (statsEl) {
+        statsEl.innerHTML = `
+            <div class="vp-stat-card"><div class="vp-stat-num">${total}</div><div class="vp-stat-label">Total Entries</div></div>
+            <div class="vp-stat-card vp-stat-planned"><div class="vp-stat-num">${planned}</div><div class="vp-stat-label">Planned</div></div>
+            <div class="vp-stat-card vp-stat-executed"><div class="vp-stat-num">${executed}</div><div class="vp-stat-label">Executed</div></div>
+            <div class="vp-stat-card vp-stat-empty"><div class="vp-stat-num">${empty}</div><div class="vp-stat-label">Unfilled</div></div>
+            <div class="vp-stat-card"><div class="vp-stat-num">${domains}</div><div class="vp-stat-label">Domains</div></div>
+            <div class="vp-stat-card"><div class="vp-stat-num">${clusters}</div><div class="vp-stat-label">Clusters</div></div>
+        `;
+    }
+
+    // --- Table ---
+    const container = document.getElementById('vpContainer');
+    if (!container) return;
+    if (!filtered.length) {
+        container.innerHTML = `<div class="empty-state"><i class="fas fa-clipboard-check"></i><h3>No visit plan entries</h3><p>Import an Excel file or add entries manually to get started.</p></div>`;
+        return;
+    }
+
+    // Pagination
+    const p = getPaginatedItems(filtered, 'visitplan', 25);
+    const paged = p.items;
+
+    // Group by date
+    const grouped = {};
+    paged.forEach(e => {
+        const key = e.date || 'No Date';
+        if (!grouped[key]) grouped[key] = [];
+        grouped[key].push(e);
+    });
+
+    let html = '';
+    for (const [dateKey, items] of Object.entries(grouped)) {
+        const dateLabel = dateKey === 'No Date' ? 'No Date' : _vpFormatDate(new Date(dateKey));
+        const dayLabel = items[0]?.day || '';
+        html += `<div class="vp-date-group">
+            <div class="vp-date-header">
+                <span class="vp-date-label"><i class="fas fa-calendar-day"></i> ${dateLabel}</span>
+                <span class="vp-day-label">${dayLabel}</span>
+                <span class="vp-date-count">${items.length} slot${items.length > 1 ? 's' : ''}</span>
+            </div>
+            <div class="vp-date-cards">`;
+
+        items.forEach(e => {
+            const statusClass = e.status === 'executed' ? 'vp-status-executed' : e.status === 'planned' ? 'vp-status-planned' : 'vp-status-empty';
+            const statusIcon = e.status === 'executed' ? 'fa-check-circle' : e.status === 'planned' ? 'fa-clock' : 'fa-circle';
+            const statusLabel = e.status === 'executed' ? 'Executed' : e.status === 'planned' ? 'Planned' : 'Empty';
+
+            html += `<div class="vp-entry-card ${statusClass}">
+                <div class="vp-entry-top">
+                    <span class="vp-time-badge"><i class="fas fa-clock"></i> ${e.time || '-'}</span>
+                    <div style="display:flex;align-items:center;gap:6px">
+                        ${e.sentToVisits ? '<span class="vp-sent-badge"><i class="fas fa-school"></i> Visit</span>' : ''}
+                        ${e.sentToTraining ? '<span class="vp-sent-badge vp-sent-training"><i class="fas fa-chalkboard-teacher"></i> Training</span>' : ''}
+                        <span class="vp-status-badge ${statusClass}"><i class="fas ${statusIcon}"></i> ${statusLabel}</span>
+                    </div>
+                </div>
+                <div class="vp-entry-body">
+                    <div class="vp-entry-domain">${e.domain || '<em>No domain</em>'}</div>
+                    ${e.venue ? `<div class="vp-entry-venue"><i class="fas fa-map-marker-alt"></i> ${e.venue}</div>` : ''}
+                    ${e.stakeholderName ? `<div class="vp-entry-person"><i class="fas fa-user"></i> ${e.stakeholderName}${e.designation ? ` <span class="vp-desg">(${e.designation})</span>` : ''}</div>` : ''}
+                    ${e.cluster ? `<div class="vp-entry-cluster"><i class="fas fa-layer-group"></i> ${e.cluster}</div>` : ''}
+                    ${e.objective ? `<div class="vp-entry-obj"><i class="fas fa-bullseye"></i> ${e.objective.substring(0, 80)}${e.objective.length > 80 ? '...' : ''}</div>` : ''}
+                    ${e.review ? `<div class="vp-entry-review"><i class="fas fa-check-double"></i> ${e.review.substring(0, 80)}${e.review.length > 80 ? '...' : ''}</div>` : ''}
+                </div>
+                <div class="vp-entry-actions">
+                    <button class="vp-act-btn vp-act-send" onclick="vpSendToSchoolVisits('${e.id}')" title="Add to School Visits"><i class="fas fa-school"></i></button>
+                    <button class="vp-act-btn vp-act-train" onclick="vpSendToTraining('${e.id}')" title="Add to Teacher Training"><i class="fas fa-chalkboard-teacher"></i></button>
+                    <button class="vp-act-btn" onclick="openVisitPlanModal('${e.id}')" title="Edit"><i class="fas fa-edit"></i></button>
+                    <button class="vp-act-btn vp-act-del" onclick="deleteVisitPlanEntry('${e.id}')" title="Delete"><i class="fas fa-trash"></i></button>
+                </div>
+            </div>`;
+        });
+        html += '</div></div>';
+    }
+
+    // Pagination controls
+    html += renderPaginationControls('visitplan', p, 'renderVisitPlan');
+
+    container.innerHTML = html;
+  } catch (err) {
+    console.error('renderVisitPlan error:', err);
+    const container = document.getElementById('vpContainer');
+    if (container) container.innerHTML = `<div class="empty-state"><i class="fas fa-exclamation-triangle"></i><h3>Rendering Error</h3><p>${err.message}</p></div>`;
+  }
 }
 
 // ===== DATA & SECURITY =====
@@ -8637,7 +10959,9 @@ function renderBackupInfo() {
             { key: 'followupStatus', label: 'Follow-ups', icon: 'fa-clipboard-check', color: '#84cc16' },
             { key: 'worklog', label: 'Work Log', icon: 'fa-clipboard-list', color: '#7c3aed' },
             { key: 'userProfile', label: 'Profile', icon: 'fa-user-circle', color: '#0ea5e9' },
-            { key: 'meetings', label: 'Meetings', icon: 'fa-handshake', color: '#0d9488' }
+            { key: 'meetings', label: 'Meetings', icon: 'fa-handshake', color: '#0d9488' },
+            { key: 'maraiTracking', label: 'MARAI', icon: 'fa-route', color: '#d946ef' },
+            { key: 'schoolWork', label: 'School Work', icon: 'fa-chalkboard', color: '#059669' }
         ];
         let total = 0;
         const pills = meta.map(m => {
@@ -9068,14 +11392,60 @@ function toggleThemeFromSettings(isLight) {
     if (label) label.textContent = isLight ? 'Light' : 'Dark';
 }
 
+// Apply ALL accent-related CSS variables globally (dark & light mode aware)
+function applyAccentColorToCSS(hex, cssRgb) {
+    const r = parseInt(hex.slice(1, 3), 16);
+    const g = parseInt(hex.slice(3, 5), 16);
+    const b = parseInt(hex.slice(5, 7), 16);
+    const isLight = document.body.classList.contains('light-mode');
+
+    let accentR = r, accentG = g, accentB = b;
+    let hoverR, hoverG, hoverB;
+
+    if (isLight) {
+        // Darken base accent for light mode
+        accentR = Math.round(r * 0.87);
+        accentG = Math.round(g * 0.87);
+        accentB = Math.round(b * 0.87);
+        // Hover is even darker
+        hoverR = Math.round(r * 0.7);
+        hoverG = Math.round(g * 0.7);
+        hoverB = Math.round(b * 0.7);
+    } else {
+        // Hover is lighter in dark mode
+        hoverR = Math.min(255, Math.round(r + (255 - r) * 0.3));
+        hoverG = Math.min(255, Math.round(g + (255 - g) * 0.3));
+        hoverB = Math.min(255, Math.round(b + (255 - b) * 0.3));
+    }
+
+    const toHex = c => c.toString(16).padStart(2, '0');
+    const accentHex = '#' + toHex(accentR) + toHex(accentG) + toHex(accentB);
+    const hoverHex = '#' + toHex(hoverR || r) + toHex(hoverG || g) + toHex(hoverB || b);
+    const accentRgb = `${accentR}, ${accentG}, ${accentB}`;
+    const lightOp = isLight ? 0.1 : 0.12;
+    const glowOp = isLight ? 0.2 : 0.25;
+    const warnLightOp = isLight ? 0.08 : 0.12;
+
+    // Set on both html and body so they override :root and body.light-mode rules
+    [document.documentElement, document.body].forEach(el => {
+        el.style.setProperty('--accent', accentHex);
+        el.style.setProperty('--accent-hover', hoverHex);
+        el.style.setProperty('--accent-light', `rgba(${accentRgb}, ${lightOp})`);
+        el.style.setProperty('--accent-glow', `rgba(${accentRgb}, ${glowOp})`);
+        el.style.setProperty('--amber', hex);
+        el.style.setProperty('--amber-rgb', cssRgb);
+        el.style.setProperty('--warning', accentHex);
+        el.style.setProperty('--warning-light', `rgba(${accentRgb}, ${warnLightOp})`);
+    });
+}
+
 function setAccentColor(hex, cssRgb) {
     const s = getAppSettings();
     s.accentColor = hex;
     try { localStorage.setItem(APP_SETTINGS_KEY, JSON.stringify(s)); } catch(e) {}
 
-    // Apply accent color to CSS variables
-    document.documentElement.style.setProperty('--amber', hex);
-    document.documentElement.style.setProperty('--amber-rgb', cssRgb);
+    // Apply accent color to ALL CSS variables
+    applyAccentColorToCSS(hex, cssRgb);
 
     // Re-render color grid
     const colorGrid = document.getElementById('settingAccentColors');
@@ -9124,11 +11494,10 @@ function toggleCompactMode(enabled) {
 function applyAppSettings() {
     const s = getAppSettings();
 
-    // Apply accent color
+    // Apply accent color to ALL CSS variables
     const accent = ACCENT_COLORS.find(c => c.value === s.accentColor);
     if (accent) {
-        document.documentElement.style.setProperty('--amber', accent.value);
-        document.documentElement.style.setProperty('--amber-rgb', accent.css);
+        applyAccentColorToCSS(accent.value, accent.css);
     }
 
     // Apply font size
@@ -9205,6 +11574,157 @@ function formatDateSetting(dateStr) {
         case 'dd-mmm-yyyy':
         default: return `${day}-${monthShort}-${year}`;
     }
+}
+
+// ===== BUG REPORT & FEATURE REQUEST =====
+function setFeedbackType(type) {
+    document.getElementById('fbType').value = type;
+    document.getElementById('fbTabBug').classList.toggle('active', type === 'bug');
+    document.getElementById('fbTabFeature').classList.toggle('active', type === 'feature');
+}
+
+function resetFeedbackForm() {
+    document.getElementById('feedbackForm').reset();
+    document.getElementById('fbType').value = 'bug';
+    document.getElementById('fbEditId').value = '';
+    setFeedbackType('bug');
+}
+
+function saveFeedback(event) {
+    event.preventDefault();
+    const id = document.getElementById('fbEditId').value;
+    const entry = {
+        id: id || DB.generateId(),
+        type: document.getElementById('fbType').value,
+        title: document.getElementById('fbTitle').value.trim(),
+        section: document.getElementById('fbSection').value,
+        priority: document.getElementById('fbPriority').value,
+        description: document.getElementById('fbDescription').value.trim(),
+        status: 'open',
+        createdAt: new Date().toISOString()
+    };
+
+    let reports = DB.get('feedbackReports') || [];
+    if (id) {
+        const idx = reports.findIndex(r => r.id === id);
+        if (idx >= 0) { entry.status = reports[idx].status; entry.createdAt = reports[idx].createdAt; reports[idx] = entry; }
+        else reports.push(entry);
+    } else {
+        reports.push(entry);
+    }
+    DB.set('feedbackReports', reports);
+    resetFeedbackForm();
+    renderFeedbackList();
+    showToast(id ? 'Report updated!' : 'Report saved!');
+
+    // Offer to email developer
+    if (!id) {
+        setTimeout(() => {
+            if (confirm('Report saved! Would you like to email this to the developer?')) {
+                emailFeedback(entry);
+            }
+        }, 300);
+    }
+}
+
+function emailFeedback(entry) {
+    const typeLabel = entry.type === 'bug' ? 'Bug Report' : 'Feature Request';
+    const subject = encodeURIComponent(`[APF Dashboard] ${typeLabel}: ${entry.title}`);
+    const body = encodeURIComponent(
+        `Type: ${typeLabel}\n` +
+        `Priority: ${entry.priority.toUpperCase()}\n` +
+        `Section: ${entry.section || 'N/A'}\n` +
+        `Date: ${new Date(entry.createdAt).toLocaleDateString('en-IN')}\n\n` +
+        `Title: ${entry.title}\n\n` +
+        `Description:\n${entry.description}\n\n` +
+        `---\nSent from APF Resource Person Dashboard`
+    );
+    window.open(`https://mail.google.com/mail/?view=cm&to=ss179815@gmail.com&su=${subject}&body=${body}`, '_blank');
+}
+
+function deleteFeedback(id) {
+    if (!confirm('Delete this report?')) return;
+    let reports = DB.get('feedbackReports') || [];
+    reports = reports.filter(r => r.id !== id);
+    DB.set('feedbackReports', reports);
+    renderFeedbackList();
+    showToast('Report deleted', 'info');
+}
+
+function editFeedback(id) {
+    const reports = DB.get('feedbackReports') || [];
+    const r = reports.find(x => x.id === id);
+    if (!r) return;
+    document.getElementById('fbEditId').value = r.id;
+    document.getElementById('fbTitle').value = r.title;
+    document.getElementById('fbSection').value = r.section || '';
+    document.getElementById('fbPriority').value = r.priority;
+    document.getElementById('fbDescription').value = r.description;
+    setFeedbackType(r.type);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+function toggleFeedbackStatus(id) {
+    const reports = DB.get('feedbackReports') || [];
+    const idx = reports.findIndex(r => r.id === id);
+    if (idx < 0) return;
+    reports[idx].status = reports[idx].status === 'open' ? 'closed' : 'open';
+    DB.set('feedbackReports', reports);
+    renderFeedbackList();
+    showToast(reports[idx].status === 'closed' ? 'Marked as resolved' : 'Reopened');
+}
+
+function renderFeedbackList() {
+    const reports = DB.get('feedbackReports') || [];
+    const container = document.getElementById('fbTableContainer');
+    const countEl = document.getElementById('fbCount');
+    if (!container) return;
+
+    if (countEl) countEl.textContent = `${reports.length} report${reports.length !== 1 ? 's' : ''}`;
+
+    if (reports.length === 0) {
+        container.innerHTML = '<div class="empty-state"><i class="fas fa-clipboard-check"></i><h3>No reports yet</h3><p>Submit a bug report or feature request above.</p></div>';
+        return;
+    }
+
+    const sorted = [...reports].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+
+    let html = `<table class="fb-table">
+        <thead><tr>
+            <th>Type</th>
+            <th>Title</th>
+            <th>Section</th>
+            <th>Priority</th>
+            <th>Status</th>
+            <th>Date</th>
+            <th>Actions</th>
+        </tr></thead><tbody>`;
+
+    sorted.forEach(r => {
+        const typeIcon = r.type === 'bug' ? '<i class="fas fa-bug" style="color:#ef4444"></i>' : '<i class="fas fa-lightbulb" style="color:#f59e0b"></i>';
+        const typeLabel = r.type === 'bug' ? 'Bug' : 'Feature';
+        const prioClass = { critical: 'fb-prio-critical', high: 'fb-prio-high', medium: 'fb-prio-medium', low: 'fb-prio-low' }[r.priority] || '';
+        const statusClass = r.status === 'closed' ? 'fb-status-closed' : 'fb-status-open';
+        const statusLabel = r.status === 'closed' ? 'Resolved' : 'Open';
+        const date = new Date(r.createdAt).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+
+        html += `<tr class="${r.status === 'closed' ? 'fb-row-closed' : ''}">
+            <td>${typeIcon} ${typeLabel}</td>
+            <td class="fb-title-cell">${escapeHtml(r.title)}</td>
+            <td>${escapeHtml(r.section || '—')}</td>
+            <td><span class="fb-prio ${prioClass}">${r.priority}</span></td>
+            <td><span class="fb-status ${statusClass}" onclick="toggleFeedbackStatus('${r.id}')" style="cursor:pointer" title="Click to toggle">${statusLabel}</span></td>
+            <td class="fb-date">${date}</td>
+            <td class="fb-actions">
+                <button class="btn btn-ghost btn-sm" onclick="emailFeedback(${JSON.stringify(r).replace(/"/g, '&quot;')})" title="Email Developer"><i class="fas fa-envelope"></i></button>
+                <button class="btn btn-ghost btn-sm" onclick="editFeedback('${r.id}')" title="Edit"><i class="fas fa-edit"></i></button>
+                <button class="btn btn-ghost btn-sm" onclick="deleteFeedback('${r.id}')" title="Delete" style="color:#ef4444"><i class="fas fa-trash"></i></button>
+            </td>
+        </tr>`;
+    });
+
+    html += '</tbody></table>';
+    container.innerHTML = html;
 }
 
 // ===== PROFESSIONAL GROWTH FRAMEWORK =====
@@ -11112,8 +13632,11 @@ function renderTeacherGrowth() {
 
     const colors = ['#6366f1', '#8b5cf6', '#ec4899', '#f59e0b', '#10b981', '#3b82f6', '#ef4444', '#0ea5e9'];
 
-    container.innerHTML = teachers.slice(0, 100).map((t, idx) => {
-        const color = colors[idx % colors.length];
+    const pg = getPaginatedItems(teachers, 'teacherGrowth', 20);
+
+    container.innerHTML = pg.items.map((t, idx) => {
+        const globalIdx = pg.start - 1 + idx;
+        const color = colors[globalIdx % colors.length];
         const initials = t.name.split(' ').map(w => w[0]).join('').substring(0, 2);
         const trendLabel = t.trend === 'up' ? '<i class="fas fa-arrow-up"></i> Improving' :
                            t.trend === 'down' ? '<i class="fas fa-arrow-down"></i> Declining' : '<i class="fas fa-minus"></i> Stable';
@@ -11127,8 +13650,8 @@ function renderTeacherGrowth() {
             return `<div class="tg-spark-bar" style="height:${h}px;background:${c}"></div>`;
         }).join('');
 
-        return `<div class="tg-card" id="tgCard_${idx}">
-            <div class="tg-card-header" onclick="toggleTeacherDetail(${idx})">
+        return `<div class="tg-card" id="tgCard_${globalIdx}">
+            <div class="tg-card-header" onclick="toggleTeacherDetail(${globalIdx})">
                 <div class="tg-avatar" style="background:${color}">${escapeHtml(initials)}</div>
                 <div class="tg-card-info">
                     <h4>${escapeHtml(t.name)} <span class="tg-trend ${t.trend}">${trendLabel}</span></h4>
@@ -11147,7 +13670,7 @@ function renderTeacherGrowth() {
                 <i class="fas fa-chevron-down tg-expand-icon"></i>
             </div>
         </div>`;
-    }).join('');
+    }).join('') + renderPaginationControls('teacherGrowth', pg, 'renderTeacherGrowth');
 }
 
 function toggleTeacherDetail(idx) {
@@ -11454,6 +13977,11 @@ function initApp() {
         // Render everything
         renderDashboard();
     }
+
+    // Show user guide on first use
+    if (!localStorage.getItem('apf_guide_shown')) {
+        setTimeout(() => showUserGuide(true), 600);
+    }
 }
 
 // ===== Welcome Screen (File-Only Storage) =====
@@ -11557,6 +14085,130 @@ function welcomeStartFresh(withSampleData) {
     showToast(withSampleData ? 'Started with sample data — set a password to auto-save!' : 'Started fresh — add your data!', 'info');
 }
 
+// ===== User Guide =====
+const USER_GUIDE_STEPS = [
+    {
+        icon: 'fa-th-large',
+        color: '#6366f1',
+        title: 'Dashboard Overview',
+        desc: 'Your home screen shows key stats at a glance — total visits, trainings, observations, and more. Quick metric cards give you an instant summary of your work.'
+    },
+    {
+        icon: 'fa-school',
+        color: '#10b981',
+        title: 'School Visits',
+        desc: 'Log every school visit with details like school name, date, time (First Half / Second Half / Full Day), purpose, and notes. Filter and paginate through your history easily.'
+    },
+    {
+        icon: 'fa-chalkboard-teacher',
+        color: '#f59e0b',
+        title: 'Teacher Training',
+        desc: 'Record teacher training sessions with topics, participants, schools, and outcomes. Track your professional development efforts.'
+    },
+    {
+        icon: 'fa-clipboard-check',
+        color: '#ef4444',
+        title: 'Observations & Visit Plan',
+        desc: 'Document classroom observations with structured forms. Use the Visit Plan section to plan visits ahead with domain-based entries, link to Excel for two-way sync, and send plans to School Visits or Training.'
+    },
+    {
+        icon: 'fa-chart-pie',
+        color: '#8b5cf6',
+        title: 'Reports & Analytics',
+        desc: 'Generate monthly/yearly reports automatically from your data. The Analytics section gives visual charts — visit frequency by school, training trends, and more.'
+    },
+    {
+        icon: 'fa-file-excel',
+        color: '#22c55e',
+        title: 'Excel Analytics',
+        desc: 'Upload Excel/CSV files and get instant analytics with charts, pivot summaries, and data insights — no Excel software needed.'
+    },
+    {
+        icon: 'fa-route',
+        color: '#ec4899',
+        title: 'MARAI Tracking & School Work',
+        desc: 'Track MARAI stages for schools. Assign work to teachers in the School Work section with status tracking and teacher tags.'
+    },
+    {
+        icon: 'fa-calendar-week',
+        color: '#14b8a6',
+        title: 'Planner, Goals & Follow-ups',
+        desc: 'Plan your week with the drag-and-drop planner. Set monthly goals with targets. Track follow-up actions with status indicators.'
+    },
+    {
+        icon: 'fa-seedling',
+        color: '#f97316',
+        title: 'Growth Framework & Reflections',
+        desc: 'Use the Teacher Growth tracker to assess progress over time. Write monthly reflections to capture your professional journey.'
+    },
+    {
+        icon: 'fa-shield-alt',
+        color: '#eab308',
+        title: 'Data & Security',
+        desc: 'All data is encrypted with AES-256. Set a password to auto-save securely. Export/import .apf backup files. Link to a file for persistent storage. Use Live Sync to share data peer-to-peer.'
+    },
+    {
+        icon: 'fa-bug',
+        color: '#6366f1',
+        title: 'Bug Reports & Help',
+        desc: 'Found a bug or want a new feature? Go to Bug & Feedback in the sidebar. Submit a report and email it directly to the developer via Gmail. You can always reopen this guide from there!'
+    }
+];
+
+let _guideStep = 0;
+
+function showUserGuide(isFirstUse) {
+    _guideStep = 0;
+    renderGuideStep();
+    document.getElementById('userGuideModal').classList.add('active');
+    if (isFirstUse) {
+        localStorage.setItem('apf_guide_shown', '1');
+    }
+}
+
+function closeUserGuide() {
+    document.getElementById('userGuideModal').classList.remove('active');
+}
+
+function guideNav(dir) {
+    _guideStep += dir;
+    if (_guideStep < 0) _guideStep = 0;
+    if (_guideStep >= USER_GUIDE_STEPS.length) {
+        closeUserGuide();
+        showToast('You\'re all set! Explore the dashboard 🚀', 'success');
+        return;
+    }
+    renderGuideStep();
+}
+
+function renderGuideStep() {
+    const step = USER_GUIDE_STEPS[_guideStep];
+    const body = document.getElementById('guideBody');
+    body.innerHTML = `
+        <div class="guide-step">
+            <div class="guide-step-icon" style="background:${step.color}20;color:${step.color};">
+                <i class="fas ${step.icon}"></i>
+            </div>
+            <div class="guide-step-num">Step ${_guideStep + 1} of ${USER_GUIDE_STEPS.length}</div>
+            <h3 class="guide-step-title">${step.title}</h3>
+            <p class="guide-step-desc">${step.desc}</p>
+        </div>
+    `;
+    // Dots
+    const dots = document.getElementById('guideDots');
+    dots.innerHTML = USER_GUIDE_STEPS.map((_, i) =>
+        `<span class="guide-dot ${i === _guideStep ? 'active' : ''}" onclick="_guideStep=${i};renderGuideStep();"></span>`
+    ).join('');
+    // Buttons
+    document.getElementById('guidePrevBtn').style.visibility = _guideStep === 0 ? 'hidden' : 'visible';
+    const nextBtn = document.getElementById('guideNextBtn');
+    if (_guideStep === USER_GUIDE_STEPS.length - 1) {
+        nextBtn.innerHTML = '<i class="fas fa-check"></i> Got It!';
+    } else {
+        nextBtn.innerHTML = 'Next <i class="fas fa-arrow-right"></i>';
+    }
+}
+
 // ===== Beforeunload — save to file + cache =====
 window.addEventListener('beforeunload', (e) => {
     if (hasUnsavedChanges && _sessionPassword) {
@@ -11566,10 +14218,7 @@ window.addEventListener('beforeunload', (e) => {
     }
 });
 
-document.addEventListener('DOMContentLoaded', async () => {
-    // Restore theme immediately to prevent flash
-    restoreTheme();
-
+async function proceedAfterLicense() {
     // Restore persisted file handle from IndexedDB
     if (FileLink.isSupported()) {
         await FileLink.restoreHandle();
@@ -11641,4 +14290,18 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
         showWelcomeScreen();
     }
+}
+
+document.addEventListener('DOMContentLoaded', async () => {
+    // Restore theme immediately to prevent flash
+    restoreTheme();
+
+    // License key gate — must be activated before anything else
+    if (!isLicenseActivated()) {
+        document.getElementById('licenseScreen').style.display = 'flex';
+        return; // Wait for license activation
+    }
+
+    // License OK — proceed normally
+    await proceedAfterLicense();
 });

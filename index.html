@@ -20,6 +20,59 @@
 </head>
 
 <body>
+    <!-- License Key Gate -->
+    <div id="licenseScreen" class="lock-screen" style="display:none;">
+        <div class="lock-container license-container">
+            <div class="lock-icon" style="background:linear-gradient(135deg,#6366f1,#8b5cf6);box-shadow:0 8px 24px rgba(99,102,241,0.3);">
+                <i class="fas fa-key"></i>
+            </div>
+            <h1 class="lock-title">License Required</h1>
+            <p class="lock-subtitle">Enter your license key to activate the dashboard.<br>Contact the developer if you don't have one.</p>
+            <form id="licenseForm" onsubmit="handleLicenseSubmit(event)" autocomplete="off">
+                <div class="lock-input-group">
+                    <div class="lock-input-wrapper">
+                        <i class="fas fa-key"></i>
+                        <input type="password" id="licenseKeyInput" placeholder="License Key" autofocus required>
+                        <button type="button" class="lock-eye-btn" onclick="togglePasswordVisibility('licenseKeyInput', this)" tabindex="-1">
+                            <i class="fas fa-eye"></i>
+                        </button>
+                    </div>
+                </div>
+                <div class="lock-error" id="licenseError"></div>
+                <button type="submit" class="btn btn-primary lock-btn" style="background:linear-gradient(135deg,#6366f1,#8b5cf6);">
+                    <i class="fas fa-unlock"></i> Activate
+                </button>
+            </form>
+            <div class="lock-footer" style="margin-top:24px;">
+                <p style="font-size:11px;color:var(--text-muted);opacity:0.7;"><i class="fas fa-shield-alt"></i> Protected software — unauthorized use is prohibited</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- User Guide Modal -->
+    <div class="modal-overlay" id="userGuideModal">
+        <div class="guide-modal">
+            <div class="guide-header">
+                <div class="guide-header-left">
+                    <div class="guide-logo"><i class="fas fa-seedling"></i></div>
+                    <div>
+                        <h2>APF Dashboard — User Guide</h2>
+                        <p>Everything you need to know to get started</p>
+                    </div>
+                </div>
+                <button class="modal-close" onclick="closeUserGuide()"><i class="fas fa-times"></i></button>
+            </div>
+            <div class="guide-body" id="guideBody">
+                <!-- Steps rendered by JS -->
+            </div>
+            <div class="guide-footer">
+                <button class="btn btn-ghost" id="guidePrevBtn" onclick="guideNav(-1)"><i class="fas fa-arrow-left"></i> Previous</button>
+                <div class="guide-dots" id="guideDots"></div>
+                <button class="btn btn-primary" id="guideNextBtn" onclick="guideNav(1)">Next <i class="fas fa-arrow-right"></i></button>
+            </div>
+        </div>
+    </div>
+
     <!-- Password Lock Screen -->
     <div id="lockScreen" class="lock-screen" style="display:none;">
         <div class="lock-container">
@@ -151,6 +204,15 @@
             <a href="#" class="nav-item" data-section="teachers" id="nav-teachers" data-tooltip="Teacher Growth">
                 <i class="fas fa-user-graduate"></i><span>Teacher Growth</span>
             </a>
+            <a href="#" class="nav-item" data-section="marai" id="nav-marai" data-tooltip="MARAI Tracking">
+                <i class="fas fa-route"></i><span>MARAI Tracking</span>
+            </a>
+            <a href="#" class="nav-item" data-section="schoolwork" id="nav-schoolwork" data-tooltip="School Work">
+                <i class="fas fa-chalkboard"></i><span>School Work</span>
+            </a>
+            <a href="#" class="nav-item" data-section="visitplan" id="nav-visitplan" data-tooltip="Visit Plan">
+                <i class="fas fa-clipboard-check"></i><span>Visit Plan</span>
+            </a>
             <a href="#" class="nav-item" data-section="reflections" id="nav-reflections" data-tooltip="Reflections">
                 <i class="fas fa-journal-whills"></i><span>Reflections</span>
             </a>
@@ -175,6 +237,9 @@
             </a>
             <a href="#" class="nav-item" data-section="settings" id="nav-settings" data-tooltip="Settings">
                 <i class="fas fa-cog"></i><span>Settings</span>
+            </a>
+            <a href="#" class="nav-item" data-section="feedback" id="nav-feedback" data-tooltip="Feedback">
+                <i class="fas fa-bug"></i><span>Bug & Feedback</span>
             </a>
         </nav>
         <div class="sidebar-footer">
@@ -328,13 +393,13 @@
             <!-- Filters -->
             <div class="filter-bar">
                 <div class="filter-group">
-                    <select id="visitStatusFilter" onchange="renderVisits()">
+                    <select id="visitStatusFilter" onchange="_pageState.visits=1;renderVisits()">
                         <option value="all">All Status</option>
                         <option value="planned">Planned</option>
                         <option value="completed">Completed</option>
                         <option value="cancelled">Cancelled</option>
                     </select>
-                    <select id="visitPurposeFilter" onchange="renderVisits()">
+                    <select id="visitPurposeFilter" onchange="_pageState.visits=1;renderVisits()">
                         <option value="all">All Purposes</option>
                         <option value="Classroom Observation">Classroom Observation</option>
                         <option value="Teacher Support">Teacher Support</option>
@@ -344,10 +409,10 @@
                         <option value="Material Distribution">Material Distribution</option>
                         <option value="Other">Other</option>
                     </select>
-                    <select id="visitBlockFilter" onchange="renderVisits()">
+                    <select id="visitBlockFilter" onchange="_pageState.visits=1;renderVisits()">
                         <option value="all">All Blocks</option>
                     </select>
-                    <input type="text" id="visitSearchInput" placeholder="Search schools, clusters..." oninput="renderVisits()">
+                    <input type="text" id="visitSearchInput" placeholder="Search schools, clusters..." oninput="_pageState.visits=1;renderVisits()">
                 </div>
                 <div class="view-toggles">
                     <button class="view-btn active" data-view="list" onclick="setVisitView('list')"><i
@@ -386,14 +451,14 @@
 
             <div class="filter-bar">
                 <div class="filter-group">
-                    <select id="trainingStatusFilter" onchange="renderTrainings()">
+                    <select id="trainingStatusFilter" onchange="_pageState.trainings=1;renderTrainings()">
                         <option value="all">All Status</option>
                         <option value="upcoming">Upcoming</option>
                         <option value="completed">Completed</option>
                         <option value="ongoing">Ongoing</option>
                     </select>
                     <input type="text" id="trainingSearchInput" placeholder="Search trainings..."
-                        oninput="renderTrainings()">
+                        oninput="_pageState.trainings=1;renderTrainings()">
                 </div>
             </div>
 
@@ -739,7 +804,7 @@
 
             <div class="filter-bar">
                 <div class="filter-group">
-                    <select id="resourceTypeFilter" onchange="renderResources()">
+                    <select id="resourceTypeFilter" onchange="_pageState.resources=1;renderResources()">
                         <option value="all">All Types</option>
                         <option value="Worksheet">Worksheet</option>
                         <option value="Lesson Plan">Lesson Plan</option>
@@ -749,7 +814,7 @@
                         <option value="Video">Video</option>
                         <option value="Other">Other</option>
                     </select>
-                    <select id="resourceSubjectFilter" onchange="renderResources()">
+                    <select id="resourceSubjectFilter" onchange="_pageState.resources=1;renderResources()">
                         <option value="all">All Subjects</option>
                         <option value="Mathematics">Mathematics</option>
                         <option value="Science">Science</option>
@@ -759,7 +824,7 @@
                         <option value="Other">Other</option>
                     </select>
                     <input type="text" id="resourceSearchInput" placeholder="Search resources..."
-                        oninput="renderResources()">
+                        oninput="_pageState.resources=1;renderResources()">
                 </div>
             </div>
 
@@ -1304,6 +1369,7 @@
                     <p class="section-subtitle">Deep analysis of your field activities, coverage, and impact</p>
                 </div>
                 <div class="header-actions">
+                    <button class="btn btn-outline btn-sm" onclick="toggleVisitFrequency()" id="visitFreqBtn"><i class="fas fa-school"></i> Visit Frequency</button>
                     <button class="btn btn-outline btn-sm" id="periodCompareBtn" onclick="togglePeriodComparison()"><i class="fas fa-columns"></i> Compare Periods</button>
                     <select id="analyticsRange" class="filter-select" onchange="renderAnalytics()">
                         <option value="all">All Time</option>
@@ -1316,6 +1382,15 @@
 
             <!-- Period Comparison Panel -->
             <div class="period-compare-panel" id="periodComparePanel" style="display:none;"></div>
+
+            <!-- Visit Frequency Panel -->
+            <div class="card visit-freq-panel" id="visitFreqPanel" style="display:none;">
+                <div class="card-header">
+                    <h3><i class="fas fa-school"></i> School Visit Frequency</h3>
+                    <button class="btn btn-ghost btn-sm" onclick="toggleVisitFrequency()"><i class="fas fa-times"></i></button>
+                </div>
+                <div class="card-body" id="visitFreqBody" style="max-height:500px;overflow-y:auto;"></div>
+            </div>
 
             <!-- Smart Insights -->
             <div class="analytics-insights" id="analyticsInsightsPanel"></div>
@@ -1369,7 +1444,7 @@
                     <p class="section-subtitle">Track pending follow-ups from school visits and observations</p>
                 </div>
                 <div class="header-actions">
-                    <select id="followupFilter" class="filter-select" onchange="renderFollowups()">
+                    <select id="followupFilter" class="filter-select" onchange="_pageState.followups=1;renderFollowups()">
                         <option value="pending">Pending</option>
                         <option value="done">Completed</option>
                         <option value="all">All</option>
@@ -1411,7 +1486,7 @@
                     </button>
                 </div>
                 <div class="idea-filters">
-                    <select id="ideaCategoryFilter" class="filter-select" onchange="renderIdeas()">
+                    <select id="ideaCategoryFilter" class="filter-select" onchange="_pageState.ideas=1;renderIdeas()">
                         <option value="all">All Categories</option>
                         <option value="Teaching">🎓 Teaching</option>
                         <option value="Activity">🎨 Activity</option>
@@ -1421,7 +1496,7 @@
                         <option value="Tech">💻 Tech</option>
                         <option value="Other">💡 Other</option>
                     </select>
-                    <input type="text" id="ideaSearchInput" class="filter-input" placeholder="Search ideas..." oninput="renderIdeas()">
+                    <input type="text" id="ideaSearchInput" class="filter-input" placeholder="Search ideas..." oninput="_pageState.ideas=1;renderIdeas()">
                 </div>
             </div>
 
@@ -1444,7 +1519,7 @@
                         <i class="fas fa-trash-alt"></i> Delete Schools
                     </button>
                     <input type="file" id="schoolProfileImportFile" accept=".xlsx,.xls,.csv" style="display:none" onchange="loadSchoolProfileImportPreview(event)">
-                    <input type="text" id="schoolSearchInput" class="filter-input" placeholder="Search schools..." oninput="renderSchoolProfiles()">
+                    <input type="text" id="schoolSearchInput" class="filter-input" placeholder="Search schools..." oninput="_pageState.schools=1;renderSchoolProfiles()">
                 </div>
             </div>
             <div class="school-summary-stats" id="schoolSummaryStats"></div>
@@ -1461,7 +1536,7 @@
                     <p class="section-subtitle">Track every teacher's progress across observations over time</p>
                 </div>
                 <div class="header-actions">
-                    <select id="teacherSortSelect" class="filter-select" onchange="renderTeacherGrowth()">
+                    <select id="teacherSortSelect" class="filter-select" onchange="_pageState.teacherGrowth=1;renderTeacherGrowth()">
                         <option value="observations">Most Observed</option>
                         <option value="name">Name A-Z</option>
                         <option value="engagement-low">Low Engagement First</option>
@@ -1469,12 +1544,423 @@
                         <option value="recent">Recently Observed</option>
                         <option value="stale">Needs Visit (Oldest First)</option>
                     </select>
-                    <input type="text" id="teacherGrowthSearch" class="filter-input" placeholder="Search teachers..." oninput="renderTeacherGrowth()">
+                    <input type="text" id="teacherGrowthSearch" class="filter-input" placeholder="Search teachers..." oninput="_pageState.teacherGrowth=1;renderTeacherGrowth()">
                 </div>
             </div>
             <div class="tg-summary" id="tgSummary"></div>
             <div id="teacherGrowthContainer"></div>
         </section>
+
+        <!-- ==================== MARAI TRACKING SECTION ==================== -->
+        <section class="content-section" id="section-marai">
+            <div class="section-header">
+                <div>
+                    <h1><i class="fas fa-route"></i> MARAI Teacher Tracking</h1>
+                    <p class="section-subtitle">Track teacher development: Motivation → Awareness → Readiness → Action → Internalization</p>
+                </div>
+                <div class="header-actions">
+                    <input type="text" id="maraiSearchInput" class="filter-input" placeholder="Search teacher / school..." oninput="_pageState.marai=1;renderMaraiTracking()">
+                </div>
+            </div>
+            <!-- Smart Filter Bar -->
+            <div class="marai-filter-bar">
+                <div class="marai-filter-row">
+                    <select id="maraiStageFilter" class="filter-select" onchange="_pageState.marai=1;renderMaraiTracking()">
+                        <option value="all">🏷️ All Stages</option>
+                        <option value="motivation">🔥 Motivation</option>
+                        <option value="awareness">👁️ Awareness</option>
+                        <option value="readiness">🎯 Readiness</option>
+                        <option value="action">🚀 Action</option>
+                        <option value="internalization">💎 Internalization</option>
+                        <option value="untracked">📋 Untracked</option>
+                    </select>
+                    <select id="maraiSchoolFilter" class="filter-select" onchange="_pageState.marai=1;renderMaraiTracking()">
+                        <option value="all">🏫 All Schools</option>
+                    </select>
+                    <select id="maraiBlockFilter" class="filter-select" onchange="_pageState.marai=1;renderMaraiTracking()">
+                        <option value="all">📍 All Blocks</option>
+                    </select>
+                    <select id="maraiSortSelect" class="filter-select" onchange="_pageState.marai=1;renderMaraiTracking()">
+                        <option value="recent">🕒 Recent First</option>
+                        <option value="name">🔤 Name A-Z</option>
+                        <option value="stage-asc">📈 Stage Low→High</option>
+                        <option value="stage-desc">📉 Stage High→Low</option>
+                        <option value="most-observed">👁️ Most Observed</option>
+                        <option value="least-observed">📋 Least Observed</option>
+                        <option value="overdue">⏰ Needs Visit First</option>
+                    </select>
+                </div>
+                <div class="marai-smart-filters" id="maraiSmartFilters">
+                    <!-- Dynamically populated smart filter chips -->
+                </div>
+            </div>
+            <div class="marai-stats-grid" id="maraiStats"></div>
+            <div class="marai-framework-info">
+                <div class="marai-info-title"><i class="fas fa-info-circle"></i> MARAI Framework</div>
+                <div class="marai-stages-legend">
+                    <span class="marai-legend-item" style="--legend-color:#f59e0b">🔥 <strong>M</strong>otivation</span>
+                    <span class="marai-legend-item" style="--legend-color:#3b82f6">👁️ <strong>A</strong>wareness</span>
+                    <span class="marai-legend-item" style="--legend-color:#8b5cf6">🎯 <strong>R</strong>eadiness</span>
+                    <span class="marai-legend-item" style="--legend-color:#10b981">🚀 <strong>A</strong>ction</span>
+                    <span class="marai-legend-item" style="--legend-color:#ec4899">💎 <strong>I</strong>nternalization</span>
+                </div>
+            </div>
+            <div id="maraiContainer"></div>
+        </section>
+
+        <!-- MARAI Record Modal -->
+        <div class="modal-overlay" id="maraiRecordModal">
+            <div class="modal marai-record-modal" style="max-width:540px">
+                <div class="modal-header marai-modal-header">
+                    <h2 id="maraiModalTitle"><i class="fas fa-route"></i> Update MARAI Stage</h2>
+                    <button class="modal-close" onclick="closeModal('maraiRecordModal')">&times;</button>
+                </div>
+                <!-- Live stage preview -->
+                <div class="marai-stage-preview" id="maraiStagePreview">
+                    <div class="marai-preview-dots" id="maraiPreviewDots"></div>
+                </div>
+                <form id="maraiRecordForm" onsubmit="saveMaraiRecord(event)">
+                    <div class="marai-modal-body">
+                        <div class="form-group marai-fg">
+                            <label><i class="fas fa-user-tie"></i> Teacher Name</label>
+                            <input type="text" id="maraiTeacherName" required placeholder="Enter teacher's full name" autocomplete="off">
+                        </div>
+                        <div class="form-group marai-fg">
+                            <label><i class="fas fa-school"></i> School</label>
+                            <input type="text" id="maraiSchool" placeholder="School name" autocomplete="off">
+                        </div>
+                        <div class="form-row marai-form-row">
+                            <div class="form-group marai-fg">
+                                <label><i class="fas fa-layer-group"></i> MARAI Stage</label>
+                                <select id="maraiStage" required onchange="updateMaraiStagePreview()">
+                                    <option value="motivation">🔥 Motivation</option>
+                                    <option value="awareness">👁️ Awareness</option>
+                                    <option value="readiness">🎯 Readiness</option>
+                                    <option value="action">🚀 Action</option>
+                                    <option value="internalization">💎 Internalization</option>
+                                </select>
+                            </div>
+                            <div class="form-group marai-fg">
+                                <label><i class="fas fa-calendar-alt"></i> Date</label>
+                                <input type="date" id="maraiDate" required>
+                            </div>
+                        </div>
+                        <div class="form-group marai-fg">
+                            <label><i class="fas fa-sticky-note"></i> Notes / Evidence</label>
+                            <textarea id="maraiNotes" rows="4" placeholder="What evidence shows this stage? What was observed?"></textarea>
+                        </div>
+                    </div>
+                    <div class="marai-modal-footer">
+                        <button type="button" class="btn btn-outline marai-cancel-btn" onclick="closeModal('maraiRecordModal')">Cancel</button>
+                        <button type="submit" class="btn marai-save-btn"><i class="fas fa-save"></i> Save Record</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <!-- MARAI Intervention Plan Modal -->
+        <div class="modal-overlay" id="maraiPlanModal">
+            <div class="modal marai-plan-modal" style="max-width:780px;max-height:90vh">
+                <div class="modal-header">
+                    <h2><i class="fas fa-clipboard-list"></i> Intervention Plan</h2>
+                    <button class="modal-close" onclick="closeModal('maraiPlanModal')">&times;</button>
+                </div>
+                <div class="modal-body marai-plan-scroll" id="maraiPlanBody">
+                    <!-- Dynamically populated -->
+                </div>
+            </div>
+        </div>
+
+        <!-- ==================== SCHOOL-BASED WORK SECTION ==================== -->
+        <section class="content-section" id="section-schoolwork">
+            <div class="section-header">
+                <div>
+                    <h1><i class="fas fa-chalkboard"></i> School-Based Work</h1>
+                    <p class="section-subtitle">Track Assembly, Print-Rich Environment, Library, Creative Writing & Bal Shodh Mela</p>
+                </div>
+                <div class="header-actions">
+                    <button class="btn btn-primary" onclick="openSchoolWorkModal()">
+                        <i class="fas fa-plus"></i> Log Activity
+                    </button>
+                    <select id="schoolWorkTypeFilter" class="filter-select" onchange="_pageState.schoolWork=1;renderSchoolWork()">
+                        <option value="all">All Activities</option>
+                        <option value="assembly">🎤 Assembly</option>
+                        <option value="print-rich">🖼️ Print Rich</option>
+                        <option value="library">📚 Library</option>
+                        <option value="creative-writing">✍️ Creative Writing</option>
+                        <option value="bal-shodh-mela">🔬 Bal Shodh Mela</option>
+                        <option value="other">📌 Other</option>
+                    </select>
+                    <input type="text" id="schoolWorkSearchInput" class="filter-input" placeholder="Search school / activity..." oninput="_pageState.schoolWork=1;renderSchoolWork()">
+                </div>
+            </div>
+            <div class="sw-stats-grid" id="schoolWorkStats"></div>
+            <div id="schoolWorkContainer"></div>
+        </section>
+
+        <!-- School Work Modal -->
+        <div class="modal-overlay" id="schoolWorkModal">
+            <div class="modal sw-modal" style="max-width:620px">
+                <div class="modal-header sw-modal-header">
+                    <h2 id="schoolWorkModalTitle"><i class="fas fa-chalkboard"></i> Log School Work</h2>
+                    <button class="modal-close" onclick="closeModal('schoolWorkModal')">&times;</button>
+                </div>
+                <form id="schoolWorkForm" onsubmit="saveSchoolWork(event)">
+                    <div class="sw-modal-body">
+                        <input type="hidden" id="schoolWorkId">
+                        <div class="form-row sw-form-row">
+                            <div class="form-group sw-fg">
+                                <label><i class="fas fa-tag"></i> Activity Type</label>
+                                <select id="schoolWorkType" required>
+                                    <option value="assembly">🎤 Assembly</option>
+                                    <option value="print-rich">🖼️ Print Rich Environment</option>
+                                    <option value="library">📚 Library</option>
+                                    <option value="creative-writing">✍️ Creative Writing</option>
+                                    <option value="bal-shodh-mela">🔬 Bal Shodh Mela</option>
+                                    <option value="other">📌 Other Activity</option>
+                                </select>
+                            </div>
+                            <div class="form-group sw-fg">
+                                <label><i class="fas fa-heading"></i> Title</label>
+                                <input type="text" id="schoolWorkTitle" placeholder="Activity title / topic">
+                            </div>
+                        </div>
+                        <div class="form-row sw-form-row">
+                            <div class="form-group sw-fg">
+                                <label><i class="fas fa-school"></i> School</label>
+                                <input type="text" id="schoolWorkSchool" required placeholder="School name" list="schoolWorkSchoolList">
+                                <datalist id="schoolWorkSchoolList"></datalist>
+                            </div>
+                            <div class="form-group sw-fg">
+                                <label><i class="fas fa-map-marker-alt"></i> Block</label>
+                                <input type="text" id="schoolWorkBlock" placeholder="Block name">
+                            </div>
+                        </div>
+                        <div class="form-row sw-form-row">
+                            <div class="form-group sw-fg">
+                                <label><i class="fas fa-calendar-alt"></i> Date</label>
+                                <input type="date" id="schoolWorkDate" required>
+                            </div>
+                            <div class="form-group sw-fg">
+                                <label><i class="fas fa-flag"></i> Status</label>
+                                <select id="schoolWorkStatus">
+                                    <option value="completed">✅ Completed</option>
+                                    <option value="in-progress">🔄 In Progress</option>
+                                    <option value="planned">📋 Planned</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="form-row sw-form-row">
+                            <div class="form-group sw-fg">
+                                <label><i class="fas fa-users"></i> Participants Count</label>
+                                <input type="number" id="schoolWorkParticipants" placeholder="Number of students" min="0">
+                            </div>
+                            <div class="form-group sw-fg">
+                                <label><i class="fas fa-camera"></i> Photos Taken</label>
+                                <input type="number" id="schoolWorkPhotos" placeholder="0" min="0">
+                            </div>
+                        </div>
+                        <div class="form-group sw-fg sw-teachers-group">
+                            <label><i class="fas fa-chalkboard-teacher"></i> Assigned Teachers</label>
+                            <div class="sw-teachers-input-wrap">
+                                <input type="text" id="schoolWorkTeacherInput" placeholder="Type teacher name & press Enter" list="schoolWorkTeacherList" onkeydown="handleSwTeacherKeydown(event)">
+                                <datalist id="schoolWorkTeacherList"></datalist>
+                                <button type="button" class="sw-teacher-add-btn" onclick="addSwTeacher()" title="Add teacher"><i class="fas fa-plus"></i></button>
+                            </div>
+                            <div class="sw-teacher-tags" id="schoolWorkTeacherTags"></div>
+                        </div>
+                        <div class="form-group sw-fg">
+                            <label><i class="fas fa-align-left"></i> Description</label>
+                            <textarea id="schoolWorkDescription" rows="2" placeholder="What was done? Describe the activity..."></textarea>
+                        </div>
+                        <div class="form-group sw-fg">
+                            <label><i class="fas fa-eye"></i> Observations</label>
+                            <textarea id="schoolWorkObservations" rows="2" placeholder="What did you observe? Student engagement, quality..."></textarea>
+                        </div>
+                        <div class="form-group sw-fg">
+                            <label><i class="fas fa-check-circle"></i> Outcome / Impact</label>
+                            <input type="text" id="schoolWorkOutcome" placeholder="Key outcome or impact noted">
+                        </div>
+                    </div>
+                    <div class="sw-modal-footer">
+                        <button type="button" class="btn btn-outline sw-cancel-btn" onclick="closeModal('schoolWorkModal')">Cancel</button>
+                        <button type="submit" class="btn sw-save-btn"><i class="fas fa-save"></i> Save Activity</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <!-- ==================== VISIT PLAN SECTION ==================== -->
+        <section class="content-section" id="section-visitplan">
+            <div class="section-header">
+                <div>
+                    <h1><i class="fas fa-clipboard-check"></i> Visit Plan vs Execution</h1>
+                    <p class="section-subtitle">Link your Excel file once — all data stays in the app automatically</p>
+                </div>
+                <div class="header-actions">
+                    <button class="btn btn-primary" onclick="openVisitPlanModal()">
+                        <i class="fas fa-plus"></i> Add Entry
+                    </button>
+                    <button class="btn btn-outline vp-link-btn" onclick="vpLinkExcel()" id="vpLinkBtn">
+                        <i class="fas fa-link"></i> Link Excel
+                    </button>
+                    <button class="btn btn-outline" onclick="exportVisitPlanExcel()" title="Download as Excel">
+                        <i class="fas fa-download"></i>
+                    </button>
+                </div>
+                <div class="vp-linked-status" id="vpLinkedStatus" style="display:none">
+                    <i class="fas fa-plug"></i>
+                    <span id="vpLinkedFileName">Not linked</span>
+                    <span class="vp-link-mode" id="vpLinkMode">Synced</span>
+                    <button class="vp-unlink-btn" onclick="vpUnlinkExcel()" title="Unlink"><i class="fas fa-times"></i></button>
+                    <span class="vp-autosave-dot" id="vpAutoSaveDot" title="Data saved in app"></span>
+                </div>
+            </div>
+            <!-- Filters -->
+            <div class="vp-filter-bar">
+                <div class="vp-filter-row">
+                    <select id="vpDomainFilter" class="filter-select" onchange="_pageState.visitplan=1;renderVisitPlan()">
+                        <option value="all">📂 All Domains</option>
+                    </select>
+                    <select id="vpStakeholderFilter" class="filter-select" onchange="_pageState.visitplan=1;renderVisitPlan()">
+                        <option value="all">👥 All Stakeholders</option>
+                    </select>
+                    <select id="vpClusterFilter" class="filter-select" onchange="_pageState.visitplan=1;renderVisitPlan()">
+                        <option value="all">📍 All Clusters</option>
+                    </select>
+                    <select id="vpMonthFilter" class="filter-select" onchange="_pageState.visitplan=1;renderVisitPlan()">
+                        <option value="all">📅 All Months</option>
+                    </select>
+                    <select id="vpStatusFilter" class="filter-select" onchange="_pageState.visitplan=1;renderVisitPlan()">
+                        <option value="all">📋 All Status</option>
+                        <option value="planned">📋 Planned</option>
+                        <option value="executed">✅ Executed</option>
+                        <option value="empty">⬜ Empty/Unfilled</option>
+                    </select>
+                    <input type="text" id="vpSearchInput" class="filter-input" placeholder="Search..." oninput="_pageState.visitplan=1;renderVisitPlan()">
+                    <button class="btn btn-outline vp-bulk-clear-btn" onclick="vpBulkClear()" id="vpBulkClearBtn" title="Delete filtered entries" style="display:none">
+                        <i class="fas fa-trash-alt"></i> <span id="vpBulkClearLabel">Clear</span>
+                    </button>
+                </div>
+            </div>
+            <!-- Quick Add Domains -->
+            <div class="vp-quick-bar" id="vpQuickBar"></div>
+            <!-- Stats -->
+            <div class="vp-stats-grid" id="vpStats"></div>
+            <!-- Table container -->
+            <div class="vp-table-wrap" id="vpContainer"></div>
+        </section>
+
+        <!-- Visit Plan Entry Modal -->
+        <div class="modal-overlay" id="visitPlanModal">
+            <div class="modal vp-modal" style="max-width:680px">
+                <div class="modal-header vp-modal-header">
+                    <h2 id="vpModalTitle"><i class="fas fa-clipboard-check"></i> Visit Plan Entry</h2>
+                    <button class="modal-close" onclick="closeModal('visitPlanModal')">&times;</button>
+                </div>
+                <form id="vpForm" onsubmit="saveVisitPlanEntry(event)">
+                    <div class="vp-modal-body">
+                        <input type="hidden" id="vpEntryId">
+                        <div class="form-row vp-form-row">
+                            <div class="form-group vp-fg">
+                                <label><i class="fas fa-calendar-alt"></i> Date</label>
+                                <input type="date" id="vpDate" required>
+                            </div>
+                            <div class="form-group vp-fg">
+                                <label><i class="fas fa-clock"></i> Time</label>
+                                <select id="vpTime" required>
+                                    <option value="First Half">First Half</option>
+                                    <option value="Second Half">Second Half</option>
+                                    <option value="Evening">Evening</option>
+                                    <option value="All Day">All Day</option>
+                                    <option value="NA">NA</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="form-row vp-form-row">
+                            <div class="form-group vp-fg">
+                                <label><i class="fas fa-folder-open"></i> Plan Domain</label>
+                                <select id="vpDomain">
+                                    <option value="">-- Select --</option>
+                                </select>
+                            </div>
+                            <div class="form-group vp-fg">
+                                <label><i class="fas fa-users"></i> Stakeholder Type</label>
+                                <select id="vpStakeholder">
+                                    <option value="">-- Select --</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="form-row vp-form-row">
+                            <div class="form-group vp-fg">
+                                <label><i class="fas fa-map-marker-alt"></i> Cluster</label>
+                                <select id="vpCluster">
+                                    <option value="">-- Select --</option>
+                                </select>
+                            </div>
+                            <div class="form-group vp-fg">
+                                <label><i class="fas fa-building"></i> Venue</label>
+                                <input type="text" id="vpVenue" placeholder="School / Venue name" list="vpVenueList">
+                                <datalist id="vpVenueList"></datalist>
+                            </div>
+                        </div>
+                        <div class="form-row vp-form-row">
+                            <div class="form-group vp-fg">
+                                <label><i class="fas fa-user"></i> Stakeholder Name</label>
+                                <input type="text" id="vpStakeholderName" placeholder="Person name" list="vpStakeholderNameList">
+                                <datalist id="vpStakeholderNameList"></datalist>
+                            </div>
+                            <div class="form-group vp-fg">
+                                <label><i class="fas fa-id-badge"></i> Designation</label>
+                                <select id="vpDesignation">
+                                    <option value="">-- Select --</option>
+                                    <option value="Teacher">Teacher</option>
+                                    <option value="Head teacher">Head teacher</option>
+                                    <option value="CAC">CAC</option>
+                                    <option value="PLC">PLC</option>
+                                    <option value="ECCE">ECCE</option>
+                                    <option value="NA">NA</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="form-group vp-fg">
+                            <label><i class="fas fa-bullseye"></i> Broader Plan / Objective</label>
+                            <textarea id="vpObjective" rows="2" placeholder="What is the objective of this visit?"></textarea>
+                        </div>
+                        <div class="form-group vp-fg">
+                            <label><i class="fas fa-check-double"></i> Review / Execution Notes</label>
+                            <textarea id="vpReview" rows="3" placeholder="What actually happened? Review against intervention plan..."></textarea>
+                        </div>
+                        <div class="form-row vp-form-row">
+                            <div class="form-group vp-fg">
+                                <label><i class="fas fa-hashtag"></i> No. of TPs</label>
+                                <input type="text" id="vpTPs" placeholder="e.g. 2">
+                            </div>
+                            <div class="form-group vp-fg">
+                                <label><i class="fas fa-user-friends"></i> No. of Stakeholders</label>
+                                <input type="text" id="vpStakeholderCount" placeholder="e.g. 5">
+                            </div>
+                        </div>
+                        <div class="form-group vp-fg">
+                            <label><i class="fas fa-comment-dots"></i> Teacher Comments</label>
+                            <textarea id="vpTeacherComments" rows="2" placeholder="Qualitative comments for teachers..."></textarea>
+                        </div>
+                        <div class="form-group vp-fg">
+                            <label><i class="fas fa-child"></i> Student Engagement Comments</label>
+                            <textarea id="vpStudentComments" rows="2" placeholder="Comments on engagement with students..."></textarea>
+                        </div>
+                        <div class="form-group vp-fg">
+                            <label><i class="fas fa-share-square"></i> Report Sharing</label>
+                            <input type="text" id="vpReportSharing" placeholder="Report shared with...">
+                        </div>
+                    </div>
+                    <div class="vp-modal-footer">
+                        <button type="button" class="btn btn-outline" onclick="closeModal('visitPlanModal')">Cancel</button>
+                        <button type="submit" class="btn vp-save-btn"><i class="fas fa-save"></i> Save Entry</button>
+                    </div>
+                </form>
+            </div>
+        </div>
 
         <!-- ==================== REFLECTIONS SECTION ==================== -->
         <section class="content-section" id="section-reflections">
@@ -1484,7 +1970,7 @@
                     <p class="section-subtitle">Monthly reflections on your practice and growth</p>
                 </div>
                 <div class="header-actions">
-                    <select id="reflectionMonthFilter" class="filter-select" onchange="renderReflections()"></select>
+                    <select id="reflectionMonthFilter" class="filter-select" onchange="_pageState.reflections=1;renderReflections()"></select>
                     <button class="btn btn-primary" onclick="openReflectionModal()">
                         <i class="fas fa-plus"></i> New Reflection
                     </button>
@@ -1568,7 +2054,7 @@
                     <p class="section-subtitle">Key contacts for your field work</p>
                 </div>
                 <div class="header-actions">
-                    <select id="contactRoleFilter" class="filter-select" onchange="renderContacts()">
+                    <select id="contactRoleFilter" class="filter-select" onchange="_pageState.contacts=1;renderContacts()">
                         <option value="all">All Roles</option>
                         <option value="Head Master">Head Master</option>
                         <option value="Teacher">Teacher</option>
@@ -1579,7 +2065,7 @@
                         <option value="Mentor">Mentor</option>
                         <option value="Other">Other</option>
                     </select>
-                    <input type="text" id="contactSearchInput" class="filter-input" placeholder="Search contacts..." oninput="renderContacts()">
+                    <input type="text" id="contactSearchInput" class="filter-input" placeholder="Search contacts..." oninput="_pageState.contacts=1;renderContacts()">
                     <button class="btn btn-outline" onclick="extractContactsFromObservations()" title="Extract teacher contacts from imported DMT observations">
                         <i class="fas fa-file-import"></i> Extract from Observations
                     </button>
@@ -1752,7 +2238,7 @@
                     <p class="section-subtitle">Track BRC, cluster, district, and other meetings with action items</p>
                 </div>
                 <div class="header-actions">
-                    <select id="meetingFilter" class="filter-select" onchange="renderMeetings()">
+                    <select id="meetingFilter" class="filter-select" onchange="_pageState.meetings=1;renderMeetings()">
                         <option value="all">All Types</option>
                         <option value="BRC Meeting">BRC Meeting</option>
                         <option value="Cluster Meeting">Cluster Meeting</option>
@@ -2340,6 +2826,81 @@ function getOrCreateFolder() {
             </div>
         </section>
 
+        <!-- ==================== FEEDBACK SECTION ==================== -->
+        <section class="content-section" id="section-feedback">
+            <div class="section-header">
+                <div>
+                    <h1><i class="fas fa-bug"></i> Bug Report & Feature Request</h1>
+                    <p class="section-subtitle">Report bugs or request new features — help improve the app</p>
+                </div>
+                <button class="btn btn-outline" onclick="showUserGuide()" style="white-space:nowrap;"><i class="fas fa-book-open"></i> How to Use</button>
+            </div>
+
+            <!-- Submit Form -->
+            <div class="fb-form-card">
+                <div class="fb-form-header">
+                    <div class="fb-type-tabs">
+                        <button class="fb-type-tab active" onclick="setFeedbackType('bug')" id="fbTabBug"><i class="fas fa-bug"></i> Bug Report</button>
+                        <button class="fb-type-tab" onclick="setFeedbackType('feature')" id="fbTabFeature"><i class="fas fa-lightbulb"></i> Feature Request</button>
+                    </div>
+                </div>
+                <form id="feedbackForm" onsubmit="saveFeedback(event)">
+                    <input type="hidden" id="fbType" value="bug">
+                    <input type="hidden" id="fbEditId" value="">
+                    <div class="form-group">
+                        <label><i class="fas fa-heading"></i> Title *</label>
+                        <input type="text" id="fbTitle" required placeholder="Brief summary of the issue or request">
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label><i class="fas fa-layer-group"></i> Section</label>
+                            <select id="fbSection">
+                                <option value="">-- Select Section --</option>
+                                <option value="Dashboard">Dashboard</option>
+                                <option value="School Visits">School Visits</option>
+                                <option value="Teacher Training">Teacher Training</option>
+                                <option value="Observations">Observations</option>
+                                <option value="Visit Plan">Visit Plan</option>
+                                <option value="Analytics">Analytics</option>
+                                <option value="Planner">Weekly Planner</option>
+                                <option value="MARAI">MARAI Tracking</option>
+                                <option value="School Work">School Work</option>
+                                <option value="Settings">Settings</option>
+                                <option value="Data & Backup">Data & Backup</option>
+                                <option value="Other">Other</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label><i class="fas fa-exclamation-triangle"></i> Priority</label>
+                            <select id="fbPriority">
+                                <option value="low">Low</option>
+                                <option value="medium" selected>Medium</option>
+                                <option value="high">High</option>
+                                <option value="critical">Critical</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label><i class="fas fa-align-left"></i> Description *</label>
+                        <textarea id="fbDescription" rows="4" required placeholder="Describe the bug step-by-step, or explain the feature you'd like..."></textarea>
+                    </div>
+                    <div class="fb-form-actions">
+                        <button type="button" class="btn btn-ghost" onclick="resetFeedbackForm()">Clear</button>
+                        <button type="submit" class="btn btn-primary"><i class="fas fa-save"></i> Save Report</button>
+                    </div>
+                </form>
+            </div>
+
+            <!-- Saved Reports Table -->
+            <div class="card" style="margin-top:20px;">
+                <div class="card-header">
+                    <h3><i class="fas fa-list"></i> Submitted Reports</h3>
+                    <span class="text-muted" id="fbCount"></span>
+                </div>
+                <div class="card-body" id="fbTableContainer" style="overflow-x:auto;"></div>
+            </div>
+        </section>
+
     </main>
 
     <!-- ==================== MODALS ==================== -->
@@ -2409,14 +2970,11 @@ function getOrCreateFolder() {
                             </select>
                         </div>
                         <div class="form-group">
-                            <label for="visitDuration">Duration</label>
+                            <label for="visitDuration">Time</label>
                             <select id="visitDuration">
-                                <option value="">— Select —</option>
-                                <option value="30 mins">30 minutes</option>
-                                <option value="1 hour">1 hour</option>
-                                <option value="2 hours">2 hours</option>
-                                <option value="Half day">Half day</option>
-                                <option value="Full day">Full day</option>
+                                <option value="First Half">First Half</option>
+                                <option value="Second Half">Second Half</option>
+                                <option value="Full Day">Full Day</option>
                             </select>
                         </div>
                     </div>
