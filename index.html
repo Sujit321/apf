@@ -5,7 +5,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>APF Resource Person Dashboard</title>
-    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%236366f1'/%3E%3Cpath d='M32 48c0 0 0-12 0-18s-6-12-14-14c2 6 4 12 14 16M32 48c0 0 0-12 0-18s6-12 14-14c-2 6-4 12-14 16' fill='none' stroke='white' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'/%3E%3Ccircle cx='32' cy='14' r='3' fill='%2334d399'/%3E%3C/svg%3E">
+    <link rel="icon" type="image/svg+xml"
+        href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%236366f1'/%3E%3Cpath d='M32 48c0 0 0-12 0-18s-6-12-14-14c2 6 4 12 14 16M32 48c0 0 0-12 0-18s6-12 14-14c-2 6-4 12-14 16' fill='none' stroke='white' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'/%3E%3Ccircle cx='32' cy='14' r='3' fill='%2334d399'/%3E%3C/svg%3E">
     <meta name="description"
         content="Productivity dashboard for Resource Persons at Azim Premji Foundation — manage school visits, teacher training, observations, reports, and resources.">
     <meta http-equiv="X-Content-Type-Options" content="nosniff">
@@ -24,28 +25,33 @@
     <!-- License Key Gate -->
     <div id="licenseScreen" class="lock-screen" style="display:none;">
         <div class="lock-container license-container">
-            <div class="lock-icon" style="background:linear-gradient(135deg,#6366f1,#8b5cf6);box-shadow:0 8px 24px rgba(99,102,241,0.3);">
+            <div class="lock-icon"
+                style="background:linear-gradient(135deg,#6366f1,#8b5cf6);box-shadow:0 8px 24px rgba(99,102,241,0.3);">
                 <i class="fas fa-key"></i>
             </div>
             <h1 class="lock-title">License Required</h1>
-            <p class="lock-subtitle">Enter your license key to activate the dashboard.<br>Contact the developer if you don't have one.</p>
+            <p class="lock-subtitle">Enter your license key to activate the dashboard.<br>Contact the developer if you
+                don't have one.</p>
             <form id="licenseForm" onsubmit="handleLicenseSubmit(event)" autocomplete="off">
                 <div class="lock-input-group">
                     <div class="lock-input-wrapper">
                         <i class="fas fa-key"></i>
                         <input type="password" id="licenseKeyInput" placeholder="License Key" autofocus required>
-                        <button type="button" class="lock-eye-btn" onclick="togglePasswordVisibility('licenseKeyInput', this)" tabindex="-1">
+                        <button type="button" class="lock-eye-btn"
+                            onclick="togglePasswordVisibility('licenseKeyInput', this)" tabindex="-1">
                             <i class="fas fa-eye"></i>
                         </button>
                     </div>
                 </div>
                 <div class="lock-error" id="licenseError"></div>
-                <button type="submit" class="btn btn-primary lock-btn" style="background:linear-gradient(135deg,#6366f1,#8b5cf6);">
+                <button type="submit" class="btn btn-primary lock-btn"
+                    style="background:linear-gradient(135deg,#6366f1,#8b5cf6);">
                     <i class="fas fa-unlock"></i> Activate
                 </button>
             </form>
             <div class="lock-footer" style="margin-top:24px;">
-                <p style="font-size:11px;color:var(--text-muted);opacity:0.7;"><i class="fas fa-shield-alt"></i> Protected software — unauthorized use is prohibited</p>
+                <p style="font-size:11px;color:var(--text-muted);opacity:0.7;"><i class="fas fa-shield-alt"></i>
+                    Protected software — unauthorized use is prohibited</p>
             </div>
         </div>
     </div>
@@ -67,9 +73,11 @@
                 <!-- Steps rendered by JS -->
             </div>
             <div class="guide-footer">
-                <button class="btn btn-ghost" id="guidePrevBtn" onclick="guideNav(-1)"><i class="fas fa-arrow-left"></i> Previous</button>
+                <button class="btn btn-ghost" id="guidePrevBtn" onclick="guideNav(-1)"><i class="fas fa-arrow-left"></i>
+                    Previous</button>
                 <div class="guide-dots" id="guideDots"></div>
-                <button class="btn btn-primary" id="guideNextBtn" onclick="guideNav(1)">Next <i class="fas fa-arrow-right"></i></button>
+                <button class="btn btn-primary" id="guideNextBtn" onclick="guideNav(1)">Next <i
+                        class="fas fa-arrow-right"></i></button>
             </div>
         </div>
     </div>
@@ -84,8 +92,10 @@
                 <div class="lock-input-group">
                     <div class="lock-input-wrapper">
                         <i class="fas fa-lock"></i>
-                        <input type="password" id="lockPassword" placeholder="Password" autofocus required minlength="4">
-                        <button type="button" class="lock-eye-btn" onclick="togglePasswordVisibility('lockPassword', this)" tabindex="-1">
+                        <input type="password" id="lockPassword" placeholder="Password" autofocus required
+                            minlength="4">
+                        <button type="button" class="lock-eye-btn"
+                            onclick="togglePasswordVisibility('lockPassword', this)" tabindex="-1">
                             <i class="fas fa-eye"></i>
                         </button>
                     </div>
@@ -95,7 +105,8 @@
                     <div class="lock-input-wrapper">
                         <i class="fas fa-lock"></i>
                         <input type="password" id="lockPasswordConfirm" placeholder="Confirm password" minlength="4">
-                        <button type="button" class="lock-eye-btn" onclick="togglePasswordVisibility('lockPasswordConfirm', this)" tabindex="-1">
+                        <button type="button" class="lock-eye-btn"
+                            onclick="togglePasswordVisibility('lockPasswordConfirm', this)" tabindex="-1">
                             <i class="fas fa-eye"></i>
                         </button>
                     </div>
@@ -107,8 +118,11 @@
             </form>
             <div class="lock-footer" id="lockFooter">
                 <div id="lockEmergencyReset" style="display:none;">
-                    <p style="color:#ef4444;font-size:12px;margin-bottom:10px;"><i class="fas fa-exclamation-triangle"></i> Emergency reset will <strong>permanently delete ALL data</strong></p>
-                    <button type="button" class="btn btn-danger" onclick="resetPasswordPrompt()" style="font-size:12px;padding:8px 16px;width:100%;">
+                    <p style="color:#ef4444;font-size:12px;margin-bottom:10px;"><i
+                            class="fas fa-exclamation-triangle"></i> Emergency reset will <strong>permanently delete ALL
+                            data</strong></p>
+                    <button type="button" class="btn btn-danger" onclick="resetPasswordPrompt()"
+                        style="font-size:12px;padding:8px 16px;width:100%;">
                         <i class="fas fa-trash-alt"></i> Emergency Data Reset
                     </button>
                 </div>
@@ -121,7 +135,8 @@
         <div class="welcome-container">
             <div class="welcome-icon"><i class="fas fa-shield-alt"></i></div>
             <h1 class="welcome-title">APF Dashboard</h1>
-            <p class="welcome-subtitle">Welcome! Load your existing data file or start fresh. After this, your data auto-saves securely — no need to load the file again.</p>
+            <p class="welcome-subtitle">Welcome! Load your existing data file or start fresh. After this, your data
+                auto-saves securely — no need to load the file again.</p>
             <div class="welcome-actions">
                 <label class="btn btn-primary welcome-btn welcome-load-btn">
                     <i class="fas fa-folder-open"></i> Load Existing Data File (.apf)
@@ -153,7 +168,8 @@
                     <span class="logo-subtitle">Resource Person</span>
                 </div>
             </div>
-            <button class="sidebar-toggle-btn" id="sidebarToggle" title="Collapse sidebar" onclick="toggleDesktopSidebar()">
+            <button class="sidebar-toggle-btn" id="sidebarToggle" title="Collapse sidebar"
+                onclick="toggleDesktopSidebar()">
                 <i class="fas fa-chevron-left"></i>
             </button>
         </div>
@@ -202,6 +218,9 @@
             <a href="#" class="nav-item" data-section="schools" id="nav-schools" data-tooltip="School Profiles">
                 <i class="fas fa-map-marker-alt"></i><span>School Profiles</span>
             </a>
+            <a href="#" class="nav-item" data-section="clusters" id="nav-clusters" data-tooltip="Cluster Profiles">
+                <i class="fas fa-layer-group"></i><span>Cluster Profiles</span>
+            </a>
             <a href="#" class="nav-item" data-section="teachers" id="nav-teachers" data-tooltip="Teacher Growth">
                 <i class="fas fa-user-graduate"></i><span>Teacher Growth</span>
             </a>
@@ -220,7 +239,8 @@
             <a href="#" class="nav-item" data-section="growth" id="nav-growth" data-tooltip="Growth Framework">
                 <i class="fas fa-seedling"></i><span>Growth Framework</span>
             </a>
-            <a href="#" class="nav-item" data-section="teacherrecords" id="nav-teacherrecords" data-tooltip="Teachers Record">
+            <a href="#" class="nav-item" data-section="teacherrecords" id="nav-teacherrecords"
+                data-tooltip="Teachers Record">
                 <i class="fas fa-id-card-alt"></i><span>Teachers Record</span>
             </a>
             <a href="#" class="nav-item" data-section="contacts" id="nav-contacts" data-tooltip="Contacts">
@@ -247,13 +267,15 @@
             </a>
         </nav>
         <div class="sidebar-footer">
-            <div class="user-info" onclick="openProfileModal()" style="cursor:pointer;" title="Click to edit your profile">
+            <div class="user-info" onclick="openProfileModal()" style="cursor:pointer;"
+                title="Click to edit your profile">
                 <div class="user-avatar" id="userAvatarIcon"><i class="fas fa-user"></i></div>
                 <div class="user-details">
                     <span class="user-name" id="userName">Resource Person</span>
                     <span class="user-role" id="userOrg">Azim Premji Foundation</span>
                 </div>
-                <button class="theme-toggle-btn" id="themeToggle" onclick="event.stopPropagation(); toggleTheme()" title="Switch theme">
+                <button class="theme-toggle-btn" id="themeToggle" onclick="event.stopPropagation(); toggleTheme()"
+                    title="Switch theme">
                     <i class="fas fa-moon" id="themeIcon"></i>
                 </button>
             </div>
@@ -416,7 +438,8 @@
                     <select id="visitBlockFilter" onchange="_pageState.visits=1;renderVisits()">
                         <option value="all">All Blocks</option>
                     </select>
-                    <input type="text" id="visitSearchInput" placeholder="Search schools, clusters..." oninput="_pageState.visits=1;renderVisits()">
+                    <input type="text" id="visitSearchInput" placeholder="Search schools, clusters..."
+                        oninput="_pageState.visits=1;renderVisits()">
                 </div>
                 <div class="view-toggles">
                     <button class="view-btn active" data-view="list" onclick="setVisitView('list')"><i
@@ -491,27 +514,38 @@
                 <div class="header-actions">
                     <div class="obs-import-dropdown">
                         <button class="btn btn-outline" onclick="toggleObsImportMenu()" id="obsImportBtn">
-                            <i class="fas fa-file-excel"></i> Import / Manage <i class="fas fa-caret-down" style="margin-left:4px;font-size:11px"></i>
+                            <i class="fas fa-file-excel"></i> Import / Manage <i class="fas fa-caret-down"
+                                style="margin-left:4px;font-size:11px"></i>
                         </button>
                         <div class="obs-import-menu" id="obsImportMenu">
                             <div class="obs-menu-label"><i class="fas fa-download"></i> Import</div>
-                            <button onclick="triggerDMTImport('add')"><i class="fas fa-plus-circle"></i> Import DMT (Add to existing)</button>
-                            <button onclick="triggerDMTImport('replace')"><i class="fas fa-sync-alt"></i> Import DMT (Replace all)</button>
-                            <button onclick="triggerFilteredImport()"><i class="fas fa-filter"></i> Import DMT (Filtered — State/Block/Observer/Cluster)</button>
+                            <button onclick="triggerDMTImport('add')"><i class="fas fa-plus-circle"></i> Import DMT (Add
+                                to existing)</button>
+                            <button onclick="triggerDMTImport('replace')"><i class="fas fa-sync-alt"></i> Import DMT
+                                (Replace all)</button>
+                            <button onclick="triggerFilteredImport()"><i class="fas fa-filter"></i> Import DMT (Filtered
+                                — State/Block/Observer/Cluster)</button>
                             <div class="obs-import-menu-divider"></div>
                             <div class="obs-menu-label"><i class="fas fa-address-book"></i> Contacts & Schools</div>
-                            <button onclick="extractContactsFromObservations()"><i class="fas fa-user-plus"></i> Extract Contacts from Observations</button>
-                            <button onclick="triggerSchoolProfileImport()"><i class="fas fa-school"></i> Import School Profiles from Excel</button>
+                            <button onclick="extractContactsFromObservations()"><i class="fas fa-user-plus"></i> Extract
+                                Contacts from Observations</button>
+                            <button onclick="triggerSchoolProfileImport()"><i class="fas fa-school"></i> Import School
+                                Profiles from Excel</button>
                             <div class="obs-import-menu-divider"></div>
                             <div class="obs-menu-label"><i class="fas fa-upload"></i> Unload</div>
-                            <button onclick="openUnloadModal()"><i class="fas fa-filter"></i> Unload by Filter (State/Block/Observer/Cluster)</button>
-                            <button onclick="unloadImportedData()" class="obs-menu-danger"><i class="fas fa-eraser"></i> Unload All Imported Data</button>
+                            <button onclick="openUnloadModal()"><i class="fas fa-filter"></i> Unload by Filter
+                                (State/Block/Observer/Cluster)</button>
+                            <button onclick="unloadImportedData()" class="obs-menu-danger"><i class="fas fa-eraser"></i>
+                                Unload All Imported Data</button>
                             <div class="obs-import-menu-divider"></div>
-                            <button onclick="clearAllObservations()" class="obs-menu-danger"><i class="fas fa-trash-alt"></i> Clear All Observations</button>
+                            <button onclick="clearAllObservations()" class="obs-menu-danger"><i
+                                    class="fas fa-trash-alt"></i> Clear All Observations</button>
                         </div>
                     </div>
-                    <input type="file" id="dmtImportFile" accept=".xlsx,.xls,.csv" style="display:none" onchange="importDMTExcel(event)">
-                    <input type="file" id="dmtFilteredImportFile" accept=".xlsx,.xls,.csv" style="display:none" onchange="loadFilteredImportPreview(event)">
+                    <input type="file" id="dmtImportFile" accept=".xlsx,.xls,.csv" style="display:none"
+                        onchange="importDMTExcel(event)">
+                    <input type="file" id="dmtFilteredImportFile" accept=".xlsx,.xls,.csv" style="display:none"
+                        onchange="loadFilteredImportPreview(event)">
                     <button class="btn btn-primary" onclick="openObservationModal()">
                         <i class="fas fa-plus"></i> New Observation
                     </button>
@@ -520,11 +554,15 @@
 
             <!-- Summary Stats Bar -->
             <div class="obs-stats-bar" id="obsStatsBar">
-                <div class="obs-stat-pill"><i class="fas fa-clipboard-list"></i> <span id="obsStatTotal">0</span> Total</div>
-                <div class="obs-stat-pill"><i class="fas fa-school"></i> <span id="obsStatSchools">0</span> Schools</div>
-                <div class="obs-stat-pill"><i class="fas fa-chalkboard-teacher"></i> <span id="obsStatTeachers">0</span> Teachers</div>
+                <div class="obs-stat-pill"><i class="fas fa-clipboard-list"></i> <span id="obsStatTotal">0</span> Total
+                </div>
+                <div class="obs-stat-pill"><i class="fas fa-school"></i> <span id="obsStatSchools">0</span> Schools
+                </div>
+                <div class="obs-stat-pill"><i class="fas fa-chalkboard-teacher"></i> <span id="obsStatTeachers">0</span>
+                    Teachers</div>
                 <div class="obs-stat-pill"><i class="fas fa-eye"></i> <span id="obsStatObserved">0</span> Observed</div>
-                <div class="obs-stat-pill engagement"><i class="fas fa-fire"></i> <span id="obsStatEngaged">0%</span> Engaged</div>
+                <div class="obs-stat-pill engagement"><i class="fas fa-fire"></i> <span id="obsStatEngaged">0%</span>
+                    Engaged</div>
             </div>
 
             <!-- Filter Bar -->
@@ -571,10 +609,14 @@
 
             <!-- Tabs: List / Analytics / Smart Planner -->
             <div class="obs-tabs">
-                <button class="obs-tab active" data-tab="list" onclick="switchObsTab('list')"><i class="fas fa-list"></i> List View</button>
-                <button class="obs-tab" data-tab="analytics" onclick="switchObsTab('analytics')"><i class="fas fa-chart-pie"></i> Analytics</button>
-                <button class="obs-tab" data-tab="planner" onclick="switchObsTab('planner')"><i class="fas fa-brain"></i> Smart Planner</button>
-                <button class="obs-tab" data-tab="aianalysis" onclick="switchObsTab('aianalysis')"><i class="fas fa-robot"></i> AI Analysis</button>
+                <button class="obs-tab active" data-tab="list" onclick="switchObsTab('list')"><i
+                        class="fas fa-list"></i> List View</button>
+                <button class="obs-tab" data-tab="analytics" onclick="switchObsTab('analytics')"><i
+                        class="fas fa-chart-pie"></i> Analytics</button>
+                <button class="obs-tab" data-tab="planner" onclick="switchObsTab('planner')"><i
+                        class="fas fa-brain"></i> Smart Planner</button>
+                <button class="obs-tab" data-tab="aianalysis" onclick="switchObsTab('aianalysis')"><i
+                        class="fas fa-robot"></i> AI Analysis</button>
             </div>
 
             <!-- List View -->
@@ -629,7 +671,10 @@
             <!-- Smart Planner View -->
             <div id="obsTabPlanner" class="obs-tab-content">
                 <div id="smartPlannerContainer" class="smart-planner-container">
-                    <div class="empty-state"><i class="fas fa-brain"></i><h3>Loading Smart Planner...</h3><p>Analyzing your observation data to generate intelligent suggestions</p></div>
+                    <div class="empty-state"><i class="fas fa-brain"></i>
+                        <h3>Loading Smart Planner...</h3>
+                        <p>Analyzing your observation data to generate intelligent suggestions</p>
+                    </div>
                 </div>
             </div>
 
@@ -641,7 +686,8 @@
                     <div class="ai-hero">
                         <div class="ai-hero-icon"><i class="fas fa-wand-magic-sparkles"></i></div>
                         <h2>AI Analysis</h2>
-                        <p>Generate a smart prompt from your data, send it to any AI chatbot, and get actionable plans</p>
+                        <p>Generate a smart prompt from your data, send it to any AI chatbot, and get actionable plans
+                        </p>
                     </div>
 
                     <!-- Steps Workflow -->
@@ -659,22 +705,31 @@
                             <div class="ai-step-body">
                                 <div class="ai-prompt-options">
                                     <div class="ai-opt-chips">
-                                        <button class="ai-chip active" onclick="setAiPromptFocus('full')" data-focus="full"><i class="fas fa-globe"></i> Full Analysis</button>
-                                        <button class="ai-chip" onclick="setAiPromptFocus('engagement')" data-focus="engagement"><i class="fas fa-fire"></i> Engagement</button>
-                                        <button class="ai-chip" onclick="setAiPromptFocus('teacher')" data-focus="teacher"><i class="fas fa-user"></i> Teacher Support</button>
-                                        <button class="ai-chip" onclick="setAiPromptFocus('school')" data-focus="school"><i class="fas fa-school"></i> School Visits</button>
-                                        <button class="ai-chip" onclick="setAiPromptFocus('training')" data-focus="training"><i class="fas fa-chalkboard-teacher"></i> Training Needs</button>
+                                        <button class="ai-chip active" onclick="setAiPromptFocus('full')"
+                                            data-focus="full"><i class="fas fa-globe"></i> Full Analysis</button>
+                                        <button class="ai-chip" onclick="setAiPromptFocus('engagement')"
+                                            data-focus="engagement"><i class="fas fa-fire"></i> Engagement</button>
+                                        <button class="ai-chip" onclick="setAiPromptFocus('teacher')"
+                                            data-focus="teacher"><i class="fas fa-user"></i> Teacher Support</button>
+                                        <button class="ai-chip" onclick="setAiPromptFocus('school')"
+                                            data-focus="school"><i class="fas fa-school"></i> School Visits</button>
+                                        <button class="ai-chip" onclick="setAiPromptFocus('training')"
+                                            data-focus="training"><i class="fas fa-chalkboard-teacher"></i> Training
+                                            Needs</button>
                                     </div>
                                 </div>
-                                <button class="btn btn-primary ai-generate-btn" onclick="generateAiPrompt()" id="aiAnalyzeBtn">
+                                <button class="btn btn-primary ai-generate-btn" onclick="generateAiPrompt()"
+                                    id="aiAnalyzeBtn">
                                     <i class="fas fa-bolt"></i> Generate Prompt
                                 </button>
                                 <!-- Prompt Output -->
                                 <div id="aiPromptOutput" class="ai-prompt-output" style="display:none">
                                     <div class="ai-prompt-toolbar">
-                                        <span class="ai-prompt-badge"><i class="fas fa-check-circle"></i> Prompt Ready</span>
+                                        <span class="ai-prompt-badge"><i class="fas fa-check-circle"></i> Prompt
+                                            Ready</span>
                                         <div>
-                                            <button class="btn btn-sm btn-outline" onclick="copyAiPrompt()"><i class="fas fa-copy"></i> Copy</button>
+                                            <button class="btn btn-sm btn-outline" onclick="copyAiPrompt()"><i
+                                                    class="fas fa-copy"></i> Copy</button>
                                         </div>
                                     </div>
                                     <pre id="aiPromptText" class="ai-prompt-pre"></pre>
@@ -693,13 +748,19 @@
                             </div>
                             <div class="ai-step-body">
                                 <div class="ai-chatbot-links">
-                                    <a href="https://chatgpt.com" target="_blank" class="ai-chatbot-link chatgpt"><i class="fas fa-comment-dots"></i> ChatGPT</a>
-                                    <a href="https://claude.ai" target="_blank" class="ai-chatbot-link claude"><i class="fas fa-brain"></i> Claude</a>
-                                    <a href="https://gemini.google.com" target="_blank" class="ai-chatbot-link gemini"><i class="fas fa-star"></i> Gemini</a>
-                                    <a href="https://chat.deepseek.com" target="_blank" class="ai-chatbot-link deepseek"><i class="fas fa-water"></i> DeepSeek</a>
-                                    <a href="https://copilot.microsoft.com" target="_blank" class="ai-chatbot-link copilot"><i class="fas fa-windows"></i> Copilot</a>
+                                    <a href="https://chatgpt.com" target="_blank" class="ai-chatbot-link chatgpt"><i
+                                            class="fas fa-comment-dots"></i> ChatGPT</a>
+                                    <a href="https://claude.ai" target="_blank" class="ai-chatbot-link claude"><i
+                                            class="fas fa-brain"></i> Claude</a>
+                                    <a href="https://gemini.google.com" target="_blank"
+                                        class="ai-chatbot-link gemini"><i class="fas fa-star"></i> Gemini</a>
+                                    <a href="https://chat.deepseek.com" target="_blank"
+                                        class="ai-chatbot-link deepseek"><i class="fas fa-water"></i> DeepSeek</a>
+                                    <a href="https://copilot.microsoft.com" target="_blank"
+                                        class="ai-chatbot-link copilot"><i class="fas fa-windows"></i> Copilot</a>
                                 </div>
-                                <div class="ai-step-hint"><i class="fas fa-info-circle"></i> Paste the copied prompt, wait for the full response, then copy the AI's reply</div>
+                                <div class="ai-step-hint"><i class="fas fa-info-circle"></i> Paste the copied prompt,
+                                    wait for the full response, then copy the AI's reply</div>
                             </div>
                         </div>
 
@@ -713,10 +774,14 @@
                                 </div>
                             </div>
                             <div class="ai-step-body">
-                                <textarea id="aiResponseInput" class="ai-response-textarea" rows="8" placeholder="Paste the AI's complete response here..."></textarea>
+                                <textarea id="aiResponseInput" class="ai-response-textarea" rows="8"
+                                    placeholder="Paste the AI's complete response here..."></textarea>
                                 <div class="ai-response-actions">
-                                    <button class="btn btn-primary" onclick="parseAiResponse()"><i class="fas fa-cogs"></i> Parse & Build Plans</button>
-                                    <button class="btn btn-outline btn-sm" onclick="document.getElementById('aiResponseInput').value=''" title="Clear"><i class="fas fa-eraser"></i> Clear</button>
+                                    <button class="btn btn-primary" onclick="parseAiResponse()"><i
+                                            class="fas fa-cogs"></i> Parse & Build Plans</button>
+                                    <button class="btn btn-outline btn-sm"
+                                        onclick="document.getElementById('aiResponseInput').value=''" title="Clear"><i
+                                            class="fas fa-eraser"></i> Clear</button>
                                 </div>
                             </div>
                         </div>
@@ -728,14 +793,18 @@
                         <div class="ai-results-header">
                             <h3><i class="fas fa-chart-line"></i> Analysis Results</h3>
                             <div class="ai-results-actions-top">
-                                <button class="btn btn-sm btn-outline" onclick="scrollToAiStep(1)"><i class="fas fa-redo"></i> New Analysis</button>
-                                <button class="btn btn-sm btn-outline" onclick="toggleAiRawResponse()"><i class="fas fa-code"></i> Raw</button>
-                                <button class="btn btn-sm btn-primary" onclick="aiPushAllPlans()"><i class="fas fa-paper-plane"></i> Push All</button>
+                                <button class="btn btn-sm btn-outline" onclick="scrollToAiStep(1)"><i
+                                        class="fas fa-redo"></i> New Analysis</button>
+                                <button class="btn btn-sm btn-outline" onclick="toggleAiRawResponse()"><i
+                                        class="fas fa-code"></i> Raw</button>
+                                <button class="btn btn-sm btn-primary" onclick="aiPushAllPlans()"><i
+                                        class="fas fa-paper-plane"></i> Push All</button>
                             </div>
                         </div>
                         <div id="aiPlansContainer"></div>
                         <div class="ai-plans-actions" id="aiPlansActions" style="display:none">
-                            <button class="btn btn-primary" onclick="aiPushAllPlans()"><i class="fas fa-paper-plane"></i> Push All to Dashboard</button>
+                            <button class="btn btn-primary" onclick="aiPushAllPlans()"><i
+                                    class="fas fa-paper-plane"></i> Push All to Dashboard</button>
                         </div>
                         <div class="ai-raw-response" id="aiRawResponse" style="display:none">
                             <pre id="aiRawResponseText" class="ai-prompt-pre"></pre>
@@ -880,10 +949,12 @@
             <div class="section-header">
                 <div>
                     <h1><i class="fas fa-chart-line"></i> Excel Analytics</h1>
-                    <p class="section-subtitle">Upload any spreadsheet — get instant dashboards, charts &amp; insights</p>
+                    <p class="section-subtitle">Upload any spreadsheet — get instant dashboards, charts &amp; insights
+                    </p>
                 </div>
                 <div class="header-actions">
-                    <button class="btn btn-primary" onclick="generateSmartReport()" id="generateReportBtn" style="display:none;">
+                    <button class="btn btn-primary" onclick="generateSmartReport()" id="generateReportBtn"
+                        style="display:none;">
                         <i class="fas fa-file-alt"></i> Smart Report
                     </button>
                     <button class="btn btn-outline" onclick="clearExcelData()" id="clearExcelBtn" style="display:none;">
@@ -902,7 +973,8 @@
                     </div>
                     <h3>Drop your spreadsheet here</h3>
                     <p>Supports <strong>.xlsx</strong>, <strong>.xls</strong> &amp; <strong>.csv</strong> files</p>
-                    <button class="btn btn-primary upload-browse-btn" onclick="document.getElementById('excelFileInput').click()">
+                    <button class="btn btn-primary upload-browse-btn"
+                        onclick="document.getElementById('excelFileInput').click()">
                         <i class="fas fa-folder-open"></i> Browse Files
                     </button>
                     <input type="file" id="excelFileInput" accept=".xlsx,.xls,.csv" style="display:none"
@@ -1228,7 +1300,9 @@
                 <div class="analysis-panel" id="panel-pivot">
                     <div class="excel-builder-card">
                         <div class="builder-card-header">
-                            <div class="builder-card-icon" style="background:linear-gradient(135deg, #6366f1, #4f46e5);"><i class="fas fa-th"></i></div>
+                            <div class="builder-card-icon"
+                                style="background:linear-gradient(135deg, #6366f1, #4f46e5);"><i class="fas fa-th"></i>
+                            </div>
                             <div>
                                 <h3>Pivot Table</h3>
                                 <p>Cross-tabulate and aggregate your data</p>
@@ -1261,7 +1335,8 @@
                                     </select>
                                 </div>
                             </div>
-                            <button class="btn btn-primary builder-generate-btn" onclick="buildPivotTable()" style="background:linear-gradient(135deg, #6366f1, #4f46e5);">
+                            <button class="btn btn-primary builder-generate-btn" onclick="buildPivotTable()"
+                                style="background:linear-gradient(135deg, #6366f1, #4f46e5);">
                                 <i class="fas fa-table"></i> Generate Pivot
                             </button>
                         </div>
@@ -1407,8 +1482,10 @@
                     <p class="section-subtitle">Deep analysis of your field activities, coverage, and impact</p>
                 </div>
                 <div class="header-actions">
-                    <button class="btn btn-outline btn-sm" onclick="toggleVisitFrequency()" id="visitFreqBtn"><i class="fas fa-school"></i> Visit Frequency</button>
-                    <button class="btn btn-outline btn-sm" id="periodCompareBtn" onclick="togglePeriodComparison()"><i class="fas fa-columns"></i> Compare Periods</button>
+                    <button class="btn btn-outline btn-sm" onclick="toggleVisitFrequency()" id="visitFreqBtn"><i
+                            class="fas fa-school"></i> Visit Frequency</button>
+                    <button class="btn btn-outline btn-sm" id="periodCompareBtn" onclick="togglePeriodComparison()"><i
+                            class="fas fa-columns"></i> Compare Periods</button>
                     <select id="analyticsRange" class="filter-select" onchange="renderAnalytics()">
                         <option value="all">All Time</option>
                         <option value="month" selected>This Month</option>
@@ -1425,7 +1502,8 @@
             <div class="card visit-freq-panel" id="visitFreqPanel" style="display:none;">
                 <div class="card-header">
                     <h3><i class="fas fa-school"></i> School Visit Frequency</h3>
-                    <button class="btn btn-ghost btn-sm" onclick="toggleVisitFrequency()"><i class="fas fa-times"></i></button>
+                    <button class="btn btn-ghost btn-sm" onclick="toggleVisitFrequency()"><i
+                            class="fas fa-times"></i></button>
                 </div>
                 <div class="card-body" id="visitFreqBody" style="max-height:500px;overflow-y:auto;"></div>
             </div>
@@ -1439,27 +1517,39 @@
             <!-- Charts Grid -->
             <div class="analytics-charts-grid">
                 <div class="card">
-                    <div class="card-header"><h3><i class="fas fa-chart-doughnut"></i> Visit Purpose Breakdown</h3></div>
+                    <div class="card-header">
+                        <h3><i class="fas fa-chart-doughnut"></i> Visit Purpose Breakdown</h3>
+                    </div>
                     <div class="card-body"><canvas id="chartVisitPurpose" style="max-height:320px;"></canvas></div>
                 </div>
                 <div class="card">
-                    <div class="card-header"><h3><i class="fas fa-chart-bar"></i> School Coverage</h3></div>
+                    <div class="card-header">
+                        <h3><i class="fas fa-chart-bar"></i> School Coverage</h3>
+                    </div>
                     <div class="card-body"><canvas id="chartSchoolCoverage" style="max-height:320px;"></canvas></div>
                 </div>
                 <div class="card">
-                    <div class="card-header"><h3><i class="fas fa-star-half-alt"></i> Average Observation Ratings</h3></div>
+                    <div class="card-header">
+                        <h3><i class="fas fa-star-half-alt"></i> Average Observation Ratings</h3>
+                    </div>
                     <div class="card-body"><canvas id="chartObsRatings" style="max-height:320px;"></canvas></div>
                 </div>
                 <div class="card">
-                    <div class="card-header"><h3><i class="fas fa-book"></i> Subject Distribution</h3></div>
+                    <div class="card-header">
+                        <h3><i class="fas fa-book"></i> Subject Distribution</h3>
+                    </div>
                     <div class="card-body"><canvas id="chartSubjectDist" style="max-height:320px;"></canvas></div>
                 </div>
                 <div class="card">
-                    <div class="card-header"><h3><i class="fas fa-users"></i> Training — Teachers Reached</h3></div>
+                    <div class="card-header">
+                        <h3><i class="fas fa-users"></i> Training — Teachers Reached</h3>
+                    </div>
                     <div class="card-body"><canvas id="chartTrainingImpact" style="max-height:320px;"></canvas></div>
                 </div>
                 <div class="card">
-                    <div class="card-header"><h3><i class="fas fa-calendar-check"></i> Weekly Activity Heatmap</h3></div>
+                    <div class="card-header">
+                        <h3><i class="fas fa-calendar-check"></i> Weekly Activity Heatmap</h3>
+                    </div>
                     <div class="card-body"><canvas id="chartWeeklyHeatmap" style="max-height:320px;"></canvas></div>
                 </div>
             </div>
@@ -1482,7 +1572,8 @@
                     <p class="section-subtitle">Track pending follow-ups from school visits and observations</p>
                 </div>
                 <div class="header-actions">
-                    <select id="followupFilter" class="filter-select" onchange="_pageState.followups=1;renderFollowups()">
+                    <select id="followupFilter" class="filter-select"
+                        onchange="_pageState.followups=1;renderFollowups()">
                         <option value="pending">Pending</option>
                         <option value="done">Completed</option>
                         <option value="all">All</option>
@@ -1534,7 +1625,8 @@
                         <option value="Tech">💻 Tech</option>
                         <option value="Other">💡 Other</option>
                     </select>
-                    <input type="text" id="ideaSearchInput" class="filter-input" placeholder="Search ideas..." oninput="_pageState.ideas=1;renderIdeas()">
+                    <input type="text" id="ideaSearchInput" class="filter-input" placeholder="Search ideas..."
+                        oninput="_pageState.ideas=1;renderIdeas()">
                 </div>
             </div>
 
@@ -1550,20 +1642,42 @@
                     <p class="section-subtitle">Complete history of every school you work with</p>
                 </div>
                 <div class="header-actions">
-                    <button class="btn btn-outline" onclick="triggerSchoolProfileImport()" title="Import school profiles from DMT Excel">
+                    <button class="btn btn-outline" onclick="triggerSchoolProfileImport()"
+                        title="Import school profiles from DMT Excel">
                         <i class="fas fa-file-excel"></i> Import from Excel
                     </button>
-                    <button class="btn btn-danger-outline" onclick="openBulkDeleteSchools()" title="Delete multiple schools">
+                    <button class="btn btn-danger-outline" onclick="openBulkDeleteSchools()"
+                        title="Delete multiple schools">
                         <i class="fas fa-trash-alt"></i> Delete Schools
                     </button>
-                    <input type="file" id="schoolProfileImportFile" accept=".xlsx,.xls,.csv" style="display:none" onchange="loadSchoolProfileImportPreview(event)">
-                    <input type="text" id="schoolSearchInput" class="filter-input" placeholder="Search schools..." oninput="_pageState.schools=1;renderSchoolProfiles()">
+                    <input type="file" id="schoolProfileImportFile" accept=".xlsx,.xls,.csv" style="display:none"
+                        onchange="loadSchoolProfileImportPreview(event)">
+                    <input type="text" id="schoolSearchInput" class="filter-input" placeholder="Search schools..."
+                        oninput="_pageState.schools=1;renderSchoolProfiles()">
                 </div>
             </div>
             <div class="school-summary-stats" id="schoolSummaryStats"></div>
             <div id="schoolProfilesContainer"></div>
             <!-- School Detail View (hidden by default) -->
             <div id="schoolDetailView" style="display:none;"></div>
+        </section>
+
+        <!-- ==================== CLUSTER PROFILES SECTION ==================== -->
+        <section class="content-section" id="section-clusters">
+            <div class="section-header">
+                <div>
+                    <h1><i class="fas fa-layer-group"></i> Cluster Profiles</h1>
+                    <p class="section-subtitle">Complete overview of every cluster — schools, visits, observations &
+                        insights</p>
+                </div>
+                <div class="header-actions">
+                    <input type="text" id="clusterSearchInput" class="filter-input" placeholder="Search clusters..."
+                        oninput="_pageState.clusters=1;renderClusterProfiles()">
+                </div>
+            </div>
+            <div class="school-summary-stats" id="clusterSummaryStats"></div>
+            <div id="clusterProfilesContainer"></div>
+            <div id="clusterDetailView" style="display:none;"></div>
         </section>
 
         <!-- ==================== TEACHER GROWTH SECTION ==================== -->
@@ -1574,7 +1688,8 @@
                     <p class="section-subtitle">Track every teacher's progress across observations over time</p>
                 </div>
                 <div class="header-actions">
-                    <select id="teacherSortSelect" class="filter-select" onchange="_pageState.teacherGrowth=1;renderTeacherGrowth()">
+                    <select id="teacherSortSelect" class="filter-select"
+                        onchange="_pageState.teacherGrowth=1;renderTeacherGrowth()">
                         <option value="observations">Most Observed</option>
                         <option value="name">Name A-Z</option>
                         <option value="engagement-low">Low Engagement First</option>
@@ -1582,7 +1697,8 @@
                         <option value="recent">Recently Observed</option>
                         <option value="stale">Needs Visit (Oldest First)</option>
                     </select>
-                    <input type="text" id="teacherGrowthSearch" class="filter-input" placeholder="Search teachers..." oninput="_pageState.teacherGrowth=1;renderTeacherGrowth()">
+                    <input type="text" id="teacherGrowthSearch" class="filter-input" placeholder="Search teachers..."
+                        oninput="_pageState.teacherGrowth=1;renderTeacherGrowth()">
                 </div>
             </div>
             <div class="tg-summary" id="tgSummary"></div>
@@ -1594,16 +1710,19 @@
             <div class="section-header">
                 <div>
                     <h1><i class="fas fa-route"></i> MARAI Teacher Tracking</h1>
-                    <p class="section-subtitle">Track teacher development: Motivation → Awareness → Readiness → Action → Internalization</p>
+                    <p class="section-subtitle">Track teacher development: Motivation → Awareness → Readiness → Action →
+                        Internalization</p>
                 </div>
                 <div class="header-actions">
-                    <input type="text" id="maraiSearchInput" class="filter-input" placeholder="Search teacher / school..." oninput="_pageState.marai=1;renderMaraiTracking()">
+                    <input type="text" id="maraiSearchInput" class="filter-input"
+                        placeholder="Search teacher / school..." oninput="_pageState.marai=1;renderMaraiTracking()">
                 </div>
             </div>
             <!-- Smart Filter Bar -->
             <div class="marai-filter-bar">
                 <div class="marai-filter-row">
-                    <select id="maraiStageFilter" class="filter-select" onchange="_pageState.marai=1;renderMaraiTracking()">
+                    <select id="maraiStageFilter" class="filter-select"
+                        onchange="_pageState.marai=1;renderMaraiTracking()">
                         <option value="all">🏷️ All Stages</option>
                         <option value="motivation">🔥 Motivation</option>
                         <option value="awareness">👁️ Awareness</option>
@@ -1612,13 +1731,16 @@
                         <option value="internalization">💎 Internalization</option>
                         <option value="untracked">📋 Untracked</option>
                     </select>
-                    <select id="maraiSchoolFilter" class="filter-select" onchange="_pageState.marai=1;renderMaraiTracking()">
+                    <select id="maraiSchoolFilter" class="filter-select"
+                        onchange="_pageState.marai=1;renderMaraiTracking()">
                         <option value="all">🏫 All Schools</option>
                     </select>
-                    <select id="maraiBlockFilter" class="filter-select" onchange="_pageState.marai=1;renderMaraiTracking()">
+                    <select id="maraiBlockFilter" class="filter-select"
+                        onchange="_pageState.marai=1;renderMaraiTracking()">
                         <option value="all">📍 All Blocks</option>
                     </select>
-                    <select id="maraiSortSelect" class="filter-select" onchange="_pageState.marai=1;renderMaraiTracking()">
+                    <select id="maraiSortSelect" class="filter-select"
+                        onchange="_pageState.marai=1;renderMaraiTracking()">
                         <option value="recent">🕒 Recent First</option>
                         <option value="name">🔤 Name A-Z</option>
                         <option value="stage-asc">📈 Stage Low→High</option>
@@ -1640,7 +1762,8 @@
                     <span class="marai-legend-item" style="--legend-color:#3b82f6">👁️ <strong>A</strong>wareness</span>
                     <span class="marai-legend-item" style="--legend-color:#8b5cf6">🎯 <strong>R</strong>eadiness</span>
                     <span class="marai-legend-item" style="--legend-color:#10b981">🚀 <strong>A</strong>ction</span>
-                    <span class="marai-legend-item" style="--legend-color:#ec4899">💎 <strong>I</strong>nternalization</span>
+                    <span class="marai-legend-item" style="--legend-color:#ec4899">💎
+                        <strong>I</strong>nternalization</span>
                 </div>
             </div>
             <div id="maraiContainer"></div>
@@ -1661,7 +1784,8 @@
                     <div class="marai-modal-body">
                         <div class="form-group marai-fg">
                             <label><i class="fas fa-user-tie"></i> Teacher Name</label>
-                            <input type="text" id="maraiTeacherName" required placeholder="Enter teacher's full name" autocomplete="off">
+                            <input type="text" id="maraiTeacherName" required placeholder="Enter teacher's full name"
+                                autocomplete="off">
                         </div>
                         <div class="form-group marai-fg">
                             <label><i class="fas fa-school"></i> School</label>
@@ -1685,12 +1809,15 @@
                         </div>
                         <div class="form-group marai-fg">
                             <label><i class="fas fa-sticky-note"></i> Notes / Evidence</label>
-                            <textarea id="maraiNotes" rows="4" placeholder="What evidence shows this stage? What was observed?"></textarea>
+                            <textarea id="maraiNotes" rows="4"
+                                placeholder="What evidence shows this stage? What was observed?"></textarea>
                         </div>
                     </div>
                     <div class="marai-modal-footer">
-                        <button type="button" class="btn btn-outline marai-cancel-btn" onclick="closeModal('maraiRecordModal')">Cancel</button>
-                        <button type="submit" class="btn marai-save-btn"><i class="fas fa-save"></i> Save Record</button>
+                        <button type="button" class="btn btn-outline marai-cancel-btn"
+                            onclick="closeModal('maraiRecordModal')">Cancel</button>
+                        <button type="submit" class="btn marai-save-btn"><i class="fas fa-save"></i> Save
+                            Record</button>
                     </div>
                 </form>
             </div>
@@ -1714,13 +1841,15 @@
             <div class="section-header">
                 <div>
                     <h1><i class="fas fa-chalkboard"></i> School-Based Work</h1>
-                    <p class="section-subtitle">Track Assembly, Print-Rich Environment, Library, Creative Writing & Bal Shodh Mela</p>
+                    <p class="section-subtitle">Track Assembly, Print-Rich Environment, Library, Creative Writing & Bal
+                        Shodh Mela</p>
                 </div>
                 <div class="header-actions">
                     <button class="btn btn-primary" onclick="openSchoolWorkModal()">
                         <i class="fas fa-plus"></i> Log Activity
                     </button>
-                    <select id="schoolWorkTypeFilter" class="filter-select" onchange="_pageState.schoolWork=1;renderSchoolWork()">
+                    <select id="schoolWorkTypeFilter" class="filter-select"
+                        onchange="_pageState.schoolWork=1;renderSchoolWork()">
                         <option value="all">All Activities</option>
                         <option value="assembly">🎤 Assembly</option>
                         <option value="print-rich">🖼️ Print Rich</option>
@@ -1729,7 +1858,8 @@
                         <option value="bal-shodh-mela">🔬 Bal Shodh Mela</option>
                         <option value="other">📌 Other</option>
                     </select>
-                    <input type="text" id="schoolWorkSearchInput" class="filter-input" placeholder="Search school / activity..." oninput="_pageState.schoolWork=1;renderSchoolWork()">
+                    <input type="text" id="schoolWorkSearchInput" class="filter-input"
+                        placeholder="Search school / activity..." oninput="_pageState.schoolWork=1;renderSchoolWork()">
                 </div>
             </div>
             <div class="sw-stats-grid" id="schoolWorkStats"></div>
@@ -1766,7 +1896,8 @@
                         <div class="form-row sw-form-row">
                             <div class="form-group sw-fg">
                                 <label><i class="fas fa-school"></i> School</label>
-                                <input type="text" id="schoolWorkSchool" required placeholder="School name" list="schoolWorkSchoolList">
+                                <input type="text" id="schoolWorkSchool" required placeholder="School name"
+                                    list="schoolWorkSchoolList">
                                 <datalist id="schoolWorkSchoolList"></datalist>
                             </div>
                             <div class="form-group sw-fg">
@@ -1791,7 +1922,8 @@
                         <div class="form-row sw-form-row">
                             <div class="form-group sw-fg">
                                 <label><i class="fas fa-users"></i> Participants Count</label>
-                                <input type="number" id="schoolWorkParticipants" placeholder="Number of students" min="0">
+                                <input type="number" id="schoolWorkParticipants" placeholder="Number of students"
+                                    min="0">
                             </div>
                             <div class="form-group sw-fg">
                                 <label><i class="fas fa-camera"></i> Photos Taken</label>
@@ -1801,19 +1933,24 @@
                         <div class="form-group sw-fg sw-teachers-group">
                             <label><i class="fas fa-chalkboard-teacher"></i> Assigned Teachers</label>
                             <div class="sw-teachers-input-wrap">
-                                <input type="text" id="schoolWorkTeacherInput" placeholder="Type teacher name & press Enter" list="schoolWorkTeacherList" onkeydown="handleSwTeacherKeydown(event)">
+                                <input type="text" id="schoolWorkTeacherInput"
+                                    placeholder="Type teacher name & press Enter" list="schoolWorkTeacherList"
+                                    onkeydown="handleSwTeacherKeydown(event)">
                                 <datalist id="schoolWorkTeacherList"></datalist>
-                                <button type="button" class="sw-teacher-add-btn" onclick="addSwTeacher()" title="Add teacher"><i class="fas fa-plus"></i></button>
+                                <button type="button" class="sw-teacher-add-btn" onclick="addSwTeacher()"
+                                    title="Add teacher"><i class="fas fa-plus"></i></button>
                             </div>
                             <div class="sw-teacher-tags" id="schoolWorkTeacherTags"></div>
                         </div>
                         <div class="form-group sw-fg">
                             <label><i class="fas fa-align-left"></i> Description</label>
-                            <textarea id="schoolWorkDescription" rows="2" placeholder="What was done? Describe the activity..."></textarea>
+                            <textarea id="schoolWorkDescription" rows="2"
+                                placeholder="What was done? Describe the activity..."></textarea>
                         </div>
                         <div class="form-group sw-fg">
                             <label><i class="fas fa-eye"></i> Observations</label>
-                            <textarea id="schoolWorkObservations" rows="2" placeholder="What did you observe? Student engagement, quality..."></textarea>
+                            <textarea id="schoolWorkObservations" rows="2"
+                                placeholder="What did you observe? Student engagement, quality..."></textarea>
                         </div>
                         <div class="form-group sw-fg">
                             <label><i class="fas fa-check-circle"></i> Outcome / Impact</label>
@@ -1821,7 +1958,8 @@
                         </div>
                     </div>
                     <div class="sw-modal-footer">
-                        <button type="button" class="btn btn-outline sw-cancel-btn" onclick="closeModal('schoolWorkModal')">Cancel</button>
+                        <button type="button" class="btn btn-outline sw-cancel-btn"
+                            onclick="closeModal('schoolWorkModal')">Cancel</button>
                         <button type="submit" class="btn sw-save-btn"><i class="fas fa-save"></i> Save Activity</button>
                     </div>
                 </form>
@@ -1850,33 +1988,41 @@
                     <i class="fas fa-plug"></i>
                     <span id="vpLinkedFileName">Not linked</span>
                     <span class="vp-link-mode" id="vpLinkMode">Synced</span>
-                    <button class="vp-unlink-btn" onclick="vpUnlinkExcel()" title="Unlink"><i class="fas fa-times"></i></button>
+                    <button class="vp-unlink-btn" onclick="vpUnlinkExcel()" title="Unlink"><i
+                            class="fas fa-times"></i></button>
                     <span class="vp-autosave-dot" id="vpAutoSaveDot" title="Data saved in app"></span>
                 </div>
             </div>
             <!-- Filters -->
             <div class="vp-filter-bar">
                 <div class="vp-filter-row">
-                    <select id="vpDomainFilter" class="filter-select" onchange="_pageState.visitplan=1;renderVisitPlan()">
+                    <select id="vpDomainFilter" class="filter-select"
+                        onchange="_pageState.visitplan=1;renderVisitPlan()">
                         <option value="all">📂 All Domains</option>
                     </select>
-                    <select id="vpStakeholderFilter" class="filter-select" onchange="_pageState.visitplan=1;renderVisitPlan()">
+                    <select id="vpStakeholderFilter" class="filter-select"
+                        onchange="_pageState.visitplan=1;renderVisitPlan()">
                         <option value="all">👥 All Stakeholders</option>
                     </select>
-                    <select id="vpClusterFilter" class="filter-select" onchange="_pageState.visitplan=1;renderVisitPlan()">
+                    <select id="vpClusterFilter" class="filter-select"
+                        onchange="_pageState.visitplan=1;renderVisitPlan()">
                         <option value="all">📍 All Clusters</option>
                     </select>
-                    <select id="vpMonthFilter" class="filter-select" onchange="_pageState.visitplan=1;renderVisitPlan()">
+                    <select id="vpMonthFilter" class="filter-select"
+                        onchange="_pageState.visitplan=1;renderVisitPlan()">
                         <option value="all">📅 All Months</option>
                     </select>
-                    <select id="vpStatusFilter" class="filter-select" onchange="_pageState.visitplan=1;renderVisitPlan()">
+                    <select id="vpStatusFilter" class="filter-select"
+                        onchange="_pageState.visitplan=1;renderVisitPlan()">
                         <option value="all">📋 All Status</option>
                         <option value="planned">📋 Planned</option>
                         <option value="executed">✅ Executed</option>
                         <option value="empty">⬜ Empty/Unfilled</option>
                     </select>
-                    <input type="text" id="vpSearchInput" class="filter-input" placeholder="Search..." oninput="_pageState.visitplan=1;renderVisitPlan()">
-                    <button class="btn btn-outline vp-bulk-clear-btn" onclick="vpBulkClear()" id="vpBulkClearBtn" title="Delete filtered entries" style="display:none">
+                    <input type="text" id="vpSearchInput" class="filter-input" placeholder="Search..."
+                        oninput="_pageState.visitplan=1;renderVisitPlan()">
+                    <button class="btn btn-outline vp-bulk-clear-btn" onclick="vpBulkClear()" id="vpBulkClearBtn"
+                        title="Delete filtered entries" style="display:none">
                         <i class="fas fa-trash-alt"></i> <span id="vpBulkClearLabel">Clear</span>
                     </button>
                 </div>
@@ -1945,7 +2091,8 @@
                         <div class="form-row vp-form-row">
                             <div class="form-group vp-fg">
                                 <label><i class="fas fa-user"></i> Stakeholder Name</label>
-                                <input type="text" id="vpStakeholderName" placeholder="Person name" list="vpStakeholderNameList">
+                                <input type="text" id="vpStakeholderName" placeholder="Person name"
+                                    list="vpStakeholderNameList">
                                 <datalist id="vpStakeholderNameList"></datalist>
                             </div>
                             <div class="form-group vp-fg">
@@ -1963,11 +2110,13 @@
                         </div>
                         <div class="form-group vp-fg">
                             <label><i class="fas fa-bullseye"></i> Broader Plan / Objective</label>
-                            <textarea id="vpObjective" rows="2" placeholder="What is the objective of this visit?"></textarea>
+                            <textarea id="vpObjective" rows="2"
+                                placeholder="What is the objective of this visit?"></textarea>
                         </div>
                         <div class="form-group vp-fg">
                             <label><i class="fas fa-check-double"></i> Review / Execution Notes</label>
-                            <textarea id="vpReview" rows="3" placeholder="What actually happened? Review against intervention plan..."></textarea>
+                            <textarea id="vpReview" rows="3"
+                                placeholder="What actually happened? Review against intervention plan..."></textarea>
                         </div>
                         <div class="form-row vp-form-row">
                             <div class="form-group vp-fg">
@@ -1981,11 +2130,13 @@
                         </div>
                         <div class="form-group vp-fg">
                             <label><i class="fas fa-comment-dots"></i> Teacher Comments</label>
-                            <textarea id="vpTeacherComments" rows="2" placeholder="Qualitative comments for teachers..."></textarea>
+                            <textarea id="vpTeacherComments" rows="2"
+                                placeholder="Qualitative comments for teachers..."></textarea>
                         </div>
                         <div class="form-group vp-fg">
                             <label><i class="fas fa-child"></i> Student Engagement Comments</label>
-                            <textarea id="vpStudentComments" rows="2" placeholder="Comments on engagement with students..."></textarea>
+                            <textarea id="vpStudentComments" rows="2"
+                                placeholder="Comments on engagement with students..."></textarea>
                         </div>
                         <div class="form-group vp-fg">
                             <label><i class="fas fa-share-square"></i> Report Sharing</label>
@@ -1993,7 +2144,8 @@
                         </div>
                     </div>
                     <div class="vp-modal-footer">
-                        <button type="button" class="btn btn-outline" onclick="closeModal('visitPlanModal')">Cancel</button>
+                        <button type="button" class="btn btn-outline"
+                            onclick="closeModal('visitPlanModal')">Cancel</button>
                         <button type="submit" class="btn vp-save-btn"><i class="fas fa-save"></i> Save Entry</button>
                     </div>
                 </form>
@@ -2008,7 +2160,8 @@
                     <p class="section-subtitle">Monthly reflections on your practice and growth</p>
                 </div>
                 <div class="header-actions">
-                    <select id="reflectionMonthFilter" class="filter-select" onchange="_pageState.reflections=1;renderReflections()"></select>
+                    <select id="reflectionMonthFilter" class="filter-select"
+                        onchange="_pageState.reflections=1;renderReflections()"></select>
                     <button class="btn btn-primary" onclick="openReflectionModal()">
                         <i class="fas fa-plus"></i> New Reflection
                     </button>
@@ -2022,7 +2175,8 @@
             <div class="section-header">
                 <div>
                     <h1><i class="fas fa-seedling"></i> Professional Growth Framework</h1>
-                    <p class="section-subtitle">Track your developmental journey across 5 dimensions — self-assess, set goals &amp; grow</p>
+                    <p class="section-subtitle">Track your developmental journey across 5 dimensions — self-assess, set
+                        goals &amp; grow</p>
                 </div>
                 <div class="header-actions">
                     <button class="btn btn-outline" onclick="printGrowthReport()">
@@ -2092,7 +2246,8 @@
                     <p class="section-subtitle">Key contacts for your field work</p>
                 </div>
                 <div class="header-actions">
-                    <select id="contactRoleFilter" class="filter-select" onchange="_pageState.contacts=1;renderContacts()">
+                    <select id="contactRoleFilter" class="filter-select"
+                        onchange="_pageState.contacts=1;renderContacts()">
                         <option value="all">All Roles</option>
                         <option value="Head Master">Head Master</option>
                         <option value="Teacher">Teacher</option>
@@ -2103,11 +2258,14 @@
                         <option value="Mentor">Mentor</option>
                         <option value="Other">Other</option>
                     </select>
-                    <input type="text" id="contactSearchInput" class="filter-input" placeholder="Search contacts..." oninput="_pageState.contacts=1;renderContacts()">
-                    <button class="btn btn-outline" onclick="extractContactsFromObservations()" title="Extract teacher contacts from imported DMT observations">
+                    <input type="text" id="contactSearchInput" class="filter-input" placeholder="Search contacts..."
+                        oninput="_pageState.contacts=1;renderContacts()">
+                    <button class="btn btn-outline" onclick="extractContactsFromObservations()"
+                        title="Extract teacher contacts from imported DMT observations">
                         <i class="fas fa-file-import"></i> Extract from Observations
                     </button>
-                    <button class="btn btn-danger-outline" onclick="openBulkDeleteContacts()" title="Delete multiple contacts by filter">
+                    <button class="btn btn-danger-outline" onclick="openBulkDeleteContacts()"
+                        title="Delete multiple contacts by filter">
                         <i class="fas fa-trash-alt"></i> Bulk Delete
                     </button>
                     <button class="btn btn-primary" onclick="openContactModal()">
@@ -2124,14 +2282,17 @@
             <div class="section-header">
                 <div>
                     <h1><i class="fas fa-id-card-alt"></i> Teachers Record</h1>
-                    <p class="section-subtitle">Maintain a complete database of teachers — add, edit, import from Excel</p>
+                    <p class="section-subtitle">Maintain a complete database of teachers — add, edit, import from Excel
+                    </p>
                 </div>
                 <div class="header-actions">
                     <label class="btn btn-outline" title="Import teachers from Excel file">
                         <i class="fas fa-file-excel"></i> Import Excel
-                        <input type="file" accept=".xlsx,.xls,.csv" onchange="importTeacherRecordsExcel(event)" style="display:none">
+                        <input type="file" accept=".xlsx,.xls,.csv" onchange="importTeacherRecordsExcel(event)"
+                            style="display:none">
                     </label>
-                    <button class="btn btn-outline" onclick="exportTeacherRecordsExcel()" title="Export all teachers to Excel">
+                    <button class="btn btn-outline" onclick="exportTeacherRecordsExcel()"
+                        title="Export all teachers to Excel">
                         <i class="fas fa-download"></i> Export
                     </button>
                     <button class="btn btn-primary" onclick="openTeacherRecordModal()">
@@ -2142,23 +2303,30 @@
             <!-- Filter & Search Bar -->
             <div class="tr-filter-bar">
                 <div class="tr-filter-row">
-                    <select id="trSchoolFilter" class="filter-select" onchange="_pageState.teacherrecords=1;renderTeacherRecords()">
+                    <select id="trSchoolFilter" class="filter-select"
+                        onchange="_pageState.teacherrecords=1;renderTeacherRecords()">
                         <option value="all">🏫 All Schools</option>
                     </select>
-                    <select id="trDesignationFilter" class="filter-select" onchange="_pageState.teacherrecords=1;renderTeacherRecords()">
+                    <select id="trDesignationFilter" class="filter-select"
+                        onchange="_pageState.teacherrecords=1;renderTeacherRecords()">
                         <option value="all">👤 All Designations</option>
                     </select>
-                    <select id="trSubjectFilter" class="filter-select" onchange="_pageState.teacherrecords=1;renderTeacherRecords()">
+                    <select id="trSubjectFilter" class="filter-select"
+                        onchange="_pageState.teacherrecords=1;renderTeacherRecords()">
                         <option value="all">📖 All Subjects</option>
                     </select>
-                    <select id="trClusterFilter" class="filter-select" onchange="_pageState.teacherrecords=1;renderTeacherRecords()">
+                    <select id="trClusterFilter" class="filter-select"
+                        onchange="_pageState.teacherrecords=1;renderTeacherRecords()">
                         <option value="all">📍 All Clusters</option>
                     </select>
-                    <select id="trBlockFilter" class="filter-select" onchange="_pageState.teacherrecords=1;renderTeacherRecords()">
+                    <select id="trBlockFilter" class="filter-select"
+                        onchange="_pageState.teacherrecords=1;renderTeacherRecords()">
                         <option value="all">🏘️ All Blocks</option>
                     </select>
-                    <input type="text" id="trSearchInput" class="filter-input" placeholder="🔍 Search teachers..." oninput="_pageState.teacherrecords=1;renderTeacherRecords()" style="flex:1;min-width:180px;">
-                    <button class="btn btn-danger-outline btn-sm" onclick="bulkDeleteTeacherRecords()" title="Delete filtered teachers">
+                    <input type="text" id="trSearchInput" class="filter-input" placeholder="🔍 Search teachers..."
+                        oninput="_pageState.teacherrecords=1;renderTeacherRecords()" style="flex:1;min-width:180px;">
+                    <button class="btn btn-danger-outline btn-sm" onclick="bulkDeleteTeacherRecords()"
+                        title="Delete filtered teachers">
                         <i class="fas fa-trash-alt"></i> Bulk Delete
                     </button>
                 </div>
@@ -2172,7 +2340,8 @@
             <div class="section-header">
                 <div>
                     <h1><i class="fas fa-sync-alt"></i> Live Sync</h1>
-                    <p class="section-subtitle">Sync data across devices in real-time — every change auto-pushes like WhatsApp Web</p>
+                    <p class="section-subtitle">Sync data across devices in real-time — every change auto-pushes like
+                        WhatsApp Web</p>
                 </div>
             </div>
 
@@ -2192,8 +2361,10 @@
                         <i class="fas fa-broadcast-tower"></i>
                     </div>
                     <h3>Create Sync Room</h3>
-                    <p>Start a room on this device. Every data change will auto-push to all connected devices instantly.</p>
-                    <button class="btn btn-primary" onclick="createSyncRoom()" id="btnCreateRoom" style="background:#f59e0b;">
+                    <p>Start a room on this device. Every data change will auto-push to all connected devices instantly.
+                    </p>
+                    <button class="btn btn-primary" onclick="createSyncRoom()" id="btnCreateRoom"
+                        style="background:#f59e0b;">
                         <i class="fas fa-plus-circle"></i> Create Room
                     </button>
                 </div>
@@ -2204,10 +2375,13 @@
                         <i class="fas fa-sign-in-alt"></i>
                     </div>
                     <h3>Join Sync Room</h3>
-                    <p>Enter the room code from another device to connect. Changes will sync automatically in both directions.</p>
+                    <p>Enter the room code from another device to connect. Changes will sync automatically in both
+                        directions.</p>
                     <div class="sync-join-input">
-                        <input type="text" id="syncJoinCode" placeholder="Enter room code" maxlength="20" autocomplete="off" spellcheck="false">
-                        <button class="btn btn-primary" onclick="joinSyncRoom()" id="btnJoinRoom" style="background:#3b82f6;">
+                        <input type="text" id="syncJoinCode" placeholder="Enter room code" maxlength="20"
+                            autocomplete="off" spellcheck="false">
+                        <button class="btn btn-primary" onclick="joinSyncRoom()" id="btnJoinRoom"
+                            style="background:#3b82f6;">
                             <i class="fas fa-link"></i> Join
                         </button>
                     </div>
@@ -2222,11 +2396,14 @@
                         <div class="sync-room-code-display">
                             <span class="sync-room-label">Room Code</span>
                             <span class="sync-room-code" id="syncRoomCodeDisplay">------</span>
-                            <button class="btn-icon-sm" onclick="copySyncCode()" title="Copy code"><i class="fas fa-copy"></i></button>
+                            <button class="btn-icon-sm" onclick="copySyncCode()" title="Copy code"><i
+                                    class="fas fa-copy"></i></button>
                         </div>
                         <div class="sync-room-meta">
-                            <span id="syncRoomRole" class="sync-role-badge"><i class="fas fa-broadcast-tower"></i> Host</span>
-                            <span id="syncPeerCount" class="sync-peer-count"><i class="fas fa-users"></i> 0 devices</span>
+                            <span id="syncRoomRole" class="sync-role-badge"><i class="fas fa-broadcast-tower"></i>
+                                Host</span>
+                            <span id="syncPeerCount" class="sync-peer-count"><i class="fas fa-users"></i> 0
+                                devices</span>
                             <span id="syncLastSync" class="sync-last-time"><i class="fas fa-clock"></i> —</span>
                         </div>
                         <div class="sync-auto-badge">
@@ -2239,9 +2416,12 @@
                 <!-- Sync Stats -->
                 <div class="sync-stats-section">
                     <div class="sync-stats-grid" id="syncStatsPanel">
-                        <div class="sync-stat-item"><span class="sync-stat-val">0</span><span class="sync-stat-label">Changes Synced</span></div>
-                        <div class="sync-stat-item"><span class="sync-stat-val">0 B</span><span class="sync-stat-label">Data Transferred</span></div>
-                        <div class="sync-stat-item"><span class="sync-stat-val">—</span><span class="sync-stat-label">Last Sync</span></div>
+                        <div class="sync-stat-item"><span class="sync-stat-val">0</span><span
+                                class="sync-stat-label">Changes Synced</span></div>
+                        <div class="sync-stat-item"><span class="sync-stat-val">0 B</span><span
+                                class="sync-stat-label">Data Transferred</span></div>
+                        <div class="sync-stat-item"><span class="sync-stat-val">—</span><span
+                                class="sync-stat-label">Last Sync</span></div>
                     </div>
                 </div>
 
@@ -2249,16 +2429,19 @@
                 <div class="sync-devices-section">
                     <h4><i class="fas fa-laptop"></i> Connected Devices</h4>
                     <div id="syncDevicesList" class="sync-devices-list">
-                        <div class="sync-no-devices"><i class="fas fa-satellite-dish"></i> Waiting for devices to connect...</div>
+                        <div class="sync-no-devices"><i class="fas fa-satellite-dish"></i> Waiting for devices to
+                            connect...</div>
                     </div>
                 </div>
 
                 <!-- Sync Actions -->
                 <div class="sync-action-bar">
-                    <button class="btn btn-primary" onclick="sendSyncData()" id="btnSendSync" title="Manually push all data to connected devices">
+                    <button class="btn btn-primary" onclick="sendSyncData()" id="btnSendSync"
+                        title="Manually push all data to connected devices">
                         <i class="fas fa-upload"></i> Push All Data
                     </button>
-                    <button class="btn btn-outline" onclick="requestSyncData()" id="btnRequestSync" title="Pull all data from the connected device">
+                    <button class="btn btn-outline" onclick="requestSyncData()" id="btnRequestSync"
+                        title="Pull all data from the connected device">
                         <i class="fas fa-download"></i> Pull All Data
                     </button>
                     <button class="btn btn-danger" onclick="disconnectSync()" id="btnDisconnect">
@@ -2289,7 +2472,8 @@
                         <div class="sync-step-num">1</div>
                         <div class="sync-step-text">
                             <strong>Create a Room</strong>
-                            <span>Open the dashboard on your primary device and create a sync room. You'll get a unique code.</span>
+                            <span>Open the dashboard on your primary device and create a sync room. You'll get a unique
+                                code.</span>
                         </div>
                     </div>
                     <div class="sync-step">
@@ -2303,24 +2487,28 @@
                         <div class="sync-step-num">3</div>
                         <div class="sync-step-text">
                             <strong>Every Change Auto-Syncs</strong>
-                            <span>Add a visit, edit a note, or save training — it auto-pushes to all connected devices in real-time. No manual sync needed!</span>
+                            <span>Add a visit, edit a note, or save training — it auto-pushes to all connected devices
+                                in real-time. No manual sync needed!</span>
                         </div>
                     </div>
                     <div class="sync-step">
                         <div class="sync-step-num">4</div>
                         <div class="sync-step-text">
                             <strong>Auto-Reconnect</strong>
-                            <span>If you refresh the page or lose connection, it automatically reconnects using the saved room code — like WhatsApp Web.</span>
+                            <span>If you refresh the page or lose connection, it automatically reconnects using the
+                                saved room code — like WhatsApp Web.</span>
                         </div>
                     </div>
                 </div>
                 <div class="sync-info-note">
                     <i class="fas fa-shield-alt"></i>
-                    <span>Data travels directly between your devices (peer-to-peer). Nothing is stored on any server. All data is encrypted in transit.</span>
+                    <span>Data travels directly between your devices (peer-to-peer). Nothing is stored on any server.
+                        All data is encrypted in transit.</span>
                 </div>
                 <div class="sync-info-note" style="margin-top: 10px;">
                     <i class="fas fa-magic"></i>
-                    <span><strong>Smart Merge:</strong> When both devices have changes, records are intelligently merged by ID — no data loss. Newer records take priority.</span>
+                    <span><strong>Smart Merge:</strong> When both devices have changes, records are intelligently merged
+                        by ID — no data loss. Newer records take priority.</span>
                 </div>
             </div>
         </section>
@@ -2383,7 +2571,8 @@
             <div class="section-header">
                 <div>
                     <h1><i class="fas fa-shield-alt"></i> Data & Security</h1>
-                    <p class="section-subtitle">Data auto-saves encrypted to your linked file &amp; browser — always protected</p>
+                    <p class="section-subtitle">Data auto-saves encrypted to your linked file &amp; browser — always
+                        protected</p>
                 </div>
             </div>
             <div class="backup-grid">
@@ -2408,12 +2597,14 @@
                         <div class="enc-action-group">
                             <span class="enc-action-label"><i class="fas fa-file-arrow-down"></i> File</span>
                             <div class="enc-action-buttons">
-                                <button class="btn btn-primary enc-btn-download" onclick="saveEncryptedFile()" id="btnSaveEncrypted">
+                                <button class="btn btn-primary enc-btn-download" onclick="saveEncryptedFile()"
+                                    id="btnSaveEncrypted">
                                     <i class="fas fa-download"></i> Download .apf
                                 </button>
                                 <label class="btn btn-outline enc-btn-upload">
                                     <i class="fas fa-upload"></i> Load .apf
-                                    <input type="file" accept=".apf" onchange="loadEncryptedFile(event)" style="display:none">
+                                    <input type="file" accept=".apf" onchange="loadEncryptedFile(event)"
+                                        style="display:none">
                                 </label>
                             </div>
                         </div>
@@ -2425,7 +2616,8 @@
                     <!-- Footer Note -->
                     <div class="enc-card-footer">
                         <i class="fas fa-shield-alt"></i>
-                        <span>Data is encrypted with AES-256-GCM using PBKDF2 key derivation (100K iterations). Auto-saved to linked file &amp; browser cache.</span>
+                        <span>Data is encrypted with AES-256-GCM using PBKDF2 key derivation (100K iterations).
+                            Auto-saved to linked file &amp; browser cache.</span>
                         <span id="encUnsavedBadge" class="unsaved-badge" style="display:none;">Saving...</span>
                     </div>
                 </div>
@@ -2455,8 +2647,10 @@
                     <!-- Connect Area -->
                     <div class="gdrive-connect-area" id="gdriveConnectArea">
                         <div class="gdrive-url-row">
-                            <input type="url" id="gdriveScriptURL" placeholder="Paste your Google Apps Script URL here" class="gdrive-url-input" autocomplete="off" spellcheck="false">
-                            <button class="btn btn-primary" id="gdriveConnectBtn" onclick="connectGoogleDrive()" style="background:#4285f4;">
+                            <input type="url" id="gdriveScriptURL" placeholder="Paste your Google Apps Script URL here"
+                                class="gdrive-url-input" autocomplete="off" spellcheck="false">
+                            <button class="btn btn-primary" id="gdriveConnectBtn" onclick="connectGoogleDrive()"
+                                style="background:#4285f4;">
                                 <i class="fas fa-plug"></i> Connect
                             </button>
                         </div>
@@ -2471,14 +2665,17 @@
                                     <div class="gdrive-step-num">1</div>
                                     <div>
                                         <strong>Open Google Apps Script</strong>
-                                        <span>Go to <a href="https://script.google.com/home" target="_blank" rel="noopener" style="color:#4285f4;">script.google.com</a> and click <b>New Project</b></span>
+                                        <span>Go to <a href="https://script.google.com/home" target="_blank"
+                                                rel="noopener" style="color:#4285f4;">script.google.com</a> and click
+                                            <b>New Project</b></span>
                                     </div>
                                 </div>
                                 <div class="gdrive-step">
                                     <div class="gdrive-step-num">2</div>
                                     <div>
                                         <strong>Paste this code</strong>
-                                        <span>Delete the existing code and paste the code below, then press <b>Ctrl+S</b> to save</span>
+                                        <span>Delete the existing code and paste the code below, then press
+                                            <b>Ctrl+S</b> to save</span>
                                     </div>
                                 </div>
                             </div>
@@ -2486,7 +2683,8 @@
                             <div class="gdrive-code-block">
                                 <div class="gdrive-code-header">
                                     <span>Google Apps Script Code</span>
-                                    <button class="gdrive-copy-btn" onclick="copyAppsScriptCode()"><i class="fas fa-copy"></i> Copy</button>
+                                    <button class="gdrive-copy-btn" onclick="copyAppsScriptCode()"><i
+                                            class="fas fa-copy"></i> Copy</button>
                                 </div>
                                 <pre id="gdriveScriptCode">function doPost(e) {
   var content = JSON.parse(e.postData.contents);
@@ -2554,21 +2752,26 @@ function getOrCreateFolder() {
                                     <div class="gdrive-step-num">3</div>
                                     <div>
                                         <strong>Deploy as Web App</strong>
-                                        <span>Click <b>Deploy → New deployment</b> → Select type: <b>Web app</b> → Set "Who has access" to <b>Anyone</b> → Click <b>Deploy</b> → Authorize when prompted</span>
+                                        <span>Click <b>Deploy → New deployment</b> → Select type: <b>Web app</b> → Set
+                                            "Who has access" to <b>Anyone</b> → Click <b>Deploy</b> → Authorize when
+                                            prompted</span>
                                     </div>
                                 </div>
                                 <div class="gdrive-step">
                                     <div class="gdrive-step-num">4</div>
                                     <div>
                                         <strong>Copy the URL</strong>
-                                        <span>Copy the <b>Web app URL</b> (starts with https://script.google.com/...) and paste it above</span>
+                                        <span>Copy the <b>Web app URL</b> (starts with https://script.google.com/...)
+                                            and paste it above</span>
                                     </div>
                                 </div>
                             </div>
 
                             <div class="gdrive-security-note">
                                 <i class="fas fa-shield-alt"></i>
-                                <span>Your data is AES-256 encrypted <b>before</b> leaving your browser. The script only stores encrypted data — it can never read your actual data. You own the script, you can inspect and delete it anytime.</span>
+                                <span>Your data is AES-256 encrypted <b>before</b> leaving your browser. The script only
+                                    stores encrypted data — it can never read your actual data. You own the script, you
+                                    can inspect and delete it anytime.</span>
                             </div>
                         </div>
                     </div>
@@ -2577,7 +2780,8 @@ function getOrCreateFolder() {
                     <div class="gdrive-connected-actions" id="gdriveActions" style="display:none;">
                         <div class="gdrive-info" id="gdriveInfo"></div>
                         <div class="gdrive-buttons">
-                            <button class="btn btn-primary" id="gdriveBackupBtn" onclick="gdriveBackupNow()" style="background:#4285f4;">
+                            <button class="btn btn-primary" id="gdriveBackupBtn" onclick="gdriveBackupNow()"
+                                style="background:#4285f4;">
                                 <i class="fas fa-cloud-upload-alt"></i> Backup Now
                             </button>
                             <button class="btn btn-outline" id="gdriveRestoreBtn" onclick="gdriveRestoreNow()">
@@ -2589,7 +2793,8 @@ function getOrCreateFolder() {
                                 <i class="fas fa-sync-alt"></i> Auto-backup on every change
                             </label>
                             <label class="gdrive-toggle-switch">
-                                <input type="checkbox" id="gdriveAutoToggle" onchange="toggleGdriveAuto(this.checked)" checked>
+                                <input type="checkbox" id="gdriveAutoToggle" onchange="toggleGdriveAuto(this.checked)"
+                                    checked>
                                 <span class="gdrive-toggle-slider"></span>
                             </label>
                         </div>
@@ -2606,7 +2811,8 @@ function getOrCreateFolder() {
                 <!-- Bottom Cards Row -->
                 <div class="backup-bottom-row">
                     <div class="backup-card backup-excel">
-                        <div class="backup-icon" style="background:linear-gradient(135deg, #3b82f6, #1d4ed8);"><i class="fas fa-file-excel"></i></div>
+                        <div class="backup-icon" style="background:linear-gradient(135deg, #3b82f6, #1d4ed8);"><i
+                                class="fas fa-file-excel"></i></div>
                         <h3>Export to Excel</h3>
                         <p>Download all your data as an organized Excel spreadsheet for reporting.</p>
                         <button class="btn btn-primary" onclick="exportAllDataToExcel()" style="background:#3b82f6;">
@@ -2614,7 +2820,8 @@ function getOrCreateFolder() {
                         </button>
                     </div>
                     <div class="backup-card backup-danger">
-                        <div class="backup-icon" style="background:linear-gradient(135deg, #ef4444, #b91c1c);"><i class="fas fa-trash-alt"></i></div>
+                        <div class="backup-icon" style="background:linear-gradient(135deg, #ef4444, #b91c1c);"><i
+                                class="fas fa-trash-alt"></i></div>
                         <h3>Reset All Data</h3>
                         <p>Permanently delete all data and start fresh. This cannot be undone.</p>
                         <button class="btn btn-danger" onclick="resetAllData()">
@@ -2622,26 +2829,33 @@ function getOrCreateFolder() {
                         </button>
                     </div>
                     <div class="backup-card backup-password">
-                        <div class="backup-icon" style="background:linear-gradient(135deg, #f59e0b, #d97706);"><i class="fas fa-key"></i></div>
+                        <div class="backup-icon" style="background:linear-gradient(135deg, #f59e0b, #d97706);"><i
+                                class="fas fa-key"></i></div>
                         <h3>Password Protection</h3>
-                        <p id="passwordStatusText">Protect your dashboard with a password. Data stays locked until you enter it.</p>
+                        <p id="passwordStatusText">Protect your dashboard with a password. Data stays locked until you
+                            enter it.</p>
                         <div class="password-status" id="passwordStatus"></div>
                         <div id="passwordActions">
-                            <button class="btn btn-primary" id="btnSetPassword" onclick="openPasswordSetup()" style="background:#f59e0b;">
+                            <button class="btn btn-primary" id="btnSetPassword" onclick="openPasswordSetup()"
+                                style="background:#f59e0b;">
                                 <i class="fas fa-lock"></i> Set Password
                             </button>
-                            <button class="btn btn-outline" id="btnChangePassword" onclick="openPasswordChange()" style="display:none;">
+                            <button class="btn btn-outline" id="btnChangePassword" onclick="openPasswordChange()"
+                                style="display:none;">
                                 <i class="fas fa-key"></i> Change Password
                             </button>
-                            <button class="btn btn-danger" id="btnRemovePassword" onclick="removePassword()" style="display:none;margin-top:8px;">
+                            <button class="btn btn-danger" id="btnRemovePassword" onclick="removePassword()"
+                                style="display:none;margin-top:8px;">
                                 <i class="fas fa-unlock"></i> Remove Password
                             </button>
                         </div>
                         <div class="password-settings" id="passwordAutoLockSetting" style="display:none;">
-                            <label for="autoLockTime" style="color:var(--text-secondary);font-size:13px;margin-top:12px;display:block;">
+                            <label for="autoLockTime"
+                                style="color:var(--text-secondary);font-size:13px;margin-top:12px;display:block;">
                                 <i class="fas fa-clock"></i> Auto-lock after inactivity:
                             </label>
-                            <select id="autoLockTime" onchange="setAutoLockTime(this.value)" style="margin-top:6px;width:100%;padding:8px 12px;background:var(--bg-input);color:var(--text-primary);border:1px solid var(--border);border-radius:8px;font-size:13px;">
+                            <select id="autoLockTime" onchange="setAutoLockTime(this.value)"
+                                style="margin-top:6px;width:100%;padding:8px 12px;background:var(--bg-input);color:var(--text-primary);border:1px solid var(--border);border-radius:8px;font-size:13px;">
                                 <option value="0">Never</option>
                                 <option value="5">5 minutes</option>
                                 <option value="15">15 minutes</option>
@@ -2659,7 +2873,8 @@ function getOrCreateFolder() {
             <div class="section-header">
                 <div>
                     <h1><i class="fas fa-cog"></i> App Settings</h1>
-                    <p class="section-subtitle">Customize your dashboard experience — appearance, defaults &amp; preferences</p>
+                    <p class="section-subtitle">Customize your dashboard experience — appearance, defaults &amp;
+                        preferences</p>
                 </div>
             </div>
 
@@ -2668,7 +2883,8 @@ function getOrCreateFolder() {
                 <!-- Appearance -->
                 <div class="settings-card">
                     <div class="settings-card-header">
-                        <div class="settings-card-icon" style="background:linear-gradient(135deg,#8b5cf6,#7c3aed);"><i class="fas fa-palette"></i></div>
+                        <div class="settings-card-icon" style="background:linear-gradient(135deg,#8b5cf6,#7c3aed);"><i
+                                class="fas fa-palette"></i></div>
                         <div>
                             <h3>Appearance</h3>
                             <p>Theme, accent color &amp; font size</p>
@@ -2682,7 +2898,8 @@ function getOrCreateFolder() {
                             </div>
                             <div class="settings-control">
                                 <label class="settings-toggle">
-                                    <input type="checkbox" id="settingThemeToggle" onchange="toggleThemeFromSettings(this.checked)">
+                                    <input type="checkbox" id="settingThemeToggle"
+                                        onchange="toggleThemeFromSettings(this.checked)">
                                     <span class="settings-toggle-slider"></span>
                                     <span class="settings-toggle-label" id="settingThemeLabel">Dark</span>
                                 </label>
@@ -2691,7 +2908,8 @@ function getOrCreateFolder() {
                         <div class="settings-row">
                             <div class="settings-label">
                                 <i class="fas fa-tint"></i>
-                                <div><strong>Accent Color</strong><span>Primary color for buttons &amp; highlights</span></div>
+                                <div><strong>Accent Color</strong><span>Primary color for buttons &amp;
+                                        highlights</span></div>
                             </div>
                             <div class="settings-control">
                                 <div class="settings-color-grid" id="settingAccentColors"></div>
@@ -2704,20 +2922,25 @@ function getOrCreateFolder() {
                             </div>
                             <div class="settings-control">
                                 <div class="settings-btn-group">
-                                    <button class="settings-size-btn" onclick="setAppFontSize('small')">A<sup>-</sup></button>
-                                    <button class="settings-size-btn active" onclick="setAppFontSize('default')">A</button>
-                                    <button class="settings-size-btn" onclick="setAppFontSize('large')">A<sup>+</sup></button>
+                                    <button class="settings-size-btn"
+                                        onclick="setAppFontSize('small')">A<sup>-</sup></button>
+                                    <button class="settings-size-btn active"
+                                        onclick="setAppFontSize('default')">A</button>
+                                    <button class="settings-size-btn"
+                                        onclick="setAppFontSize('large')">A<sup>+</sup></button>
                                 </div>
                             </div>
                         </div>
                         <div class="settings-row">
                             <div class="settings-label">
                                 <i class="fas fa-expand"></i>
-                                <div><strong>Compact Mode</strong><span>Reduce padding and spacing for more content</span></div>
+                                <div><strong>Compact Mode</strong><span>Reduce padding and spacing for more
+                                        content</span></div>
                             </div>
                             <div class="settings-control">
                                 <label class="settings-toggle">
-                                    <input type="checkbox" id="settingCompactMode" onchange="toggleCompactMode(this.checked)">
+                                    <input type="checkbox" id="settingCompactMode"
+                                        onchange="toggleCompactMode(this.checked)">
                                     <span class="settings-toggle-slider"></span>
                                 </label>
                             </div>
@@ -2728,7 +2951,8 @@ function getOrCreateFolder() {
                 <!-- Default Values -->
                 <div class="settings-card">
                     <div class="settings-card-header">
-                        <div class="settings-card-icon" style="background:linear-gradient(135deg,#3b82f6,#1d4ed8);"><i class="fas fa-sliders-h"></i></div>
+                        <div class="settings-card-icon" style="background:linear-gradient(135deg,#3b82f6,#1d4ed8);"><i
+                                class="fas fa-sliders-h"></i></div>
                         <div>
                             <h3>Default Values</h3>
                             <p>Pre-fill common fields to save time</p>
@@ -2738,19 +2962,23 @@ function getOrCreateFolder() {
                         <div class="settings-row">
                             <div class="settings-label">
                                 <i class="fas fa-map-marker-alt"></i>
-                                <div><strong>Default Block</strong><span>Auto-fill in visit &amp; observation forms</span></div>
+                                <div><strong>Default Block</strong><span>Auto-fill in visit &amp; observation
+                                        forms</span></div>
                             </div>
                             <div class="settings-control settings-control-wide">
-                                <input type="text" id="settingDefaultBlock" class="settings-input" placeholder="e.g. Anekal" onchange="saveAppSettings()">
+                                <input type="text" id="settingDefaultBlock" class="settings-input"
+                                    placeholder="e.g. Anekal" onchange="saveAppSettings()">
                             </div>
                         </div>
                         <div class="settings-row">
                             <div class="settings-label">
                                 <i class="fas fa-layer-group"></i>
-                                <div><strong>Default Cluster</strong><span>Auto-fill in visit &amp; observation forms</span></div>
+                                <div><strong>Default Cluster</strong><span>Auto-fill in visit &amp; observation
+                                        forms</span></div>
                             </div>
                             <div class="settings-control settings-control-wide">
-                                <input type="text" id="settingDefaultCluster" class="settings-input" placeholder="e.g. Sarjapura" onchange="saveAppSettings()">
+                                <input type="text" id="settingDefaultCluster" class="settings-input"
+                                    placeholder="e.g. Sarjapura" onchange="saveAppSettings()">
                             </div>
                         </div>
                         <div class="settings-row">
@@ -2759,7 +2987,8 @@ function getOrCreateFolder() {
                                 <div><strong>Default District</strong><span>Auto-fill in visit forms</span></div>
                             </div>
                             <div class="settings-control settings-control-wide">
-                                <input type="text" id="settingDefaultDistrict" class="settings-input" placeholder="e.g. Bengaluru Urban" onchange="saveAppSettings()">
+                                <input type="text" id="settingDefaultDistrict" class="settings-input"
+                                    placeholder="e.g. Bengaluru Urban" onchange="saveAppSettings()">
                             </div>
                         </div>
                         <div class="settings-row">
@@ -2768,7 +2997,8 @@ function getOrCreateFolder() {
                                 <div><strong>Default State</strong><span>Auto-fill in forms &amp; reports</span></div>
                             </div>
                             <div class="settings-control settings-control-wide">
-                                <input type="text" id="settingDefaultState" class="settings-input" placeholder="e.g. Karnataka" onchange="saveAppSettings()">
+                                <input type="text" id="settingDefaultState" class="settings-input"
+                                    placeholder="e.g. Karnataka" onchange="saveAppSettings()">
                             </div>
                         </div>
                         <div class="settings-row">
@@ -2791,7 +3021,8 @@ function getOrCreateFolder() {
                 <!-- Dashboard Preferences -->
                 <div class="settings-card">
                     <div class="settings-card-header">
-                        <div class="settings-card-icon" style="background:linear-gradient(135deg,#10b981,#059669);"><i class="fas fa-tachometer-alt"></i></div>
+                        <div class="settings-card-icon" style="background:linear-gradient(135deg,#10b981,#059669);"><i
+                                class="fas fa-tachometer-alt"></i></div>
                         <div>
                             <h3>Dashboard</h3>
                             <p>Customize your dashboard view</p>
@@ -2801,7 +3032,8 @@ function getOrCreateFolder() {
                         <div class="settings-row">
                             <div class="settings-label">
                                 <i class="fas fa-bell"></i>
-                                <div><strong>Smart Alerts</strong><span>Show reminders &amp; insights on dashboard</span></div>
+                                <div><strong>Smart Alerts</strong><span>Show reminders &amp; insights on
+                                        dashboard</span></div>
                             </div>
                             <div class="settings-control">
                                 <label class="settings-toggle">
@@ -2813,7 +3045,8 @@ function getOrCreateFolder() {
                         <div class="settings-row">
                             <div class="settings-label">
                                 <i class="fas fa-chart-line"></i>
-                                <div><strong>Dashboard Charts</strong><span>Show charts on dashboard overview</span></div>
+                                <div><strong>Dashboard Charts</strong><span>Show charts on dashboard overview</span>
+                                </div>
                             </div>
                             <div class="settings-control">
                                 <label class="settings-toggle">
@@ -2829,7 +3062,8 @@ function getOrCreateFolder() {
                             </div>
                             <div class="settings-control">
                                 <label class="settings-toggle">
-                                    <input type="checkbox" id="settingRecentActivity" checked onchange="saveAppSettings()">
+                                    <input type="checkbox" id="settingRecentActivity" checked
+                                        onchange="saveAppSettings()">
                                     <span class="settings-toggle-slider"></span>
                                 </label>
                             </div>
@@ -2837,7 +3071,8 @@ function getOrCreateFolder() {
                         <div class="settings-row">
                             <div class="settings-label">
                                 <i class="fas fa-home"></i>
-                                <div><strong>Start Page</strong><span>Which section opens when you launch the app</span></div>
+                                <div><strong>Start Page</strong><span>Which section opens when you launch the app</span>
+                                </div>
                             </div>
                             <div class="settings-control">
                                 <select id="settingStartPage" class="settings-select" onchange="saveAppSettings()">
@@ -2857,7 +3092,8 @@ function getOrCreateFolder() {
                 <!-- Notifications & Reminders -->
                 <div class="settings-card">
                     <div class="settings-card-header">
-                        <div class="settings-card-icon" style="background:linear-gradient(135deg,#f59e0b,#d97706);"><i class="fas fa-bell"></i></div>
+                        <div class="settings-card-icon" style="background:linear-gradient(135deg,#f59e0b,#d97706);"><i
+                                class="fas fa-bell"></i></div>
                         <div>
                             <h3>Notifications</h3>
                             <p>Control reminders &amp; auto-actions</p>
@@ -2867,11 +3103,13 @@ function getOrCreateFolder() {
                         <div class="settings-row">
                             <div class="settings-label">
                                 <i class="fas fa-clipboard-check"></i>
-                                <div><strong>Follow-up Reminders</strong><span>Alert when follow-ups are due</span></div>
+                                <div><strong>Follow-up Reminders</strong><span>Alert when follow-ups are due</span>
+                                </div>
                             </div>
                             <div class="settings-control">
                                 <label class="settings-toggle">
-                                    <input type="checkbox" id="settingFollowupReminder" checked onchange="saveAppSettings()">
+                                    <input type="checkbox" id="settingFollowupReminder" checked
+                                        onchange="saveAppSettings()">
                                     <span class="settings-toggle-slider"></span>
                                 </label>
                             </div>
@@ -2879,11 +3117,13 @@ function getOrCreateFolder() {
                         <div class="settings-row">
                             <div class="settings-label">
                                 <i class="fas fa-calendar-check"></i>
-                                <div><strong>Planned Visit Alerts</strong><span>Remind about upcoming planned visits</span></div>
+                                <div><strong>Planned Visit Alerts</strong><span>Remind about upcoming planned
+                                        visits</span></div>
                             </div>
                             <div class="settings-control">
                                 <label class="settings-toggle">
-                                    <input type="checkbox" id="settingVisitReminder" checked onchange="saveAppSettings()">
+                                    <input type="checkbox" id="settingVisitReminder" checked
+                                        onchange="saveAppSettings()">
                                     <span class="settings-toggle-slider"></span>
                                 </label>
                             </div>
@@ -2891,7 +3131,8 @@ function getOrCreateFolder() {
                         <div class="settings-row">
                             <div class="settings-label">
                                 <i class="fas fa-book"></i>
-                                <div><strong>Work Log Auto-Add</strong><span>Auto-populate work log from daily entries</span></div>
+                                <div><strong>Work Log Auto-Add</strong><span>Auto-populate work log from daily
+                                        entries</span></div>
                             </div>
                             <div class="settings-control">
                                 <label class="settings-toggle">
@@ -2903,7 +3144,8 @@ function getOrCreateFolder() {
                         <div class="settings-row">
                             <div class="settings-label">
                                 <i class="fas fa-save"></i>
-                                <div><strong>Auto-Save Indicator</strong><span>Show save confirmation toasts</span></div>
+                                <div><strong>Auto-Save Indicator</strong><span>Show save confirmation toasts</span>
+                                </div>
                             </div>
                             <div class="settings-control">
                                 <label class="settings-toggle">
@@ -2915,11 +3157,13 @@ function getOrCreateFolder() {
                         <div class="settings-row">
                             <div class="settings-label">
                                 <i class="fas fa-bolt"></i>
-                                <div><strong>Quick Capture Button</strong><span>Show floating ➕ button for quick observations</span></div>
+                                <div><strong>Quick Capture Button</strong><span>Show floating ➕ button for quick
+                                        observations</span></div>
                             </div>
                             <div class="settings-control">
                                 <label class="settings-toggle">
-                                    <input type="checkbox" id="settingQuickCapture" checked onchange="saveAppSettings(); applyAppSettings();">
+                                    <input type="checkbox" id="settingQuickCapture" checked
+                                        onchange="saveAppSettings(); applyAppSettings();">
                                     <span class="settings-toggle-slider"></span>
                                 </label>
                             </div>
@@ -2930,7 +3174,8 @@ function getOrCreateFolder() {
                 <!-- Student Records — Class Configuration -->
                 <div class="settings-card">
                     <div class="settings-card-header">
-                        <div class="settings-card-icon" style="background:linear-gradient(135deg,#f43f5e,#e11d48);"><i class="fas fa-user-graduate"></i></div>
+                        <div class="settings-card-icon" style="background:linear-gradient(135deg,#f43f5e,#e11d48);"><i
+                                class="fas fa-user-graduate"></i></div>
                         <div>
                             <h3>Student Records</h3>
                             <p>Choose which classes appear in student record editor</p>
@@ -2940,7 +3185,8 @@ function getOrCreateFolder() {
                         <div class="settings-row" style="flex-direction:column;align-items:stretch;gap:10px;">
                             <div class="settings-label" style="margin-bottom:4px;">
                                 <i class="fas fa-th-list"></i>
-                                <div><strong>Visible Classes</strong><span>Toggle classes to show/hide in student level editor</span></div>
+                                <div><strong>Visible Classes</strong><span>Toggle classes to show/hide in student level
+                                        editor</span></div>
                             </div>
                             <div class="ssr-class-toggle-grid" id="ssrClassToggleGrid"></div>
                         </div>
@@ -2950,7 +3196,8 @@ function getOrCreateFolder() {
                 <!-- Behavior & Accessibility -->
                 <div class="settings-card">
                     <div class="settings-card-header">
-                        <div class="settings-card-icon" style="background:linear-gradient(135deg,#06b6d4,#0891b2);"><i class="fas fa-universal-access"></i></div>
+                        <div class="settings-card-icon" style="background:linear-gradient(135deg,#06b6d4,#0891b2);"><i
+                                class="fas fa-universal-access"></i></div>
                         <div>
                             <h3>Behavior</h3>
                             <p>Confirmations, animations &amp; display density</p>
@@ -2960,11 +3207,13 @@ function getOrCreateFolder() {
                         <div class="settings-row">
                             <div class="settings-label">
                                 <i class="fas fa-exclamation-triangle"></i>
-                                <div><strong>Delete Confirmations</strong><span>Show confirmation dialog before deleting records</span></div>
+                                <div><strong>Delete Confirmations</strong><span>Show confirmation dialog before deleting
+                                        records</span></div>
                             </div>
                             <div class="settings-control">
                                 <label class="settings-toggle">
-                                    <input type="checkbox" id="settingConfirmDeletes" checked onchange="saveAppSettings()">
+                                    <input type="checkbox" id="settingConfirmDeletes" checked
+                                        onchange="saveAppSettings()">
                                     <span class="settings-toggle-slider"></span>
                                 </label>
                             </div>
@@ -2972,11 +3221,13 @@ function getOrCreateFolder() {
                         <div class="settings-row">
                             <div class="settings-label">
                                 <i class="fas fa-wind"></i>
-                                <div><strong>Reduce Motion</strong><span>Minimize animations for accessibility</span></div>
+                                <div><strong>Reduce Motion</strong><span>Minimize animations for accessibility</span>
+                                </div>
                             </div>
                             <div class="settings-control">
                                 <label class="settings-toggle">
-                                    <input type="checkbox" id="settingReduceMotion" onchange="saveAppSettings(); applyAppSettings();">
+                                    <input type="checkbox" id="settingReduceMotion"
+                                        onchange="saveAppSettings(); applyAppSettings();">
                                     <span class="settings-toggle-slider"></span>
                                 </label>
                             </div>
@@ -2984,7 +3235,8 @@ function getOrCreateFolder() {
                         <div class="settings-row">
                             <div class="settings-label">
                                 <i class="fas fa-th-large"></i>
-                                <div><strong>Cards Per Page</strong><span>Number of items shown per page in lists</span></div>
+                                <div><strong>Cards Per Page</strong><span>Number of items shown per page in lists</span>
+                                </div>
                             </div>
                             <div class="settings-control">
                                 <select id="settingCardsPerPage" class="settings-select" onchange="saveAppSettings()">
@@ -3001,7 +3253,8 @@ function getOrCreateFolder() {
                 <!-- Sidebar Sections -->
                 <div class="settings-card" style="grid-column: 1 / -1;">
                     <div class="settings-card-header">
-                        <div class="settings-card-icon" style="background:linear-gradient(135deg,#8b5cf6,#6d28d9);"><i class="fas fa-bars"></i></div>
+                        <div class="settings-card-icon" style="background:linear-gradient(135deg,#8b5cf6,#6d28d9);"><i
+                                class="fas fa-bars"></i></div>
                         <div>
                             <h3>Sidebar Sections</h3>
                             <p>Show or hide navigation items — declutter your sidebar</p>
@@ -3011,7 +3264,8 @@ function getOrCreateFolder() {
                         <div class="settings-row" style="flex-direction:column;align-items:stretch;gap:10px;">
                             <div class="settings-label" style="margin-bottom:4px;">
                                 <i class="fas fa-eye"></i>
-                                <div><strong>Visible Sections</strong><span>Uncheck sections you don't use to hide them from the sidebar</span></div>
+                                <div><strong>Visible Sections</strong><span>Uncheck sections you don't use to hide them
+                                        from the sidebar</span></div>
                             </div>
                             <div class="ssr-class-toggle-grid" id="sidebarSectionToggleGrid" style="gap:6px;"></div>
                         </div>
@@ -3021,7 +3275,8 @@ function getOrCreateFolder() {
                 <!-- Data & Storage Info -->
                 <div class="settings-card" style="grid-column: 1 / -1;">
                     <div class="settings-card-header">
-                        <div class="settings-card-icon" style="background:linear-gradient(135deg,#ef4444,#dc2626);"><i class="fas fa-database"></i></div>
+                        <div class="settings-card-icon" style="background:linear-gradient(135deg,#ef4444,#dc2626);"><i
+                                class="fas fa-database"></i></div>
                         <div>
                             <h3>Data &amp; Storage</h3>
                             <p>View data usage and manage storage</p>
@@ -3033,11 +3288,14 @@ function getOrCreateFolder() {
                             <button class="btn btn-outline" onclick="exportSettingsJSON()">
                                 <i class="fas fa-download"></i> Export Settings
                             </button>
-                            <button class="btn btn-outline" onclick="document.getElementById('importSettingsFile').click()">
+                            <button class="btn btn-outline"
+                                onclick="document.getElementById('importSettingsFile').click()">
                                 <i class="fas fa-upload"></i> Import Settings
-                                <input type="file" id="importSettingsFile" accept=".json" onchange="importSettingsJSON(event)" style="display:none">
+                                <input type="file" id="importSettingsFile" accept=".json"
+                                    onchange="importSettingsJSON(event)" style="display:none">
                             </button>
-                            <button class="btn btn-outline" onclick="resetAppSettings()" style="color:#ef4444;border-color:#ef4444;">
+                            <button class="btn btn-outline" onclick="resetAppSettings()"
+                                style="color:#ef4444;border-color:#ef4444;">
                                 <i class="fas fa-undo"></i> Reset to Defaults
                             </button>
                         </div>
@@ -3054,15 +3312,18 @@ function getOrCreateFolder() {
                     <h1><i class="fas fa-bug"></i> Bug Report & Feature Request</h1>
                     <p class="section-subtitle">Report bugs or request new features — help improve the app</p>
                 </div>
-                <button class="btn btn-outline" onclick="showUserGuide()" style="white-space:nowrap;"><i class="fas fa-book-open"></i> How to Use</button>
+                <button class="btn btn-outline" onclick="showUserGuide()" style="white-space:nowrap;"><i
+                        class="fas fa-book-open"></i> How to Use</button>
             </div>
 
             <!-- Submit Form -->
             <div class="fb-form-card">
                 <div class="fb-form-header">
                     <div class="fb-type-tabs">
-                        <button class="fb-type-tab active" onclick="setFeedbackType('bug')" id="fbTabBug"><i class="fas fa-bug"></i> Bug Report</button>
-                        <button class="fb-type-tab" onclick="setFeedbackType('feature')" id="fbTabFeature"><i class="fas fa-lightbulb"></i> Feature Request</button>
+                        <button class="fb-type-tab active" onclick="setFeedbackType('bug')" id="fbTabBug"><i
+                                class="fas fa-bug"></i> Bug Report</button>
+                        <button class="fb-type-tab" onclick="setFeedbackType('feature')" id="fbTabFeature"><i
+                                class="fas fa-lightbulb"></i> Feature Request</button>
                     </div>
                 </div>
                 <form id="feedbackForm" onsubmit="saveFeedback(event)">
@@ -3103,7 +3364,8 @@ function getOrCreateFolder() {
                     </div>
                     <div class="form-group">
                         <label><i class="fas fa-align-left"></i> Description *</label>
-                        <textarea id="fbDescription" rows="4" required placeholder="Describe the bug step-by-step, or explain the feature you'd like..."></textarea>
+                        <textarea id="fbDescription" rows="4" required
+                            placeholder="Describe the bug step-by-step, or explain the feature you'd like..."></textarea>
                     </div>
                     <div class="fb-form-actions">
                         <button type="button" class="btn btn-ghost" onclick="resetFeedbackForm()">Clear</button>
@@ -3153,7 +3415,8 @@ function getOrCreateFolder() {
                     <div class="form-row" style="margin-top:12px;">
                         <div class="form-group">
                             <label><i class="fab fa-telegram-plane"></i> Bot Token *</label>
-                            <input type="password" id="tgBotToken" placeholder="e.g. 123456:ABC-DEF..." autocomplete="off">
+                            <input type="password" id="tgBotToken" placeholder="e.g. 123456:ABC-DEF..."
+                                autocomplete="off">
                         </div>
                         <div class="form-group">
                             <label><i class="fas fa-hashtag"></i> Chat ID *</label>
@@ -3161,9 +3424,12 @@ function getOrCreateFolder() {
                         </div>
                     </div>
                     <div class="tg-config-actions">
-                        <button class="btn btn-outline btn-sm" onclick="testTelegramBot()" id="tgTestBtn"><i class="fab fa-telegram-plane"></i> Test Connection</button>
-                        <button class="btn btn-primary btn-sm" onclick="saveTelegramConfig()"><i class="fas fa-save"></i> Save Config</button>
-                        <button class="btn btn-ghost btn-sm" onclick="clearTelegramConfig()" style="color:#ef4444;"><i class="fas fa-trash"></i> Clear</button>
+                        <button class="btn btn-outline btn-sm" onclick="testTelegramBot()" id="tgTestBtn"><i
+                                class="fab fa-telegram-plane"></i> Test Connection</button>
+                        <button class="btn btn-primary btn-sm" onclick="saveTelegramConfig()"><i
+                                class="fas fa-save"></i> Save Config</button>
+                        <button class="btn btn-ghost btn-sm" onclick="clearTelegramConfig()" style="color:#ef4444;"><i
+                                class="fas fa-trash"></i> Clear</button>
                     </div>
                     <div class="tg-test-result" id="tgTestResult" style="display:none;"></div>
                 </div>
@@ -3373,7 +3639,8 @@ function getOrCreateFolder() {
         <div class="modal" style="max-width:780px;">
             <div class="modal-header">
                 <h2 id="attModalTitle"><i class="fas fa-clipboard-list"></i> Attendance</h2>
-                <button class="modal-close" onclick="closeModal('trainingAttendanceModal')"><i class="fas fa-times"></i></button>
+                <button class="modal-close" onclick="closeModal('trainingAttendanceModal')"><i
+                        class="fas fa-times"></i></button>
             </div>
             <div class="modal-body">
                 <input type="hidden" id="attTrainingId">
@@ -3381,25 +3648,33 @@ function getOrCreateFolder() {
 
                 <!-- Tabs: Teacher Records / Manual Add -->
                 <div class="att-tabs">
-                    <button class="att-tab active" id="attTabRecords" onclick="switchAttTab('records')"><i class="fas fa-users"></i> Teacher Records</button>
-                    <button class="att-tab" id="attTabManual" onclick="switchAttTab('manual')"><i class="fas fa-user-plus"></i> Manual Add</button>
-                    <button class="att-tab" id="attTabImport" onclick="switchAttTab('import')"><i class="fas fa-file-excel"></i> Import Excel</button>
+                    <button class="att-tab active" id="attTabRecords" onclick="switchAttTab('records')"><i
+                            class="fas fa-users"></i> Teacher Records</button>
+                    <button class="att-tab" id="attTabManual" onclick="switchAttTab('manual')"><i
+                            class="fas fa-user-plus"></i> Manual Add</button>
+                    <button class="att-tab" id="attTabImport" onclick="switchAttTab('import')"><i
+                            class="fas fa-file-excel"></i> Import Excel</button>
                 </div>
 
                 <!-- Tab 1: Teacher Records with checkboxes -->
                 <div class="att-tab-content" id="attPanelRecords">
                     <div class="att-rec-toolbar">
-                        <input type="text" id="attRecSearch" class="att-input" placeholder="🔍 Search teachers..." oninput="_attRenderRecordCheckboxes()" style="flex:1;">
-                        <select id="attRecSchoolFilter" class="att-input" onchange="_attRenderRecordCheckboxes()" style="flex:1;">
+                        <input type="text" id="attRecSearch" class="att-input" placeholder="🔍 Search teachers..."
+                            oninput="_attRenderRecordCheckboxes()" style="flex:1;">
+                        <select id="attRecSchoolFilter" class="att-input" onchange="_attRenderRecordCheckboxes()"
+                            style="flex:1;">
                             <option value="all">🏫 All Schools</option>
                         </select>
-                        <select id="attRecClusterFilter" class="att-input" onchange="_attRenderRecordCheckboxes()" style="flex:1;">
+                        <select id="attRecClusterFilter" class="att-input" onchange="_attRenderRecordCheckboxes()"
+                            style="flex:1;">
                             <option value="all">📍 All Clusters</option>
                         </select>
-                        <button class="btn btn-sm btn-primary" onclick="attAddCheckedTeachers()" style="white-space:nowrap;"><i class="fas fa-check-double"></i> Add Selected</button>
+                        <button class="btn btn-sm btn-primary" onclick="attAddCheckedTeachers()"
+                            style="white-space:nowrap;"><i class="fas fa-check-double"></i> Add Selected</button>
                     </div>
                     <div class="att-rec-actions">
-                        <label class="att-check-all-label"><input type="checkbox" id="attCheckAll" onchange="attToggleAll(this.checked)"> <strong>Select All</strong></label>
+                        <label class="att-check-all-label"><input type="checkbox" id="attCheckAll"
+                                onchange="attToggleAll(this.checked)"> <strong>Select All</strong></label>
                         <span id="attRecSelectedCount" class="att-rec-count"></span>
                     </div>
                     <div class="att-rec-list" id="attRecList">
@@ -3411,11 +3686,14 @@ function getOrCreateFolder() {
                 <div class="att-tab-content" id="attPanelManual" style="display:none;">
                     <div class="att-add-bar">
                         <div class="att-add-row">
-                            <input type="text" id="attTeacherName" list="attTeacherSuggest" placeholder="Teacher Name *" class="att-input" style="flex:2;">
+                            <input type="text" id="attTeacherName" list="attTeacherSuggest" placeholder="Teacher Name *"
+                                class="att-input" style="flex:2;">
                             <datalist id="attTeacherSuggest"></datalist>
-                            <input type="text" id="attTeacherSchool" list="attSchoolSuggest" placeholder="School" class="att-input" style="flex:2;">
+                            <input type="text" id="attTeacherSchool" list="attSchoolSuggest" placeholder="School"
+                                class="att-input" style="flex:2;">
                             <datalist id="attSchoolSuggest"></datalist>
-                            <input type="text" id="attTeacherPhone" placeholder="Phone" class="att-input" style="flex:1;">
+                            <input type="text" id="attTeacherPhone" placeholder="Phone" class="att-input"
+                                style="flex:1;">
                         </div>
                         <div class="att-add-row" style="margin-top:8px;">
                             <select id="attTeacherDesignation" class="att-input" style="flex:1;">
@@ -3427,11 +3705,14 @@ function getOrCreateFolder() {
                                 <option value="Contract Teacher">Contract Teacher</option>
                                 <option value="PET">PET</option>
                             </select>
-                            <input type="text" id="attTeacherCluster" list="attClusterSuggest" placeholder="Cluster" class="att-input" style="flex:1;">
+                            <input type="text" id="attTeacherCluster" list="attClusterSuggest" placeholder="Cluster"
+                                class="att-input" style="flex:1;">
                             <datalist id="attClusterSuggest"></datalist>
-                            <input type="text" id="attTeacherBlock" list="attBlockSuggest" placeholder="Block" class="att-input" style="flex:1;">
+                            <input type="text" id="attTeacherBlock" list="attBlockSuggest" placeholder="Block"
+                                class="att-input" style="flex:1;">
                             <datalist id="attBlockSuggest"></datalist>
-                            <button class="btn btn-primary btn-sm" onclick="addTrainingAttendee()" style="white-space:nowrap;">
+                            <button class="btn btn-primary btn-sm" onclick="addTrainingAttendee()"
+                                style="white-space:nowrap;">
                                 <i class="fas fa-plus"></i> Add
                             </button>
                         </div>
@@ -3442,9 +3723,13 @@ function getOrCreateFolder() {
                 <div class="att-tab-content" id="attPanelImport" style="display:none;">
                     <div class="att-add-bar" style="text-align:center;padding:24px;">
                         <i class="fas fa-file-excel" style="font-size:2rem;color:var(--accent);margin-bottom:12px;"></i>
-                        <p style="margin-bottom:12px;color:var(--text-secondary);">Import attendance from an Excel file. The file should have a <strong>Name</strong> column (required) and optionally School, Phone, Designation, Cluster, Block columns.</p>
-                        <button class="btn btn-outline" onclick="importAttendanceExcel()"><i class="fas fa-upload"></i> Choose Excel File</button>
-                        <input type="file" id="attExcelInput" accept=".xlsx,.xls,.csv" style="display:none;" onchange="processAttendanceExcel(event)">
+                        <p style="margin-bottom:12px;color:var(--text-secondary);">Import attendance from an Excel file.
+                            The file should have a <strong>Name</strong> column (required) and optionally School, Phone,
+                            Designation, Cluster, Block columns.</p>
+                        <button class="btn btn-outline" onclick="importAttendanceExcel()"><i class="fas fa-upload"></i>
+                            Choose Excel File</button>
+                        <input type="file" id="attExcelInput" accept=".xlsx,.xls,.csv" style="display:none;"
+                            onchange="processAttendanceExcel(event)">
                     </div>
                 </div>
 
@@ -3470,7 +3755,8 @@ function getOrCreateFolder() {
             <div class="modal-footer">
                 <span id="attCount" style="color:var(--text-secondary);font-size:13px;"></span>
                 <div style="display:flex;gap:8px;">
-                    <button class="btn btn-outline" onclick="exportAttendanceExcel()" title="Export attendance to Excel">
+                    <button class="btn btn-outline" onclick="exportAttendanceExcel()"
+                        title="Export attendance to Excel">
                         <i class="fas fa-download"></i> Export
                     </button>
                     <button class="btn btn-ghost" onclick="closeModal('trainingAttendanceModal')">Close</button>
@@ -3534,8 +3820,7 @@ function getOrCreateFolder() {
                         </div>
                         <div class="form-group">
                             <label for="observationBlock">Block</label>
-                            <input type="text" id="observationBlock" list="obsBlockList"
-                                placeholder="e.g. Magarlod">
+                            <input type="text" id="observationBlock" list="obsBlockList" placeholder="e.g. Magarlod">
                             <datalist id="obsBlockList"></datalist>
                         </div>
                     </div>
@@ -3831,11 +4116,13 @@ function getOrCreateFolder() {
     <div class="toast-container" id="toastContainer"></div>
 
     <!-- Floating Live Sync Indicator -->
-    <div class="sync-floating-indicator" id="syncFloatingIndicator" style="display:none;" onclick="navigateTo('livesync')" title="Live Sync active — click to view">
+    <div class="sync-floating-indicator" id="syncFloatingIndicator" style="display:none;"
+        onclick="navigateTo('livesync')" title="Live Sync active — click to view">
         <div class="sync-float-icon"><i class="fas fa-sync-alt"></i></div>
         <div class="sync-float-body">
             <span class="sync-float-status">Offline</span>
-            <span class="sync-float-count-wrap"><span class="sync-float-count">0</span> <i class="fas fa-users"></i></span>
+            <span class="sync-float-count-wrap"><span class="sync-float-count">0</span> <i
+                    class="fas fa-users"></i></span>
         </div>
         <div class="sync-float-arrow"></div>
     </div>
@@ -3845,7 +4132,8 @@ function getOrCreateFolder() {
         <div class="modal">
             <div class="modal-header">
                 <h2 id="reflectionModalTitle"><i class="fas fa-journal-whills"></i> New Reflection</h2>
-                <button class="modal-close" onclick="closeModal('reflectionModal')"><i class="fas fa-times"></i></button>
+                <button class="modal-close" onclick="closeModal('reflectionModal')"><i
+                        class="fas fa-times"></i></button>
             </div>
             <form id="reflectionForm" onsubmit="saveReflection(event)">
                 <div class="modal-body">
@@ -3867,24 +4155,34 @@ function getOrCreateFolder() {
                         </div>
                     </div>
                     <div class="form-group">
-                        <label for="reflectionWentWell"><i class="fas fa-check-circle" style="color:#10b981;"></i> What went well this month?</label>
-                        <textarea id="reflectionWentWell" rows="3" placeholder="Successful activities, positive teacher/student interactions, breakthroughs..."></textarea>
+                        <label for="reflectionWentWell"><i class="fas fa-check-circle" style="color:#10b981;"></i> What
+                            went well this month?</label>
+                        <textarea id="reflectionWentWell" rows="3"
+                            placeholder="Successful activities, positive teacher/student interactions, breakthroughs..."></textarea>
                     </div>
                     <div class="form-group">
-                        <label for="reflectionChallenges"><i class="fas fa-exclamation-circle" style="color:#ef4444;"></i> What challenges did you face?</label>
-                        <textarea id="reflectionChallenges" rows="3" placeholder="Difficulties in schools, teacher resistance, time management, travel issues..."></textarea>
+                        <label for="reflectionChallenges"><i class="fas fa-exclamation-circle"
+                                style="color:#ef4444;"></i> What challenges did you face?</label>
+                        <textarea id="reflectionChallenges" rows="3"
+                            placeholder="Difficulties in schools, teacher resistance, time management, travel issues..."></textarea>
                     </div>
                     <div class="form-group">
-                        <label for="reflectionLearnings"><i class="fas fa-brain" style="color:#8b5cf6;"></i> Key learnings & insights</label>
-                        <textarea id="reflectionLearnings" rows="3" placeholder="What did you learn about teaching, learning, or your own practice?"></textarea>
+                        <label for="reflectionLearnings"><i class="fas fa-brain" style="color:#8b5cf6;"></i> Key
+                            learnings & insights</label>
+                        <textarea id="reflectionLearnings" rows="3"
+                            placeholder="What did you learn about teaching, learning, or your own practice?"></textarea>
                     </div>
                     <div class="form-group">
-                        <label for="reflectionNextSteps"><i class="fas fa-arrow-right" style="color:#3b82f6;"></i> Plans for next month</label>
-                        <textarea id="reflectionNextSteps" rows="3" placeholder="Focus areas, schools to visit, trainings to conduct, goals..."></textarea>
+                        <label for="reflectionNextSteps"><i class="fas fa-arrow-right" style="color:#3b82f6;"></i> Plans
+                            for next month</label>
+                        <textarea id="reflectionNextSteps" rows="3"
+                            placeholder="Focus areas, schools to visit, trainings to conduct, goals..."></textarea>
                     </div>
                     <div class="form-group">
-                        <label for="reflectionGratitude"><i class="fas fa-heart" style="color:#ec4899;"></i> Gratitude / Highlight</label>
-                        <textarea id="reflectionGratitude" rows="2" placeholder="A moment that made your work feel meaningful..."></textarea>
+                        <label for="reflectionGratitude"><i class="fas fa-heart" style="color:#ec4899;"></i> Gratitude /
+                            Highlight</label>
+                        <textarea id="reflectionGratitude" rows="2"
+                            placeholder="A moment that made your work feel meaningful..."></textarea>
                     </div>
                 </div>
                 <div class="modal-footer">
@@ -3950,7 +4248,8 @@ function getOrCreateFolder() {
                     </div>
                     <div class="form-group">
                         <label for="contactNotes">Notes</label>
-                        <textarea id="contactNotes" rows="2" placeholder="Any important details about this contact..."></textarea>
+                        <textarea id="contactNotes" rows="2"
+                            placeholder="Any important details about this contact..."></textarea>
                     </div>
                 </div>
                 <div class="modal-footer">
@@ -3966,10 +4265,12 @@ function getOrCreateFolder() {
         <div class="modal" style="max-width:680px;">
             <div class="modal-header">
                 <h2><i class="fas fa-trash-alt"></i> Bulk Delete Contacts</h2>
-                <button class="modal-close" onclick="closeModal('bulkDeleteContactsModal')"><i class="fas fa-times"></i></button>
+                <button class="modal-close" onclick="closeModal('bulkDeleteContactsModal')"><i
+                        class="fas fa-times"></i></button>
             </div>
             <div class="modal-body">
-                <p class="bulk-delete-desc">Check the items you want to filter by. Only checked contacts will be deleted. All filters are combined (AND logic).</p>
+                <p class="bulk-delete-desc">Check the items you want to filter by. Only checked contacts will be
+                    deleted. All filters are combined (AND logic).</p>
                 <div class="bulk-delete-filters">
                     <div class="bulk-filter-group">
                         <div class="bulk-filter-header">
@@ -4026,8 +4327,10 @@ function getOrCreateFolder() {
                             <label><i class="fas fa-phone"></i> Phone Status</label>
                         </div>
                         <div class="bulk-filter-checkboxes" id="bulkDelPhone">
-                            <label class="bulk-checkbox"><input type="checkbox" value="with" onchange="previewBulkDelete()" checked> <span>With Phone</span></label>
-                            <label class="bulk-checkbox"><input type="checkbox" value="without" onchange="previewBulkDelete()" checked> <span>Without Phone</span></label>
+                            <label class="bulk-checkbox"><input type="checkbox" value="with"
+                                    onchange="previewBulkDelete()" checked> <span>With Phone</span></label>
+                            <label class="bulk-checkbox"><input type="checkbox" value="without"
+                                    onchange="previewBulkDelete()" checked> <span>Without Phone</span></label>
                         </div>
                     </div>
                 </div>
@@ -4040,8 +4343,10 @@ function getOrCreateFolder() {
                 </div>
             </div>
             <div class="modal-footer">
-                <button type="button" class="btn btn-ghost" onclick="closeModal('bulkDeleteContactsModal')">Cancel</button>
-                <button type="button" class="btn btn-danger" id="bulkDeleteConfirmBtn" onclick="executeBulkDeleteContacts()" disabled>
+                <button type="button" class="btn btn-ghost"
+                    onclick="closeModal('bulkDeleteContactsModal')">Cancel</button>
+                <button type="button" class="btn btn-danger" id="bulkDeleteConfirmBtn"
+                    onclick="executeBulkDeleteContacts()" disabled>
                     <i class="fas fa-trash"></i> Delete <span id="bulkDeleteBtnCount">0</span> Contacts
                 </button>
             </div>
@@ -4079,7 +4384,8 @@ function getOrCreateFolder() {
                         </div>
                         <div class="form-group">
                             <label for="profileOrg">Organization</label>
-                            <input type="text" id="profileOrg" placeholder="Azim Premji Foundation" value="Azim Premji Foundation">
+                            <input type="text" id="profileOrg" placeholder="Azim Premji Foundation"
+                                value="Azim Premji Foundation">
                         </div>
                     </div>
                     <div class="form-row">
@@ -4154,7 +4460,8 @@ function getOrCreateFolder() {
                     </div>
                     <div class="form-group">
                         <label for="worklogDescription">Description / Key Activities</label>
-                        <textarea id="worklogDescription" rows="3" placeholder="Describe what you did today..."></textarea>
+                        <textarea id="worklogDescription" rows="3"
+                            placeholder="Describe what you did today..."></textarea>
                     </div>
                     <div class="form-group">
                         <label for="worklogOutcome">Outcome / Remarks</label>
@@ -4175,7 +4482,8 @@ function getOrCreateFolder() {
             <form id="meetingForm" onsubmit="saveMeeting(event)">
                 <div class="modal-header">
                     <h2 id="meetingModalTitle"><i class="fas fa-handshake"></i> New Meeting</h2>
-                    <button type="button" class="modal-close" onclick="closeModal('meetingModal')"><i class="fas fa-times"></i></button>
+                    <button type="button" class="modal-close" onclick="closeModal('meetingModal')"><i
+                            class="fas fa-times"></i></button>
                 </div>
                 <div class="modal-body" style="max-height:65vh;overflow-y:auto;">
                     <input type="hidden" id="meetingId">
@@ -4214,7 +4522,8 @@ function getOrCreateFolder() {
                     </div>
                     <div class="form-group">
                         <label for="meetingAttendees">Attendees</label>
-                        <input type="text" id="meetingAttendees" placeholder="e.g. All RPs, BRC, CRC coordinators (15 members)">
+                        <input type="text" id="meetingAttendees"
+                            placeholder="e.g. All RPs, BRC, CRC coordinators (15 members)">
                     </div>
                     <div class="form-group">
                         <label for="meetingAgenda">Agenda</label>
@@ -4226,10 +4535,14 @@ function getOrCreateFolder() {
                     </div>
                     <div class="form-group">
                         <label for="meetingKeyTakeaways">Key Takeaways</label>
-                        <textarea id="meetingKeyTakeaways" rows="2" placeholder="Important points to remember..."></textarea>
+                        <textarea id="meetingKeyTakeaways" rows="2"
+                            placeholder="Important points to remember..."></textarea>
                     </div>
                     <div class="form-group">
-                        <label>Action Items <button type="button" class="btn btn-sm btn-outline" onclick="addMeetingActionItem()" style="margin-left:8px;padding:2px 8px;font-size:11px;"><i class="fas fa-plus"></i> Add</button></label>
+                        <label>Action Items <button type="button" class="btn btn-sm btn-outline"
+                                onclick="addMeetingActionItem()"
+                                style="margin-left:8px;padding:2px 8px;font-size:11px;"><i class="fas fa-plus"></i>
+                                Add</button></label>
                         <div id="meetingActionItemsContainer"></div>
                     </div>
                     <div class="form-group">
@@ -4295,20 +4608,29 @@ function getOrCreateFolder() {
                         <div class="form-group">
                             <label for="ideaColor">Color Label</label>
                             <div class="idea-color-picker" id="ideaColorPicker">
-                                <span class="color-dot active" data-color="#f59e0b" style="background:#f59e0b" onclick="pickIdeaColor(this)"></span>
-                                <span class="color-dot" data-color="#ef4444" style="background:#ef4444" onclick="pickIdeaColor(this)"></span>
-                                <span class="color-dot" data-color="#8b5cf6" style="background:#8b5cf6" onclick="pickIdeaColor(this)"></span>
-                                <span class="color-dot" data-color="#3b82f6" style="background:#3b82f6" onclick="pickIdeaColor(this)"></span>
-                                <span class="color-dot" data-color="#10b981" style="background:#10b981" onclick="pickIdeaColor(this)"></span>
-                                <span class="color-dot" data-color="#ec4899" style="background:#ec4899" onclick="pickIdeaColor(this)"></span>
-                                <span class="color-dot" data-color="#f97316" style="background:#f97316" onclick="pickIdeaColor(this)"></span>
-                                <span class="color-dot" data-color="#06b6d4" style="background:#06b6d4" onclick="pickIdeaColor(this)"></span>
+                                <span class="color-dot active" data-color="#f59e0b" style="background:#f59e0b"
+                                    onclick="pickIdeaColor(this)"></span>
+                                <span class="color-dot" data-color="#ef4444" style="background:#ef4444"
+                                    onclick="pickIdeaColor(this)"></span>
+                                <span class="color-dot" data-color="#8b5cf6" style="background:#8b5cf6"
+                                    onclick="pickIdeaColor(this)"></span>
+                                <span class="color-dot" data-color="#3b82f6" style="background:#3b82f6"
+                                    onclick="pickIdeaColor(this)"></span>
+                                <span class="color-dot" data-color="#10b981" style="background:#10b981"
+                                    onclick="pickIdeaColor(this)"></span>
+                                <span class="color-dot" data-color="#ec4899" style="background:#ec4899"
+                                    onclick="pickIdeaColor(this)"></span>
+                                <span class="color-dot" data-color="#f97316" style="background:#f97316"
+                                    onclick="pickIdeaColor(this)"></span>
+                                <span class="color-dot" data-color="#06b6d4" style="background:#06b6d4"
+                                    onclick="pickIdeaColor(this)"></span>
                             </div>
                         </div>
                     </div>
                     <div class="form-group">
                         <label for="ideaDescription">Description</label>
-                        <textarea id="ideaDescription" rows="4" placeholder="Describe your idea in detail — what, why, how..."></textarea>
+                        <textarea id="ideaDescription" rows="4"
+                            placeholder="Describe your idea in detail — what, why, how..."></textarea>
                     </div>
                     <div class="form-group">
                         <label for="ideaTags">Tags (comma-separated)</label>
@@ -4332,47 +4654,61 @@ function getOrCreateFolder() {
         <div class="modal">
             <div class="modal-header">
                 <h2><i class="fas fa-filter"></i> Import DMT Data (Filtered)</h2>
-                <button class="modal-close" onclick="closeModal('filteredImportModal')"><i class="fas fa-times"></i></button>
+                <button class="modal-close" onclick="closeModal('filteredImportModal')"><i
+                        class="fas fa-times"></i></button>
             </div>
             <div class="modal-body">
                 <div id="filteredImportLoading" class="filtered-import-loading">
                     <i class="fas fa-spinner fa-spin"></i> Reading Excel file...
                 </div>
                 <div id="filteredImportContent" style="display:none">
-                    <p class="unload-modal-desc"><i class="fas fa-file-excel"></i> <strong id="filteredImportFileName"></strong> — <span id="filteredImportTotalRows">0</span> total rows found. Select filters to import only matching records.</p>
+                    <p class="unload-modal-desc"><i class="fas fa-file-excel"></i> <strong
+                            id="filteredImportFileName"></strong> — <span id="filteredImportTotalRows">0</span> total
+                        rows found. Select filters to import only matching records.</p>
                     <div class="unload-filters-grid">
                         <div class="form-group">
                             <label for="importFilterState"><i class="fas fa-flag"></i> State</label>
-                            <select id="importFilterState" onchange="previewFilteredImport()"><option value="all">All States</option></select>
+                            <select id="importFilterState" onchange="previewFilteredImport()">
+                                <option value="all">All States</option>
+                            </select>
                         </div>
                         <div class="form-group">
                             <label for="importFilterBlock"><i class="fas fa-map-marker-alt"></i> Block</label>
-                            <select id="importFilterBlock" onchange="previewFilteredImport()"><option value="all">All Blocks</option></select>
+                            <select id="importFilterBlock" onchange="previewFilteredImport()">
+                                <option value="all">All Blocks</option>
+                            </select>
                         </div>
                         <div class="form-group">
                             <label><i class="fas fa-layer-group"></i> Cluster</label>
                             <div class="cluster-checkbox-wrap" id="importFilterCluster">
                                 <div class="cluster-cb-header">
-                                    <label class="cluster-select-all"><input type="checkbox" checked onchange="toggleAllClusters('importFilterCluster', this.checked); previewFilteredImport()"> Select All</label>
+                                    <label class="cluster-select-all"><input type="checkbox" checked
+                                            onchange="toggleAllClusters('importFilterCluster', this.checked); previewFilteredImport()">
+                                        Select All</label>
                                     <span class="cluster-cb-count" id="importClusterCount">0 selected</span>
                                 </div>
-                                <div class="cluster-cb-search"><input type="text" placeholder="Search clusters..." oninput="filterClusterCheckboxes('importFilterCluster', this.value)"></div>
+                                <div class="cluster-cb-search"><input type="text" placeholder="Search clusters..."
+                                        oninput="filterClusterCheckboxes('importFilterCluster', this.value)"></div>
                                 <div class="cluster-cb-list" id="importClusterList"></div>
                             </div>
                         </div>
                         <div class="form-group">
                             <label for="importFilterObserver"><i class="fas fa-user-tie"></i> Observer</label>
-                            <select id="importFilterObserver" onchange="previewFilteredImport()"><option value="all">All Observers</option></select>
+                            <select id="importFilterObserver" onchange="previewFilteredImport()">
+                                <option value="all">All Observers</option>
+                            </select>
                         </div>
                     </div>
                     <div class="unload-preview" id="filteredImportPreview">
-                        <div class="unload-preview-empty"><i class="fas fa-info-circle"></i> All records will be imported. Use filters above to narrow down.</div>
+                        <div class="unload-preview-empty"><i class="fas fa-info-circle"></i> All records will be
+                            imported. Use filters above to narrow down.</div>
                     </div>
                 </div>
             </div>
             <div class="modal-footer">
                 <button type="button" class="btn btn-ghost" onclick="closeModal('filteredImportModal')">Cancel</button>
-                <button type="button" class="btn btn-primary" id="filteredImportConfirmBtn" onclick="executeFilteredImport()" disabled>
+                <button type="button" class="btn btn-primary" id="filteredImportConfirmBtn"
+                    onclick="executeFilteredImport()" disabled>
                     <i class="fas fa-download"></i> Import <span id="filteredImportCount">0</span> Records
                 </button>
             </div>
@@ -4384,37 +4720,50 @@ function getOrCreateFolder() {
         <div class="modal" style="max-width:720px;">
             <div class="modal-header">
                 <h2><i class="fas fa-school"></i> Import School Profiles from Excel</h2>
-                <button class="modal-close" onclick="closeModal('schoolProfileImportModal')"><i class="fas fa-times"></i></button>
+                <button class="modal-close" onclick="closeModal('schoolProfileImportModal')"><i
+                        class="fas fa-times"></i></button>
             </div>
             <div class="modal-body">
                 <div id="schoolImportLoading" class="filtered-import-loading">
                     <i class="fas fa-spinner fa-spin"></i> Reading Excel and extracting schools...
                 </div>
                 <div id="schoolImportContent" style="display:none">
-                    <p class="unload-modal-desc"><i class="fas fa-file-excel"></i> <strong id="schoolImportFileName"></strong> — <span id="schoolImportTotalSchools">0</span> unique schools found. Use filters to select which schools to import as visits.</p>
+                    <p class="unload-modal-desc"><i class="fas fa-file-excel"></i> <strong
+                            id="schoolImportFileName"></strong> — <span id="schoolImportTotalSchools">0</span> unique
+                        schools found. Use filters to select which schools to import as visits.</p>
                     <div class="unload-filters-grid">
                         <div class="form-group">
                             <label for="schoolImportFilterState"><i class="fas fa-flag"></i> State</label>
-                            <select id="schoolImportFilterState" onchange="previewSchoolProfileImport()"><option value="all">All States</option></select>
+                            <select id="schoolImportFilterState" onchange="previewSchoolProfileImport()">
+                                <option value="all">All States</option>
+                            </select>
                         </div>
                         <div class="form-group">
                             <label for="schoolImportFilterBlock"><i class="fas fa-map-marker-alt"></i> Block</label>
-                            <select id="schoolImportFilterBlock" onchange="previewSchoolProfileImport()"><option value="all">All Blocks</option></select>
+                            <select id="schoolImportFilterBlock" onchange="previewSchoolProfileImport()">
+                                <option value="all">All Blocks</option>
+                            </select>
                         </div>
                         <div class="form-group">
                             <label><i class="fas fa-layer-group"></i> Cluster</label>
                             <div class="cluster-checkbox-wrap" id="schoolImportFilterCluster">
                                 <div class="cluster-cb-header">
-                                    <label class="cluster-select-all"><input type="checkbox" checked onchange="toggleAllClusters('schoolImportFilterCluster', this.checked); previewSchoolProfileImport()"> Select All</label>
+                                    <label class="cluster-select-all"><input type="checkbox" checked
+                                            onchange="toggleAllClusters('schoolImportFilterCluster', this.checked); previewSchoolProfileImport()">
+                                        Select All</label>
                                     <span class="cluster-cb-count" id="schoolImportClusterCount">0 selected</span>
                                 </div>
-                                <div class="cluster-cb-search"><input type="text" placeholder="Search clusters..." oninput="filterClusterCheckboxes('schoolImportFilterCluster', this.value)"></div>
+                                <div class="cluster-cb-search"><input type="text" placeholder="Search clusters..."
+                                        oninput="filterClusterCheckboxes('schoolImportFilterCluster', this.value)">
+                                </div>
                                 <div class="cluster-cb-list" id="schoolImportClusterList"></div>
                             </div>
                         </div>
                         <div class="form-group">
                             <label for="schoolImportFilterObserver"><i class="fas fa-user-tie"></i> Observer</label>
-                            <select id="schoolImportFilterObserver" onchange="previewSchoolProfileImport()"><option value="all">All Observers</option></select>
+                            <select id="schoolImportFilterObserver" onchange="previewSchoolProfileImport()">
+                                <option value="all">All Observers</option>
+                            </select>
                         </div>
                     </div>
                     <div class="unload-preview" id="schoolImportPreview"></div>
@@ -4422,8 +4771,10 @@ function getOrCreateFolder() {
                 </div>
             </div>
             <div class="modal-footer">
-                <button type="button" class="btn btn-ghost" onclick="closeModal('schoolProfileImportModal')">Cancel</button>
-                <button type="button" class="btn btn-primary" id="schoolImportConfirmBtn" onclick="executeSchoolProfileImport()" disabled>
+                <button type="button" class="btn btn-ghost"
+                    onclick="closeModal('schoolProfileImportModal')">Cancel</button>
+                <button type="button" class="btn btn-primary" id="schoolImportConfirmBtn"
+                    onclick="executeSchoolProfileImport()" disabled>
                     <i class="fas fa-download"></i> Import <span id="schoolImportCount">0</span> School Profiles
                 </button>
             </div>
@@ -4435,32 +4786,41 @@ function getOrCreateFolder() {
         <div class="modal" style="max-width:640px;">
             <div class="modal-header">
                 <h2><i class="fas fa-trash-alt" style="color:#ef4444;"></i> Delete School Profiles</h2>
-                <button class="modal-close" onclick="closeModal('bulkDeleteSchoolsModal')"><i class="fas fa-times"></i></button>
+                <button class="modal-close" onclick="closeModal('bulkDeleteSchoolsModal')"><i
+                        class="fas fa-times"></i></button>
             </div>
             <div class="modal-body" style="max-height:65vh;overflow-y:auto;">
                 <!-- Filter panel -->
                 <div class="bulk-del-filter-section">
                     <div class="bulk-filter-group">
                         <div class="bulk-filter-header"><span><i class="fas fa-filter"></i> Source</span>
-                            <div class="bulk-filter-actions"><button onclick="schoolDelFilterToggle('source','all')">All</button><button onclick="schoolDelFilterToggle('source','none')">None</button></div>
+                            <div class="bulk-filter-actions"><button
+                                    onclick="schoolDelFilterToggle('source','all')">All</button><button
+                                    onclick="schoolDelFilterToggle('source','none')">None</button></div>
                         </div>
                         <div class="bulk-checkbox-list" id="schoolDelSourceList"></div>
                     </div>
                     <div class="bulk-filter-group">
                         <div class="bulk-filter-header"><span><i class="fas fa-map-marker-alt"></i> Block</span>
-                            <div class="bulk-filter-actions"><button onclick="schoolDelFilterToggle('block','all')">All</button><button onclick="schoolDelFilterToggle('block','none')">None</button></div>
+                            <div class="bulk-filter-actions"><button
+                                    onclick="schoolDelFilterToggle('block','all')">All</button><button
+                                    onclick="schoolDelFilterToggle('block','none')">None</button></div>
                         </div>
                         <div class="bulk-checkbox-list" id="schoolDelBlockList"></div>
                     </div>
                     <div class="bulk-filter-group">
                         <div class="bulk-filter-header"><span><i class="fas fa-layer-group"></i> Cluster</span>
-                            <div class="bulk-filter-actions"><button onclick="schoolDelFilterToggle('cluster','all')">All</button><button onclick="schoolDelFilterToggle('cluster','none')">None</button></div>
+                            <div class="bulk-filter-actions"><button
+                                    onclick="schoolDelFilterToggle('cluster','all')">All</button><button
+                                    onclick="schoolDelFilterToggle('cluster','none')">None</button></div>
                         </div>
                         <div class="bulk-checkbox-list" id="schoolDelClusterList"></div>
                     </div>
                     <div class="bulk-filter-group">
                         <div class="bulk-filter-header"><span><i class="fas fa-info-circle"></i> Status</span>
-                            <div class="bulk-filter-actions"><button onclick="schoolDelFilterToggle('status','all')">All</button><button onclick="schoolDelFilterToggle('status','none')">None</button></div>
+                            <div class="bulk-filter-actions"><button
+                                    onclick="schoolDelFilterToggle('status','all')">All</button><button
+                                    onclick="schoolDelFilterToggle('status','none')">None</button></div>
                         </div>
                         <div class="bulk-checkbox-list" id="schoolDelStatusList"></div>
                     </div>
@@ -4471,8 +4831,10 @@ function getOrCreateFolder() {
                 <div id="schoolDelList" class="school-del-list"></div>
             </div>
             <div class="modal-footer">
-                <button type="button" class="btn btn-ghost" onclick="closeModal('bulkDeleteSchoolsModal')">Cancel</button>
-                <button type="button" class="btn btn-danger" id="schoolDelConfirmBtn" onclick="executeBulkDeleteSchools()" disabled>
+                <button type="button" class="btn btn-ghost"
+                    onclick="closeModal('bulkDeleteSchoolsModal')">Cancel</button>
+                <button type="button" class="btn btn-danger" id="schoolDelConfirmBtn"
+                    onclick="executeBulkDeleteSchools()" disabled>
                     <i class="fas fa-trash-alt"></i> Delete <span id="schoolDelCount">0</span> Schools
                 </button>
             </div>
@@ -4484,18 +4846,22 @@ function getOrCreateFolder() {
         <div class="modal" style="max-width:780px;">
             <div class="modal-header">
                 <h2 id="growthAssessModalTitle"><i class="fas fa-pen-ruler"></i> Self-Assessment</h2>
-                <button class="modal-close" onclick="closeModal('growthAssessModal')"><i class="fas fa-times"></i></button>
+                <button class="modal-close" onclick="closeModal('growthAssessModal')"><i
+                        class="fas fa-times"></i></button>
             </div>
             <div class="modal-body" style="max-height:70vh;overflow-y:auto;">
                 <div class="growth-assess-mode-toggle" id="growthAssessModeToggle">
-                    <button class="growth-mode-btn active" onclick="setGrowthAssessMode('self', event)"><i class="fas fa-user"></i> Self-Assessment</button>
-                    <button class="growth-mode-btn" onclick="setGrowthAssessMode('mentor', event)"><i class="fas fa-user-tie"></i> Mentor Assessment</button>
+                    <button class="growth-mode-btn active" onclick="setGrowthAssessMode('self', event)"><i
+                            class="fas fa-user"></i> Self-Assessment</button>
+                    <button class="growth-mode-btn" onclick="setGrowthAssessMode('mentor', event)"><i
+                            class="fas fa-user-tie"></i> Mentor Assessment</button>
                 </div>
                 <div id="growthMentorFields" style="display:none;">
                     <div class="form-row" style="margin-bottom:14px;">
                         <div class="form-group">
                             <label><i class="fas fa-user-tie"></i> Mentor/Assessor Name</label>
-                            <input type="text" id="growthMentorName" class="settings-input" placeholder="Name of the mentor/assessor">
+                            <input type="text" id="growthMentorName" class="settings-input"
+                                placeholder="Name of the mentor/assessor">
                         </div>
                         <div class="form-group">
                             <label><i class="fas fa-tag"></i> Assessment Type</label>
@@ -4509,7 +4875,8 @@ function getOrCreateFolder() {
                     </div>
                 </div>
                 <p style="color:var(--text-muted);font-size:13px;margin-bottom:16px;" id="growthAssessHelpText">
-                    <i class="fas fa-info-circle"></i> Honestly assess your current level (1-4) for each dimension. Add notes/evidence to support your self-rating.
+                    <i class="fas fa-info-circle"></i> Honestly assess your current level (1-4) for each dimension. Add
+                    notes/evidence to support your self-rating.
                 </p>
                 <div id="growthAssessForm"></div>
             </div>
@@ -4527,7 +4894,8 @@ function getOrCreateFolder() {
         <div class="modal" style="max-width:600px;">
             <div class="modal-header">
                 <h2><i class="fas fa-tasks"></i> Growth Action Plan</h2>
-                <button class="modal-close" onclick="closeModal('growthActionModal')"><i class="fas fa-times"></i></button>
+                <button class="modal-close" onclick="closeModal('growthActionModal')"><i
+                        class="fas fa-times"></i></button>
             </div>
             <div class="modal-body">
                 <input type="hidden" id="growthActionId">
@@ -4537,7 +4905,8 @@ function getOrCreateFolder() {
                 </div>
                 <div class="form-group">
                     <label><i class="fas fa-bullseye"></i> Goal / Action Item *</label>
-                    <input type="text" id="growthActionTitle" class="settings-input" placeholder="e.g. Independently design a 3-day workshop" required>
+                    <input type="text" id="growthActionTitle" class="settings-input"
+                        placeholder="e.g. Independently design a 3-day workshop" required>
                 </div>
                 <div class="form-row">
                     <div class="form-group">
@@ -4555,11 +4924,13 @@ function getOrCreateFolder() {
                 </div>
                 <div class="form-group">
                     <label><i class="fas fa-list"></i> Steps / Sub-tasks</label>
-                    <textarea id="growthActionSteps" class="settings-input" style="height:80px;resize:vertical;" placeholder="Break down into small actionable steps..."></textarea>
+                    <textarea id="growthActionSteps" class="settings-input" style="height:80px;resize:vertical;"
+                        placeholder="Break down into small actionable steps..."></textarea>
                 </div>
                 <div class="form-group">
                     <label><i class="fas fa-hands-helping"></i> Support Needed</label>
-                    <input type="text" id="growthActionSupport" class="settings-input" placeholder="e.g. Co-facilitation with senior member, reading material...">
+                    <input type="text" id="growthActionSupport" class="settings-input"
+                        placeholder="e.g. Co-facilitation with senior member, reading material...">
                 </div>
                 <div class="form-row">
                     <div class="form-group">
@@ -4594,7 +4965,8 @@ function getOrCreateFolder() {
         <div class="modal" style="max-width:720px;">
             <div class="modal-header">
                 <h2 id="growthDimDetailTitle"><i class="fas fa-seedling"></i> Dimension Detail</h2>
-                <button class="modal-close" onclick="closeModal('growthDimDetailModal')"><i class="fas fa-times"></i></button>
+                <button class="modal-close" onclick="closeModal('growthDimDetailModal')"><i
+                        class="fas fa-times"></i></button>
             </div>
             <div class="modal-body" style="max-height:70vh;overflow-y:auto;">
                 <div id="growthDimDetailContent"></div>
@@ -4610,39 +4982,51 @@ function getOrCreateFolder() {
                 <button class="modal-close" onclick="closeModal('unloadModal')"><i class="fas fa-times"></i></button>
             </div>
             <div class="modal-body">
-                <p class="unload-modal-desc">Select one or more filters to remove matching observations. Only imported (DMT) data will be affected — your manual entries are safe.</p>
+                <p class="unload-modal-desc">Select one or more filters to remove matching observations. Only imported
+                    (DMT) data will be affected — your manual entries are safe.</p>
                 <div class="unload-filters-grid">
                     <div class="form-group">
                         <label for="unloadState"><i class="fas fa-flag"></i> State</label>
-                        <select id="unloadState" onchange="previewUnload()"><option value="all">All States</option></select>
+                        <select id="unloadState" onchange="previewUnload()">
+                            <option value="all">All States</option>
+                        </select>
                     </div>
                     <div class="form-group">
                         <label for="unloadBlock"><i class="fas fa-map-marker-alt"></i> Block</label>
-                        <select id="unloadBlock" onchange="previewUnload()"><option value="all">All Blocks</option></select>
+                        <select id="unloadBlock" onchange="previewUnload()">
+                            <option value="all">All Blocks</option>
+                        </select>
                     </div>
                     <div class="form-group">
                         <label><i class="fas fa-layer-group"></i> Cluster</label>
                         <div class="cluster-checkbox-wrap" id="unloadCluster">
                             <div class="cluster-cb-header">
-                                <label class="cluster-select-all"><input type="checkbox" checked onchange="toggleAllClusters('unloadCluster', this.checked); previewUnload()"> Select All</label>
+                                <label class="cluster-select-all"><input type="checkbox" checked
+                                        onchange="toggleAllClusters('unloadCluster', this.checked); previewUnload()">
+                                    Select All</label>
                                 <span class="cluster-cb-count" id="unloadClusterCount">0 selected</span>
                             </div>
-                            <div class="cluster-cb-search"><input type="text" placeholder="Search clusters..." oninput="filterClusterCheckboxes('unloadCluster', this.value)"></div>
+                            <div class="cluster-cb-search"><input type="text" placeholder="Search clusters..."
+                                    oninput="filterClusterCheckboxes('unloadCluster', this.value)"></div>
                             <div class="cluster-cb-list" id="unloadClusterList"></div>
                         </div>
                     </div>
                     <div class="form-group">
                         <label for="unloadObserver"><i class="fas fa-user-tie"></i> Observer</label>
-                        <select id="unloadObserver" onchange="previewUnload()"><option value="all">All Observers</option></select>
+                        <select id="unloadObserver" onchange="previewUnload()">
+                            <option value="all">All Observers</option>
+                        </select>
                     </div>
                 </div>
                 <div class="unload-preview" id="unloadPreview">
-                    <div class="unload-preview-empty"><i class="fas fa-info-circle"></i> Select filters above to preview which records will be removed</div>
+                    <div class="unload-preview-empty"><i class="fas fa-info-circle"></i> Select filters above to preview
+                        which records will be removed</div>
                 </div>
             </div>
             <div class="modal-footer">
                 <button type="button" class="btn btn-ghost" onclick="closeModal('unloadModal')">Cancel</button>
-                <button type="button" class="btn btn-danger" id="unloadConfirmBtn" onclick="executeFilteredUnload()" disabled>
+                <button type="button" class="btn btn-danger" id="unloadConfirmBtn" onclick="executeFilteredUnload()"
+                    disabled>
                     <i class="fas fa-eraser"></i> Unload <span id="unloadCount">0</span> Records
                 </button>
             </div>
@@ -4679,17 +5063,27 @@ function getOrCreateFolder() {
                         <label><i class="fas fa-book"></i> Subject</label>
                         <select id="qcSubject">
                             <option value="">Select</option>
-                            <option>Language</option><option>Mathematics</option><option>EVS</option>
-                            <option>Science</option><option>Social Science</option><option>English</option>
-                            <option>Hindi</option><option>Kannada</option><option>Other</option>
+                            <option>Language</option>
+                            <option>Mathematics</option>
+                            <option>EVS</option>
+                            <option>Science</option>
+                            <option>Social Science</option>
+                            <option>English</option>
+                            <option>Hindi</option>
+                            <option>Kannada</option>
+                            <option>Other</option>
                         </select>
                     </div>
                     <div class="form-group">
                         <label><i class="fas fa-fire"></i> Engagement Level</label>
                         <div class="qc-engagement-pills">
-                            <button type="button" class="qc-pill low" onclick="setQcEngagement(this,'Not Engaged')"><i class="fas fa-battery-quarter"></i> Not Engaged</button>
-                            <button type="button" class="qc-pill mid" onclick="setQcEngagement(this,'Engaged')"><i class="fas fa-battery-half"></i> Engaged</button>
-                            <button type="button" class="qc-pill high active" onclick="setQcEngagement(this,'More Engaged')"><i class="fas fa-battery-full"></i> More Engaged</button>
+                            <button type="button" class="qc-pill low" onclick="setQcEngagement(this,'Not Engaged')"><i
+                                    class="fas fa-battery-quarter"></i> Not Engaged</button>
+                            <button type="button" class="qc-pill mid" onclick="setQcEngagement(this,'Engaged')"><i
+                                    class="fas fa-battery-half"></i> Engaged</button>
+                            <button type="button" class="qc-pill high active"
+                                onclick="setQcEngagement(this,'More Engaged')"><i class="fas fa-battery-full"></i> More
+                                Engaged</button>
                         </div>
                         <input type="hidden" id="qcEngagement" value="More Engaged">
                     </div>
@@ -4701,7 +5095,8 @@ function getOrCreateFolder() {
             </div>
             <div class="modal-footer">
                 <button class="btn btn-ghost" onclick="closeModal('quickCaptureModal')">Cancel</button>
-                <button class="btn btn-primary" onclick="saveQuickCapture()"><i class="fas fa-check"></i> Save Observation</button>
+                <button class="btn btn-primary" onclick="saveQuickCapture()"><i class="fas fa-check"></i> Save
+                    Observation</button>
             </div>
         </div>
     </div>
@@ -4711,7 +5106,8 @@ function getOrCreateFolder() {
         <div class="modal" style="max-width:680px;">
             <div class="modal-header">
                 <h2 id="trModalTitle"><i class="fas fa-id-card-alt"></i> Add Teacher</h2>
-                <button class="modal-close" onclick="closeModal('teacherRecordModal')"><i class="fas fa-times"></i></button>
+                <button class="modal-close" onclick="closeModal('teacherRecordModal')"><i
+                        class="fas fa-times"></i></button>
             </div>
             <form id="trForm" onsubmit="saveTeacherRecord(event)">
                 <div class="modal-body">
@@ -4756,9 +5152,15 @@ function getOrCreateFolder() {
                             <label for="trSubject">Subject</label>
                             <input type="text" id="trSubject" placeholder="e.g. Mathematics" list="trSubjectList">
                             <datalist id="trSubjectList">
-                                <option value="Language"><option value="Hindi"><option value="English">
-                                <option value="Mathematics"><option value="EVS"><option value="Science">
-                                <option value="Social Science"><option value="Kannada"><option value="All Subjects">
+                                <option value="Language">
+                                <option value="Hindi">
+                                <option value="English">
+                                <option value="Mathematics">
+                                <option value="EVS">
+                                <option value="Science">
+                                <option value="Social Science">
+                                <option value="Kannada">
+                                <option value="All Subjects">
                             </datalist>
                         </div>
                         <div class="form-group">
@@ -4810,11 +5212,13 @@ function getOrCreateFolder() {
                     </div>
                     <div class="form-group">
                         <label for="trNotes">Notes</label>
-                        <textarea id="trNotes" rows="2" placeholder="Any additional details about this teacher..."></textarea>
+                        <textarea id="trNotes" rows="2"
+                            placeholder="Any additional details about this teacher..."></textarea>
                     </div>
                 </div>
                 <div class="modal-footer">
-                    <button type="button" class="btn btn-ghost" onclick="closeModal('teacherRecordModal')">Cancel</button>
+                    <button type="button" class="btn btn-ghost"
+                        onclick="closeModal('teacherRecordModal')">Cancel</button>
                     <button type="submit" class="btn btn-primary"><i class="fas fa-save"></i> Save Teacher</button>
                 </div>
             </form>
